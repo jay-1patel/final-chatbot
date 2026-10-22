@@ -1,0 +1,258 @@
+/**
+ * Tenant file uploads — FAQ / knowledge-base / brochure / new-release files.
+ *
+ * Uploads go up as base64 JSON (the backend already accepts that shape), which
+ * keeps the single `api` wrapper as the only transport. Preview and download
+ * need the bearer token, so they fetch a blob and hand back an object URL
+ * rather than relying on a bare `<a href>` (which would be unauthenticated).
+ */
+
+import { api, getToken, ApiError } from './api'
+
+const base = (tenantId: string) => `/api/admin/tenants/${encodeURIComponent(tenantId)}`
+
+export interface AdminFile {
+  id: number
+  name: string
+  ext: string | null
+  module: string
+  size: number
+  doc_id: number | null
+  file_path: string | null
+  url: string | null
+  tenant_id: string | null
+  created_at: string
+  status?: string
+  chunks_count?: number
+  error_message?: string | null
+}
+
+export interface KnowledgeGap {
+  id: number
+  tenant_id: string
+  wa_id: string | null
+  query: string
+  reason: string
+  confidence_score: number
+  created_at: string
+  resolved: number
+  resolved_at?: string | null
+  resolved_by?: string | null
+  resolution_notes?: string | null
+}
+
+export interface KnowledgeGapsSummaryQuery {
+  query: string
+  count: number
+  last_asked: string
+  avg_score: number
+  reason: string
+  sample_id: number
+}
+
+export interface KnowledgeGapsResponse {
+  gaps: KnowledgeGap[]
+  summary: {
+    total_unresolved: number
+    top_queries: KnowledgeGapsSummaryQuery[]
+  }
+}
+
+export interface BifurcationResult {
+  tenant_id: string
+  vertical: string
+  brand: {
+    name: string
+    bot_name: string
+    tagline: string
+    website: string
+    support_email: string
+    support_phone: string
+    signature: string
+  }
+  menu_buttons_count: number
+  intents_count: number
+  offerings_created: number
+  offerings_sample: string[]
+  kb_chunks_indexed: number
+  version: number
+  status: string
+  files_processed: string[]
+}
+
+export const FILE_MODULES = [
+  { value: 'faq', label: 'FAQ', permission: 'upload_faq' },
+  { value: 'kb', label: 'Knowledge base', permission: 'upload_kb' },
+  { value: 'catalogue', label: 'Brochure', permission: 'upload_faq' },
+  { value: 'new_arrival', label: 'New releases', permission: 'upload_faq' },
+] as const
+
+/**
+ * Knowledge-upload limits. Keep in step with `SUPPORTED` / `MAX_UPLOAD_BYTES`
+ * in `backend/routes/admin.py`; the picker, the hint text and the server must
+ * agree on what is accepted.
+ */
+export const UPLOAD_ACCEPT = '.pdf,.docx,.doc,.txt,.xlsx,.xls,.md,.csv'
+export const UPLOAD_TYPES_LABEL = 'PDF, DOC, DOCX, TXT, XLS, XLSX, MD, CSV'
+export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+export const MAX_UPLOAD_LABEL = `${MAX_UPLOAD_BYTES / (1024 * 1024)} MB`
+
+export function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read the file'))
+    reader.onload = () => {
+      const result = String(reader.result ?? '')
+      const comma = result.indexOf(',')
+      resolve(comma >= 0 ? result.slice(comma + 1) : result)
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+export const uploadsApi = {
+  list: (tenantId: string, opts: { module?: string; search?: string } = {}, signal?: AbortSignal) => {
+    const params = new URLSearchParams()
+    if (opts.module) params.set('module', opts.module)
+    if (opts.search) params.set('search', opts.search)
+    const query = params.toString()
+    return api
+      .get<{ files: AdminFile[] }>(`${base(tenantId)}/files${query ? `?${query}` : ''}`, signal)
+      .then((r) => r.files)
+  },
+
+  upload: async (tenantId: string, file: File, module: string) => {
+    const content = await readAsBase64(file)
+    return api.post<{ status: string; filename: string; chunks: number; size: number; file_url: string }>(
+      `${base(tenantId)}/files/upload?module=${encodeURIComponent(module)}`,
+      { filename: file.name, content, media_type: file.type || undefined },
+    )
+  },
+
+  remove: (tenantId: string, filename: string) =>
+    api.del<{ status: string; deleted_faq: number; deleted_kb: number }>(
+      `${base(tenantId)}/files/${encodeURIComponent(filename)}`,
+    ),
+
+  autoBifurcate: async (tenantId: string, files: File[], autoPublish = true) => {
+    const payload = await Promise.all(
+      files.map(async (file) => ({
+        filename: file.name,
+        content: await readAsBase64(file),
+        media_type: file.type || undefined,
+      }))
+    )
+    return api.post<BifurcationResult>(
+      `${base(tenantId)}/files/auto-bifurcate?auto_publish=${autoPublish ? 'true' : 'false'}`,
+      { files: payload, auto_publish: autoPublish }
+    )
+  },
+
+  bifurcateExisting: (tenantId: string, filenames?: string[]) =>
+    api.post<BifurcationResult>(`${base(tenantId)}/files/bifurcate-existing`, {
+      filenames,
+      auto_publish: true,
+    }),
+
+  /** Fetch the raw file with the bearer token; caller revokes the object URL. */
+  blob: async (tenantId: string, filename: string, download = false): Promise<Blob> => {
+    const token = getToken()
+    const path = `${base(tenantId)}/files/${encodeURIComponent(filename)}/${download ? 'download' : 'preview'}`
+    const res = await fetch(path, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
+    if (!res.ok) throw new Error(`Could not fetch the file (${res.status})`)
+    return res.blob()
+  },
+}
+
+export const knowledgeGapsApi = {
+  list: (tenantId: string, resolved = false, limit = 50, signal?: AbortSignal) =>
+    api.get<KnowledgeGapsResponse>(
+      `${base(tenantId)}/knowledge-gaps?resolved=${resolved ? 'true' : 'false'}&limit=${limit}`,
+      signal,
+    ),
+
+  resolve: (tenantId: string, gapId: number, notes?: string) =>
+    api.post<{ status: string; gap_id: number; resolved: boolean }>(
+      `${base(tenantId)}/knowledge-gaps/${gapId}/resolve`,
+      { notes },
+    ),
+
+  createFaq: (tenantId: string, gapId: number, question: string, answer: string) =>
+    api.post<{ status: string; question: string; answer: string; tenant_id: string }>(
+      `${base(tenantId)}/knowledge-gaps/${gapId}/create-faq`,
+      { question, answer },
+    ),
+}
+
+/**
+ * Upload a record image and get its public URL. Multipart, so it bypasses the
+ * JSON `api` wrapper — the bearer token is attached by hand. The backend hosts
+ * the file externally and returns the URL the record's Image column stores.
+ */
+export async function uploadRecordImage(tenantId: string, file: File): Promise<string> {
+  const form = new FormData()
+  form.append('file', file)
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  const token = getToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  let res: Response
+  try {
+    res = await fetch(`${base(tenantId)}/files/image`, { method: 'POST', headers, body: form })
+  } catch {
+    throw new ApiError(0, 'Cannot reach the backend to upload the image.')
+  }
+  if (!res.ok) {
+    let message = `Upload failed (${res.status})`
+    try {
+      const body = await res.json()
+      if (typeof body?.detail === 'string') message = body.detail
+    } catch {
+      /* keep the default */
+    }
+    throw new ApiError(res.status, message)
+  }
+  const body = (await res.json()) as { url?: string }
+  if (!body.url) throw new ApiError(502, 'The upload returned no URL.')
+  return body.url
+}
+
+/**
+ * Upload a company logo and get its URL. Multipart, so it bypasses the JSON
+ * `api` wrapper. The backend stores it locally (served at `/api/logos/...`),
+ * so no third-party host or API key is involved.
+ */
+export async function uploadImage(file: File): Promise<string> {
+  const form = new FormData()
+  form.append('file', file)
+  const body = await api.postForm<{ url?: string }>('/api/admin/upload/logo', form)
+  if (!body?.url) throw new ApiError(502, 'The upload returned no URL.')
+  return body.url
+}
+
+export function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
+export function openBlob(blob: Blob) {
+  const url = URL.createObjectURL(blob)
+  window.open(url, '_blank', 'noopener')
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
+export function formatBytes(bytes: number): string {
+  if (!bytes) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const exp = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+  const value = bytes / 1024 ** exp
+  return `${value.toFixed(value >= 10 || exp === 0 ? 0 : 1)} ${units[exp]}`
+}
