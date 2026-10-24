@@ -64,18 +64,60 @@
   "intents": [
     {
       "name": "technologies",
-      "answer": "• Here's the stack we build with:\n• *Frontend Technologies:* React.js, Next.js, Vue.js, Angular, TypeScript and Tailwind CSS\n• *Backend Technologies:* Node.js, Python (FastAPI/Django), Golang, Laravel and .NET Core\n• *AI & Machine Learning:* OpenAI (GPT-4/GPT-5 APIs), LangChain, PyTorch, TensorFlow, Hugging Face, Vertex AI (Google Cloud AI), Azure OpenAI and IBM\n• *Mobile Development:* iOS (Swift), Android (Kotlin), React Native and Flutter\n• *Databases & Data Platforms:* PostgreSQL, MySQL, MongoDB, DynamoDB, Firebase, Snowflake, BigQuery and Redis\n• Tell us what you're building and we'll match the right stack for it."    },
+      "answer": "• Here's the stack we build with:\n• *Frontend Technologies:* React.js, Next.js, Vue.js, Angular, TypeScript and Tailwind CSS\n• *Backend Technologies:* Node.js, Python (FastAPI/Django), Golang, Laravel and .NET Core\n• *AI & Machine Learning:* OpenAI (GPT-4/GPT-5 APIs), LangChain, PyTorch, TensorFlow, Hugging Face, Vertex AI (Google Cloud AI), Azure OpenAI and IBM\n• *Mobile Development:* iOS (Swift), Android (Kotlin), React Native and Flutter\n• *Databases & Data Platforms:* PostgreSQL, MySQL, MongoDB, DynamoDB, Firebase, Snowflake, BigQuery and Redis\n• Tell us what you're building and we'll match the right stack for it.",
+      "keywords": [
+        "technologies",
+        "technology",
+        "tech stack",
+        "stack",
+        "framework",
+        "tools",
+        "programming languages"
+      ],
+      "examples": [
+        "what technologies do you work with",
+        "what is your tech stack"
+      ],
+      "enabled": true
+    },
     {
       "name": "projects",
       "answer": "• A snapshot of the work we deliver:\n• *Web platforms:* e-commerce stores, customer portals and internal systems\n• *Mobile apps:* customer and field-force apps for iOS and Android\n• *Enterprise:* CRM/ERP integrations, workflow automation and analytics dashboards\n• *Industries:* retail, healthcare, finance, logistics and education\n• We share client names and detailed case studies only with their written permission — our team can walk you through relevant examples on a call."
     },
     {
       "name": "careers",
-      "answer": "• We're always glad to hear from good people:\n• *Roles we hire for:* frontend, backend and mobile developers, QA engineers, DevOps and UI/UX designers\n• *Internships:* available for final-year students and fresh graduates\n• *How to apply:* send your CV to info@leewaysoftech.com with the role in the subject line\n• Shortlisted candidates hear from us within a few working days."
+      "answer": "💼 *Open roles at Leewaysoftech:*\n\n*Sales*\n• Sales Executive — 2–4 yrs · Mumbai\n\n*Development*\n• Python Developer — 1-3 yrs · ahmedabad\n• UI/UX Developer — 0-1 yrs · bhavnagar\n\nPlease forward your CV to hr@leewaysoftech.com and specify the role you are interested in. Our team will get back to you shortly. 🙏",
+      "keywords": [
+        "career",
+        "careers",
+        "job",
+        "hiring",
+        "vacancy",
+        "internship",
+        "open role"
+      ],
+      "examples": [
+        "are you hiring",
+        "job openings at your company"
+      ],
+      "enabled": true
     },
     {
       "name": "benefits",
-      "answer": "• Why teams choose to work with us:\n• *Dedicated project manager* as your single point of contact\n• *Agile delivery* in two-week sprints with regular demos\n• *Transparent reporting* — you always know where things stand\n• *Post-launch support and maintenance* packages\n• *Your IP stays yours* — full code and documentation handover\n• *Fixed-price or dedicated-team* engagement models, NDA on request"
+      "answer": "1. Learning and skill development\n\nEmployee reviews from interns mention supportive mentors, guidance from senior team members, and opportunities to learn through practical projects. \n\n\n2. Exposure to different technologies\n\nThe company works in areas including web and mobile development, AI, digital marketing, cloud infrastructure, and business communication platforms. The value to you depends on your role and project assignment. \n\n3. Career growth opportunities\n\nIts careers page lists roles across technical support, testing, UI/UX design, IT management, sales, HR, and other functions. This may offer opportunities to develop your skills and move into more specialized roles. \n\n4. Mentorship and team experience\n\nSome recent interns have praised the guidance they receive and the learning environment. Experiences are not uniform, so the quality of support may vary by team and manager. \n\n5. Experience with a range of business sectors\n\nLeeway Softech serves areas such as banking, education, government, and hospitality. Depending on your assignment, this can help you understand how technology supports real business operations. ",
+      "keywords": [
+        "benefits",
+        "why choose you",
+        "why work with you",
+        "advantages",
+        "perks",
+        "what makes you different"
+      ],
+      "examples": [
+        "why should we work with you",
+        "what are the benefits"
+      ],
+      "enabled": true
     },
     {
       "name": "service_enquiry",
@@ -94,7 +136,14 @@
         "expertise"
       ],
       "requires_feature": "offerings",
-      "answer": "Leewaysoftech — Innovative Technology, Creative Work\n\n**Our Services:**\n• **SMS Gateway** – Send OTPs, payment updates, reminders with API support\n• **Virtual Number / Missed Call** – Capture leads via virtual numbers\n• **WhatsApp Business API** – Engage customers via WhatsApp\n• **Voice & IVR** – Omnichannel customer engagement\n• **Bulk Email** – Centralized email communication\n• **AI & Automation** – Custom AI chatbots, ML & automation\n• **Cloud & DevOps** – Cloud migration, AWS/Azure/GCP, DevOps, CI/CD\n• **IT Services** – Web/mobile app development, SEO, UI/UX, e-commerce solutions\n\nReady to discuss your project? Just ask!"
+      "answer": "",
+      "enabled": true
+    },
+    {
+      "name": "menu_development",
+      "answer": "",
+      "keywords": [],
+      "enabled": true
     }
   ],
   "guardrails": {
@@ -146,5 +195,105 @@
       "name": "book_callback",
       "success_message": "Done! Your callback and Google Meeting have been scheduled."
     }
-  ]
+  ],
+  "menu": {
+    "key": "kb_main",
+    "header": "",
+    "body": "How can we help you today?",
+    "footer": "Or type your question",
+    "button_text": "Show Options",
+    "buttons": [
+      {
+        "id": "menu_services",
+        "title": "Our Services",
+        "description": "What we build and deliver",
+        "section": "🛠️ Services",
+        "icon": "🛠️",
+        "sort_order": 0,
+        "enabled": true,
+        "requires_feature": "services",
+        "out_of_hours_only": false,
+        "flow": null,
+        "intent": "service_enquiry"
+      },
+      {
+        "id": "menu_technologies",
+        "title": "Technologies",
+        "description": "Our tech stack & expertise",
+        "section": "🛠️ Services",
+        "icon": "💻",
+        "sort_order": 1,
+        "enabled": true,
+        "requires_feature": "offering_details",
+        "out_of_hours_only": false,
+        "flow": null,
+        "intent": "technologies"
+      },
+      {
+        "id": "menu_careers",
+        "title": "Careers",
+        "description": "Open roles & hiring process",
+        "section": "🏢 Company",
+        "icon": "💼",
+        "sort_order": 2,
+        "enabled": true,
+        "requires_feature": null,
+        "out_of_hours_only": false,
+        "flow": null,
+        "intent": "careers"
+      },
+      {
+        "id": "menu_benefits",
+        "title": "Benefits",
+        "description": "Why work with us",
+        "section": "🏢 Company",
+        "icon": "🎁",
+        "sort_order": 3,
+        "enabled": true,
+        "requires_feature": null,
+        "out_of_hours_only": false,
+        "flow": null,
+        "intent": "benefits"
+      },
+      {
+        "id": "menu_callback",
+        "title": "Book a Callback",
+        "description": "Have us call you back",
+        "section": "📞 Talk To Us",
+        "icon": "📞",
+        "sort_order": 4,
+        "enabled": true,
+        "requires_feature": "callback",
+        "out_of_hours_only": false,
+        "flow": "book_callback",
+        "intent": null
+      },
+      {
+        "id": "menu_raise_complaint",
+        "title": "Raise a Complaint",
+        "description": "Raise complaint",
+        "section": "📞 Talk To Us",
+        "icon": "🆘",
+        "sort_order": 5,
+        "enabled": true,
+        "requires_feature": null,
+        "out_of_hours_only": false,
+        "flow": "raise_ticket",
+        "intent": null
+      },
+      {
+        "id": "menu_development",
+        "title": "Development",
+        "description": "what we develop and deliver",
+        "section": "🛠️ Services",
+        "icon": "👨‍💻",
+        "sort_order": 6,
+        "enabled": true,
+        "requires_feature": null,
+        "out_of_hours_only": false,
+        "flow": null,
+        "intent": "menu_development"
+      }
+    ]
+  }
 }
