@@ -58,6 +58,77 @@ export interface KnowledgeGapsResponse {
   }
 }
 
+export interface OnboardingTemplate {
+  vertical: string
+  title: string
+  icon: string
+  docx_url: string | null
+  pdf_url: string | null
+  has_docx: boolean
+  has_pdf: boolean
+}
+
+export interface StagedOnboardingDraft {
+  status: string
+  tenant_id: string
+  vertical: string
+  brand: {
+    name: string
+    bot_name: string
+    tagline: string
+    website: string
+    support_email: string
+    support_phone: string
+    signature?: string
+  }
+  business_hours: {
+    timezone: string
+    open: string
+    close: string
+    open_days: number[]
+    raw?: string
+  }
+  menu_items: Array<{
+    id: string
+    title: string
+    description: string
+    section: string
+    action: string
+  }>
+  offerings: Array<{
+    name: string
+    category: string
+    price: string
+    short_description: string
+    description: string
+    unit?: string
+    attrs?: Record<string, string>
+  }>
+  faqs: Array<{
+    question: string
+    answer: string
+    category: string
+  }>
+  knowledge_articles: Array<{
+    title: string
+    category: string
+    markdown_content: string
+  }>
+  guardrails: {
+    tone: string
+    never_state: string[]
+    escalation_triggers?: string[]
+    escalation_rules?: string
+  }
+  source_files: string[]
+  stats: {
+    offerings_count: number
+    menu_items_count: number
+    faqs_count: number
+    articles_count: number
+  }
+}
+
 export interface BifurcationResult {
   tenant_id: string
   vertical: string
@@ -183,6 +254,32 @@ export const knowledgeGapsApi = {
     api.post<{ status: string; question: string; answer: string; tenant_id: string }>(
       `${base(tenantId)}/knowledge-gaps/${gapId}/create-faq`,
       { question, answer },
+    ),
+}
+
+export const onboardingKitsApi = {
+  list: (signal?: AbortSignal) =>
+    api.get<{ templates: OnboardingTemplate[] }>('/api/admin/onboarding-kits/list', signal),
+
+  stageGlobal: async (file: File) => {
+    const content = await readAsBase64(file)
+    return api.post<StagedOnboardingDraft>('/api/admin/onboarding/stage', {
+      files: [{ filename: file.name, content }],
+    })
+  },
+
+  stageTenant: async (tenantId: string, file: File) => {
+    const content = await readAsBase64(file)
+    return api.post<StagedOnboardingDraft>(
+      `/api/admin/tenants/${encodeURIComponent(tenantId)}/onboarding/stage`,
+      { files: [{ filename: file.name, content }] },
+    )
+  },
+
+  publishTenant: (tenantId: string, draft: StagedOnboardingDraft) =>
+    api.post<{ status: string; summary: any }>(
+      `/api/admin/tenants/${encodeURIComponent(tenantId)}/onboarding/publish`,
+      { draft },
     ),
 }
 

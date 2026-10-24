@@ -1,15 +1,29 @@
 {
   "tenant_id": "leewaysoftech",
   "vertical": "it_software",
-  "display_name": "Leewaysoftech",
+  "display_name": "Leeway Softech",
   "brand": {
-    "name": "Leewaysoftech",
-    "bot_name": "Leewaysoftech Assistant",
-    "tagline": "a software development company building web, mobile, and enterprise solutions",
-    "website": "www.leewaysoftech.com",
-    "support_email": "customercare@leewaysoftech.com",
-    "support_phone": "+91 98765 43210",
-    "signature": "Leewaysoftech — Building software that moves business forward."
+    "name": "Leeway Softech",
+    "bot_name": "Leeway Tech Advisor",
+    "tagline": "Software Development & AI Solutions — Engineering Future-Ready Digital Products",
+    "website": "https://leewaysoftech.com",
+    "support_email": "sales@leewaysoftech.com",
+    "support_phone": "+91 8690783030",
+    "signature": "Leewaysoftech — Building software that moves business forward.",
+    "legal_name": "Leeway Softech Private Limited",
+    "headquarters": "Ahmedabad, Gujarat, India",
+    "global_reach": "USA, UK, UAE, Canada, Australia, India",
+    "founded": "2012",
+    "core_capabilities": [
+      "Generative AI & LLM Solutions",
+      "AI Chatbots & Virtual Assistants",
+      "Enterprise Software Development",
+      "Cloud & Data Engineering",
+      "WhatsApp Business API Solutions",
+      "Mobile & Web Applications",
+      "Shopify & Headless Commerce",
+      "UI/UX Design Systems"
+    ]
   },
   "features": {
     "cart": false,
@@ -52,19 +66,22 @@
     "timezone": "Asia/Kolkata",
     "always_open": false,
     "open": "09:30",
-    "close": "18:30",
+    "close": "19:00",
     "open_days": [
       0,
       1,
       2,
       3,
-      4
-    ]
+      4,
+      5
+    ],
+    "raw": "09:30 AM - 07:00 PM (Mon-Sat)"
   },
   "intents": [
     {
       "name": "technologies",
-      "answer": "• Here's the stack we build with:\n• *Frontend Technologies:* React.js, Next.js, Vue.js, Angular, TypeScript and Tailwind CSS\n• *Backend Technologies:* Node.js, Python (FastAPI/Django), Golang, Laravel and .NET Core\n• *AI & Machine Learning:* OpenAI (GPT-4/GPT-5 APIs), LangChain, PyTorch, TensorFlow, Hugging Face, Vertex AI (Google Cloud AI), Azure OpenAI and IBM\n• *Mobile Development:* iOS (Swift), Android (Kotlin), React Native and Flutter\n• *Databases & Data Platforms:* PostgreSQL, MySQL, MongoDB, DynamoDB, Firebase, Snowflake, BigQuery and Redis\n• Tell us what you're building and we'll match the right stack for it."    },
+      "answer": "• Here's the stack we build with:\n• *Frontend Technologies:* React.js, Next.js, Vue.js, Angular, TypeScript and Tailwind CSS\n• *Backend Technologies:* Node.js, Python (FastAPI/Django), Golang, Laravel and .NET Core\n• *AI & Machine Learning:* OpenAI (GPT-4/GPT-5 APIs), LangChain, PyTorch, TensorFlow, Hugging Face, Vertex AI (Google Cloud AI), Azure OpenAI and IBM\n• *Mobile Development:* iOS (Swift), Android (Kotlin), React Native and Flutter\n• *Databases & Data Platforms:* PostgreSQL, MySQL, MongoDB, DynamoDB, Firebase, Snowflake, BigQuery and Redis\n• Tell us what you're building and we'll match the right stack for it."
+    },
     {
       "name": "projects",
       "answer": "• A snapshot of the work we deliver:\n• *Web platforms:* e-commerce stores, customer portals and internal systems\n• *Mobile apps:* customer and field-force apps for iOS and Android\n• *Enterprise:* CRM/ERP integrations, workflow automation and analytics dashboards\n• *Industries:* retail, healthcare, finance, logistics and education\n• We share client names and detailed case studies only with their written permission — our team can walk you through relevant examples on a call."
@@ -136,15 +153,66 @@
   "flows": [
     {
       "name": "get_quote",
-      "success_message": "Thanks! Our team has your project details and will reach out with next steps shortly."
+      "success_message": "Thank you! Our specialist will prepare a customized quote and follow up promptly."
     },
     {
       "name": "raise_ticket",
-      "success_message": "Ticket raised. Our support team will get back to you shortly."
+      "success_message": "Your request has been logged. A support ticket has been created and an executive will assist you."
     },
     {
       "name": "book_callback",
-      "success_message": "Done! Your callback and Google Meeting have been scheduled."
+      "success_message": "Thank you! Your request has been scheduled with Leeway Tech Advisor."
     }
-  ]
+  ],
+  "menu": {
+    "key": "kb_main",
+    "header": "Leeway Softech",
+    "body": "Welcome to Leeway Softech! How can we assist you today?",
+    "footer": "Select an option or type your query directly",
+    "button_text": "Select Option",
+    "buttons": [
+      {
+        "title": "Explore AI Services",
+        "description": "Generative AI, LLMs, Chatbots & Automation",
+        "section": "🤖 AI Solutions",
+        "action": "offerings"
+      },
+      {
+        "title": "Software & Web Dev",
+        "description": "Custom enterprise ERP, SaaS & web portals",
+        "section": "💻 Software",
+        "action": "offerings"
+      },
+      {
+        "title": "WhatsApp Solutions",
+        "description": "Official Meta API, chatbots & broadcasts",
+        "section": "📱 WhatsApp API",
+        "action": "offering_details"
+      },
+      {
+        "title": "Mobile App Dev",
+        "description": "iOS, Android, Flutter & React Native apps",
+        "section": "📱 Mobile",
+        "action": "offerings"
+      },
+      {
+        "title": "Request a Quote",
+        "description": "Custom project estimate & technical scope",
+        "section": "💳 Estimation",
+        "action": "quote"
+      },
+      {
+        "title": "Tech Stack & Stack",
+        "description": "Languages, cloud, databases & frameworks",
+        "section": "⚡ Tech Specs",
+        "action": "faq"
+      },
+      {
+        "title": "Talk to Specialist",
+        "description": "Instant callback from our solution architect",
+        "section": "📞 Contact",
+        "action": "book_callback"
+      }
+    ]
+  }
 }

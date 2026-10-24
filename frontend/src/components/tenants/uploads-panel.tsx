@@ -46,6 +46,7 @@ import { Input, Textarea } from '@/components/ui/input'
 import { Alert, EmptyState, LoadingBlock } from '@/components/ui/feedback'
 import { PageHeader } from '@/components/layout/page-header'
 import { useToast } from '@/components/ui/toast'
+import { OnboardingKitWidget } from '@/components/onboarding/onboarding-kit-widget'
 
 /**
  * Uploads is the tenant's own knowledge hub: FAQ documents, KB articles,
@@ -416,6 +417,11 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
           </CardBody>
         </Card>
       )}
+
+      {/* Predefined Onboarding Kits & AI Bifurcation */}
+      <div className="mb-6">
+        <OnboardingKitWidget tenantId={tenantId} onPublished={() => state.reload()} />
+      </div>
 
       {/* Traditional Upload & Existing Files Section */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
