@@ -30,7 +30,8 @@ import { useAction } from '@/lib/hooks'
 import { useAuth } from '@/lib/auth'
 import { tenantsApi, useTenants } from '@/lib/tenants'
 import { tenantApprovalsApi } from '@/lib/tenant-approvals'
-import { uploadImage } from '@/lib/uploads'
+import { uploadImage, type StagedOnboardingDraft } from '@/lib/uploads'
+import { OnboardingKitWidget } from './onboarding-kit-widget'
 import { navigate } from '@/lib/router'
 import { VERTICAL_CATALOG, getVertical } from '@/lib/verticals'
 import type { FeatureFlag, ResolvedProfile, Tenant } from '@/lib/types'
@@ -157,6 +158,28 @@ export function RegisterWizard({ onSubmitted }: { onSubmitted?: () => void } = {
     else navigate('/tenant-requests')
   }
 
+  const onStagedFromDoc = (staged: StagedOnboardingDraft) => {
+    setDraft((prev) => ({
+      ...prev,
+      companyName: staged.brand?.name || prev.companyName,
+      tenantId:
+        staged.tenant_id && staged.tenant_id !== 'draft_tenant'
+          ? staged.tenant_id
+          : slugify(staged.brand?.name || prev.tenantId),
+      displayName: staged.brand?.name || prev.displayName,
+      vertical: staged.vertical || prev.vertical,
+      botName: staged.brand?.bot_name || prev.botName,
+      tagline: staged.brand?.tagline || prev.tagline,
+      supportEmail: staged.brand?.support_email || prev.supportEmail,
+      supportPhone: staged.brand?.support_phone || prev.supportPhone,
+      website: staged.brand?.website || prev.website,
+      openTime: staged.business_hours?.open || prev.openTime,
+      closeTime: staged.business_hours?.close || prev.closeTime,
+      neverState: staged.guardrails?.never_state || prev.neverState,
+    }))
+    toast.push(`Imported ${staged.brand?.name || 'company'} configuration from document!`)
+  }
+
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader
@@ -167,6 +190,10 @@ export function RegisterWizard({ onSubmitted }: { onSubmitted?: () => void } = {
             : 'Pick a tenant the super admin registered, then complete it from WhatsApp onwards. Your submission goes to a super admin for approval before anything goes live.'
         }
       />
+
+      <div className="mb-6">
+        <OnboardingKitWidget onStagedDraft={onStagedFromDoc} />
+      </div>
 
       <ol className="mb-7 flex flex-wrap gap-1.5">
         {steps.map((s, index) => {
