@@ -260,7 +260,7 @@ export function InfoPagePanel({ tenantId, page }: { tenantId: string; page: Info
                 value={form.answer}
                 onChange={(answer) => setForm((f) => (f ? { ...f, answer } : f))}
               />
-            ) : page === 'technologies' || page === 'benefits' ? (
+            ) : page === 'technologies' || page === 'benefits' || page === 'projects' ? (
               <BulletsEditor
                 value={form.answer}
                 onChange={(answer) => setForm((f) => (f ? { ...f, answer } : f))}
@@ -453,19 +453,7 @@ interface CareersShape {
  * fall back to the plain textarea.
  */
 function CareersEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const [shape, setShape] = useState<CareersShape | null>(() => parseOpenings(value))
-
-  if (shape === null) {
-    return (
-      <Textarea
-        label="Answer text"
-        rows={10}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        hint='This answer is not in the openings format, so it is edited as plain text. One bullet per line starting with "• "; *stars* make a word bold.'
-      />
-    )
-  }
+  const [shape, setShape] = useState<CareersShape>(() => parseOpenings(value) ?? { intro: '', openings: [], closing: '' })
 
   const emit = (next: CareersShape) => {
     setShape(next)
@@ -628,19 +616,7 @@ interface BulletsShape {
  * the plain textarea so nothing is lost.
  */
 function BulletsEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const [shape, setShape] = useState<BulletsShape | null>(() => parseBullets(value))
-
-  if (shape === null) {
-    return (
-      <Textarea
-        label="Answer text"
-        rows={8}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        hint='This answer is not a labelled-bullet list, so it is edited as plain text. One bullet per line starting with "• "; *stars* make a word bold.'
-      />
-    )
-  }
+  const [shape, setShape] = useState<BulletsShape>(() => parseBullets(value) ?? { intro: '', rows: [], closing: '' })
 
   const emit = (next: BulletsShape) => {
     setShape(next)
