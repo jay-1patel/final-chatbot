@@ -1,15 +1,15 @@
 {
-  "tenant_id": "meridianbank",
+  "tenant_id": "meridian-bank",
   "vertical": "banking",
   "display_name": "Meridian Bank",
   "brand": {
     "name": "Meridian Bank",
-    "bot_name": "Meridian bot",
-    "tagline": "Meridian Bank- Bank of All Banks",
+    "bot_name": "Meridian Assistant",
+    "tagline": "Meridian Bank · Bank of All Banks",
     "website": "https://www.meridianbanker.com/",
     "support_email": "care@meridianbank.com",
     "support_phone": "+91 7418527567",
-    "signature": "Meridian Bank- Bank of All Banks"
+    "signature": "Your Meridian Bank Assistant"
   },
   "features": {
     "cart": false,
@@ -58,17 +58,15 @@
   },
   "business_hours": {
     "timezone": "Asia/Kolkata",
-    "always_open": true,
+    "always_open": false,
     "open": "09:00",
-    "close": "21:00",
+    "close": "18:00",
     "open_days": [
-      0,
       1,
       2,
       3,
       4,
-      5,
-      6
+      5
     ],
     "out_of_hours_message": "We are currently outside our working hours. Leave your details and our team will call you back on the next working day."
   },
@@ -222,7 +220,7 @@
       "requires_feature": "complaints",
       "description": "Raise a support ticket with full context for the agent.",
       "start_message": "I'm sorry about that. Let me capture the details so the right person picks it up.",
-      "success_message": "Ticket raised. Our support team will get back to you shortly.",
+      "success_message": "Your request has been logged. A support ticket has been created and an executive will assist you.",
       "out_of_hours_variant": "book_callback",
       "steps": [
         {
@@ -315,6 +313,14 @@
           "prompt": "Ticket raised. Our support team will get back to you shortly."
         }
       ]
+    },
+    {
+      "name": "book_callback",
+      "success_message": "Thank you! Your consultation request has been scheduled with Meridian Assistant."
+    },
+    {
+      "name": "get_quote",
+      "success_message": "Thank you! Our specialist will prepare a customized quote and follow up promptly."
     }
   ],
   "menu": {
@@ -422,13 +428,58 @@
         "out_of_hours_only": false,
         "flow": "book_callback",
         "intent": null
+      },
+      {
+        "id": "browse-offerings",
+        "title": "Savings & Deposits",
+        "description": "Zero-balance savings, high-interest fixed deposits & recurring",
+        "section": "Accounts",
+        "sort_order": 1,
+        "enabled": true,
+        "intent": "offerings"
+      },
+      {
+        "id": "credit-cards-loans",
+        "title": "Credit Cards & Loans",
+        "description": "Lifestyle cashback cards, personal & vehicle loans",
+        "section": "Accounts",
+        "sort_order": 2,
+        "enabled": true,
+        "intent": "offerings"
+      },
+      {
+        "id": "insurance-claims",
+        "title": "Insurance & Claims",
+        "description": "Life, health & motor insurance claim settlement guidelines",
+        "section": "Insurance",
+        "sort_order": 3,
+        "enabled": true,
+        "intent": "insurance-claims"
+      },
+      {
+        "id": "locate-branch-atm",
+        "title": "Locate Branch & ATM",
+        "description": "Find nearby branch locations, working hours & IFSC codes",
+        "section": "Info",
+        "sort_order": 4,
+        "enabled": true,
+        "intent": "locate-branch-atm"
+      },
+      {
+        "id": "block-lost-card",
+        "title": "Block Lost Card",
+        "description": "Instantly block stolen or misplaced debit/credit card",
+        "section": "Security",
+        "sort_order": 5,
+        "enabled": true,
+        "flow": "raise_ticket"
       }
     ],
     "key": "kb_main",
-    "header": "",
-    "body": "How can we help you today?",
-    "footer": "Or type your question",
-    "button_text": "Show Options"
+    "header": "Meridian Bank",
+    "body": "Welcome! How can we assist you today?",
+    "footer": "Select an option or type your query directly",
+    "button_text": "Select Option"
   },
   "intents": [
     {
@@ -491,6 +542,61 @@
         "hey there",
         "good morning"
       ],
+      "enabled": true
+    },
+    {
+      "name": "technologies",
+      "examples": [
+        "what technologies do you use",
+        "what is your tech stack"
+      ],
+      "keywords": [
+        "tech stack",
+        "technologies",
+        "framework"
+      ],
+      "answer": "Digital banking channels: Mobile app & net banking (never share OTP/PIN in chat) · Instant card block and service requests · Secure KYC / video-KYC journeys · Ask how to activate a product · we guide steps, not passwords.",
+      "enabled": true
+    },
+    {
+      "name": "projects",
+      "examples": [
+        "show me your projects",
+        "who have you built for"
+      ],
+      "keywords": [
+        "projects",
+        "portfolio",
+        "case study"
+      ],
+      "answer": "Flagship products: Savings & FD schemes · Cashback / travel cards · Home, personal and vehicle loans · Browse offerings or ask eligibility questions.",
+      "enabled": true
+    },
+    {
+      "name": "careers",
+      "examples": [
+        "are you hiring",
+        "job openings"
+      ],
+      "keywords": [
+        "careers",
+        "hiring",
+        "jobs"
+      ],
+      "answer": "Careers across branches, credit and digital teams. Apply via the official careers channel or support email.",
+      "enabled": true
+    },
+    {
+      "name": "benefits",
+      "examples": [
+        "why work with you",
+        "what are the benefits"
+      ],
+      "keywords": [
+        "benefits",
+        "why choose you"
+      ],
+      "answer": "Why customers bank with Meridian: Clear product guides without phishing asks · Fast card-block and fraud escalation · Branch/ATM locator help · Published grievance timelines.",
       "enabled": true
     }
   ],

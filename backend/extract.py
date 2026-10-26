@@ -3,6 +3,7 @@ import sys
 import json
 import csv
 import re
+import io
 import logging
 import shutil
 from pathlib import Path
@@ -56,9 +57,15 @@ CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", 150))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(BASE_DIR, "uploaded_files"))
 EXTRACTED_DIR = os.environ.get("EXTRACTED_DIR", os.path.join(UPLOAD_DIR, "extracted"))
+EXTRACTED_IMAGES_DIR = os.environ.get("EXTRACTED_IMAGES_DIR", os.path.join(EXTRACTED_DIR, "images"))
+
+#: Embedded images smaller than this (width x height) are skipped as noise.
+MIN_IMAGE_WIDTH = 80
+MIN_IMAGE_HEIGHT = 80
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(EXTRACTED_DIR, exist_ok=True)
+os.makedirs(EXTRACTED_IMAGES_DIR, exist_ok=True)
 
 SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".md", ".csv")
 
@@ -156,6 +163,63 @@ def ocr_page(page) -> str:
         return ""
 
 
+def _upload_url(abs_path: str) -> str:
+    """Convert an absolute path under ``UPLOAD_DIR`` to a ``/uploaded_files/...`` URL.
+
+    The backend mounts ``/uploaded_files`` -> ``backend/uploaded_files`` (see
+    ``backend/main.py``), so images saved under ``UPLOAD_DIR/extracted/images`` are
+    publicly servable at ``/uploaded_files/extracted/images/<name>``.
+    """
+    try:
+        rel = os.path.relpath(os.path.abspath(abs_path), os.path.abspath(UPLOAD_DIR))
+    except ValueError:
+        rel = os.path.basename(abs_path)
+    return f"/uploaded_files/{rel.replace(os.sep, '/')}"
+
+
+def _extract_page_images(doc, page, page_num: int, stem: str) -> List[Dict[str, Any]]:
+    """Extract embedded raster images from a PDF page and save them to disk.
+
+    Returns a list of dicts: {page, filename, url, width, height, size}.
+    """
+    images: List[Dict[str, Any]] = []
+    try:
+        for img_idx, img_info in enumerate(page.get_images(full=True) or []):
+            xref = img_info[0]
+            base_image = doc.extract_image(xref)
+            if not base_image:
+                continue
+            raw_bytes = base_image.get("image")
+            if not raw_bytes:
+                continue
+            w = int(base_image.get("width", 0) or 0)
+            h = int(base_image.get("height", 0) or 0)
+            if w < MIN_IMAGE_WIDTH or h < MIN_IMAGE_HEIGHT:
+                continue
+            ext = (base_image.get("ext") or "jpg").lower()
+            if ext == "jpeg":
+                ext = "jpg"
+            img_filename = f"{stem}_p{page_num}_{img_idx}.{ext}"
+            img_path = os.path.join(EXTRACTED_IMAGES_DIR, img_filename)
+            try:
+                with open(img_path, "wb") as fh:
+                    fh.write(raw_bytes)
+            except OSError as e:
+                logger.warning(f"Could not write extracted image {img_filename}: {e}")
+                continue
+            images.append({
+                "page": page_num,
+                "filename": img_filename,
+                "url": _upload_url(img_path),
+                "width": w,
+                "height": h,
+                "size": len(raw_bytes),
+            })
+    except Exception as e:
+        logger.debug("Page image extraction error on page %d: %s", page_num, e)
+    return images
+
+
 # ----------------------------------------------------------------------
 # PDF Extraction
 # ----------------------------------------------------------------------
@@ -186,11 +250,13 @@ def extract_tables_pdf(filepath: str) -> List[Dict[str, Any]]:
 
 
 def extract_pdf(filepath: str) -> Dict[str, Any]:
-    results = {"file": os.path.basename(filepath), "type": "pdf", "pages": [], "tables": []}
+    results = {"file": os.path.basename(filepath), "type": "pdf", "pages": [], "tables": [], "images": []}
 
     tables = extract_tables_pdf(filepath)
     results["tables"] = tables
     table_pages = {t["page"] for t in tables}
+
+    stem = Path(filepath).stem
 
     try:
         doc = fitz.open(filepath)
@@ -214,6 +280,9 @@ def extract_pdf(filepath: str) -> Dict[str, Any]:
                 results["pages"].append({"page": page_num, "text": text, "source": "text"})
             else:
                 results["pages"].append({"page": page_num, "text": "", "source": "empty"})
+
+            # Extract embedded images from every page (scanned or not).
+            results["images"].extend(_extract_page_images(doc, page, page_num, stem))
     finally:
         doc.close()
 
@@ -419,6 +488,16 @@ def results_to_chunks(results: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "page_number": table["page"],
             })
 
+        for img in results.get("images", []):
+            chunks.append({
+                "source_file": filename,
+                "content_type": "image",
+                "content": f"[IMAGE] {img['filename']} — extracted from page {img['page']} — {img['url']}",
+                "page_number": img["page"],
+                "media_url": img["url"],
+                "media_type": "image",
+            })
+
     elif file_type == "docx":
         full_text = "\n".join(results["paragraphs"])
         if full_text.strip():
@@ -501,6 +580,16 @@ def format_output(results: Dict[str, Any]) -> str:
                 lines.append(f"\n[Table {table['table_index']} from Page {table['page']}]")
                 for row in table["data"]:
                     lines.append(" | ".join(row))
+
+        if results.get("images"):
+            lines.append(f"\n{'=' * 60}")
+            lines.append("IMAGES")
+            lines.append("=" * 60)
+            for img in results["images"]:
+                lines.append(
+                    f"\n[Image {img['filename']} from Page {img['page']}]"
+                    f"\nURL: {img['url']}  ·  {img['width']}x{img['height']}  ·  {img['size']} bytes"
+                )
 
     elif file_type == "docx":
         lines.append("\n--- Paragraphs ---\n")

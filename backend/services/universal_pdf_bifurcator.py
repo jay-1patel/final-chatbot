@@ -105,6 +105,21 @@ def _extract_page_assets(
     return page_images
 
 
+def _ocr_page(page: fitz.Page) -> str:
+    """OCR a scanned / image-only PDF page via tesseract (best-effort).
+
+    Returns the recognized text, or an empty string when tesseract is unavailable
+    or OCR fails — callers should fall back to treating the page as empty.
+    """
+    try:
+        import pytesseract
+
+        pix = page.get_pixmap(dpi=200)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        return pytesseract.image_to_string(img).strip()
+    except Exception:
+        return ""
+
 
 # Vertical-specific attrs schema: tells the LLM exactly which fields to extract per industry
 _VERTICAL_ATTRS_SCHEMA = {
@@ -481,6 +496,12 @@ async def bifurcate_and_ingest_pdf(
         page = doc[page_idx]
         page_num = page_idx + 1
         text = page.get_text("text").strip()
+        if len(text) < 30:
+            # Scanned / image-only page: fall back to OCR so the bifurcation
+            # pipeline still extracts products, FAQs and knowledge from it.
+            ocr_text = _ocr_page(page)
+            if ocr_text:
+                text = ocr_text
         if len(text) < 30:
             continue
 

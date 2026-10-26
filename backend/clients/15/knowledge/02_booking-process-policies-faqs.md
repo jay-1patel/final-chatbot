@@ -1,10 +1,19 @@
 # Frequently Asked Questions
 
-### Q: How do I request a software demo?
-A: Contact our team through the booking callback feature to schedule a personalized demonstration.
+### Q: What is Meditab?
+A: Meditab Software, Inc. develops healthcare technology for EHR, EMR, practice management, pharmacy workflows, and specialty-specific solutions.
 
-### Q: What are the pricing options?
-A: We offer customized pricing models based on your organization's needs. Contact our sales team for a detailed quote.
+### Q: What does IMS stand for?
+A: IMS stands for Intelligent Medical Software, an integrated EHR and practice-management platform with medical billing capabilities.
 
-### Q: What support is available for implementation?
-A: Our technical support team provides assistance with installation, training, and ongoing maintenance.
+### Q: Which medical specialties are supported?
+A: Meditab's IMS platform supports over 40 specialties with configurable templates and workflows.
+
+### Q: Does Meditab offer pharmacy software?
+A: Yes. IPS/IPS Elite is Meditab's pharmacy management solution for retail, long-term care, and specialty pharmacies.
+
+### Q: Can the software support patient engagement?
+A: Yes. Meditab offers patient portals, appointment tools, and digital communication features for selected products.
+
+### Q: Does Meditab support billing workflows?
+A: Yes. Billing and revenue-cycle functionality is included, but specific claim workflows and payer connections should be confirmed.

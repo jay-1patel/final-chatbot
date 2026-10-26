@@ -2504,7 +2504,8 @@ def save_chunks(chunks, module="faq", media_url=None, media_type=None, tenant_id
         for chunk in chunks:
             conn.execute(
                 "INSERT INTO faq_dataset (source_file, content_type, content, page_number, module, media_url, media_type, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (chunk["source_file"], chunk["content_type"], chunk["content"], chunk["page_number"], module, media_url, media_type, tenant_id),
+                (chunk["source_file"], chunk["content_type"], chunk["content"], chunk["page_number"], module,
+                 chunk.get("media_url") or media_url, chunk.get("media_type") or media_type, tenant_id),
             )
 
 

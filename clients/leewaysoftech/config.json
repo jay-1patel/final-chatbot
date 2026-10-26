@@ -1,15 +1,15 @@
 {
-  "tenant_id": "leewaysoftech",
+  "tenant_id": "leeway-softech",
   "vertical": "it_software",
-  "display_name": "Leeway Softech",
+  "display_name": "Leeway Softech Pvt Ltd",
   "brand": {
-    "name": "Leeway Softech",
-    "bot_name": "Leeway Tech Advisor",
-    "tagline": "Software Development & AI Solutions — Engineering Future-Ready Digital Products",
-    "website": "https://leewaysoftech.com",
+    "name": "Leeway Softech Pvt Ltd",
+    "bot_name": "Leeway AI Assistant",
+    "tagline": "Innovative Technology. Creative Work. Trusted Delivery.",
+    "website": "https://leewaysoftech.com/",
     "support_email": "sales@leewaysoftech.com",
-    "support_phone": "+91 8690783030",
-    "signature": "Leewaysoftech — Building software that moves business forward.",
+    "support_phone": "+91 8000305305",
+    "signature": "Innovative Technology. Creative Work. Trusted Delivery.",
     "legal_name": "Leeway Softech Private Limited",
     "headquarters": "Ahmedabad, Gujarat, India",
     "global_reach": "USA, UK, UAE, Canada, Australia, India",
@@ -64,9 +64,9 @@
   },
   "business_hours": {
     "timezone": "Asia/Kolkata",
-    "always_open": false,
+    "always_open": true,
     "open": "09:30",
-    "close": "19:00",
+    "close": "18:30",
     "open_days": [
       0,
       1,
@@ -80,43 +80,53 @@
   "intents": [
     {
       "name": "technologies",
-      "answer": "• Here's the stack we build with:\n• *Frontend Technologies:* React.js, Next.js, Vue.js, Angular, TypeScript and Tailwind CSS\n• *Backend Technologies:* Node.js, Python (FastAPI/Django), Golang, Laravel and .NET Core\n• *AI & Machine Learning:* OpenAI (GPT-4/GPT-5 APIs), LangChain, PyTorch, TensorFlow, Hugging Face, Vertex AI (Google Cloud AI), Azure OpenAI and IBM\n• *Mobile Development:* iOS (Swift), Android (Kotlin), React Native and Flutter\n• *Databases & Data Platforms:* PostgreSQL, MySQL, MongoDB, DynamoDB, Firebase, Snowflake, BigQuery and Redis\n• Tell us what you're building and we'll match the right stack for it."    },
+      "answer": "**Source:** https://leewaysoftech.com/technologies\n\nLeeway selects the stack after understanding the business requirement: Requirement Analysis → Tech Selection → Effective Implementation.\n\n| Category | Technologies |\n|---|---|\n| Frontend | React.js, Next.js, Vue.js, Angular, TypeScript, Tailwind CSS |\n| Backend | Node.js, Python (FastAPI / Django), Golang, Laravel, .NET Core |\n| AI & ML | OpenAI (GPT-4 / GPT-5 APIs), LangChain, PyTorch, TensorFlow, Hugging Face, Vertex AI, Azure OpenAI, IBM Watson |\n| Mobile | iOS (Swift), Android (Kotlin), React Native, Flutter |\n| Databases and data platforms | PostgreSQL, MySQL, MongoDB, DynamoDB, Firebase, Snowflake, BigQuery, Redis |\n\nTechnology page links: https://leewaysoftech.com/tech/react, /tech/nextjs, /tech/vue, /tech/angularjs, /tech/typescript, /tech/tailwindcss, /tech/nodejs, /tech/python, /tech/golang, /tech/laravel, /tech/dotnetcore, /tech/chatgpt, /tech/langchain, /tech/pytorch, /tech/tensorflow, /tech/huggingface, /tech/vertexai, /tech/azureopenai, /tech/ibm-watson, /tech/ios, /tech/android, /tech/react-native, /tech/flutter, /tech/postgresql, /tech/mysql, /tech/mongodb, /tech/dynamodb, /tech/firebase, /tech/snowflake, /tech/bigquery, /tech/redis (all under https://leewaysoftech.com).\n\n### Technology solution areas\n- **Web development** – React, Next.js, Node.js, TypeScript.\n- **Mobile development** – React Native, Flutter, Swift, Kotlin.\n- **Enterprise software** – CRM, ERP, CMS, workflows.\n- **AI and machine learning** – LLMs, NLP, vision, predictive.\n- **Data and database solutions** – SQL, NoSQL, warehouses, analytics.\n- **API and integration** – REST, GraphQL, webhooks, payments.\n\n### Development approach (8 steps)\nUnderstand the business → Define technical requirements → Select the stack → Plan the architecture → Build → Test and improve → Deploy → Continue to evolve.\n\n### Foundations built in\nSecure authentication and authorization, API security, data protection, database security, monitoring, error handling, performance optimization, scalable architecture, backup and recovery, maintainable code. Technical SEO, structured data and mobile-friendly delivery for public-facing sites.\n\n### FAQs (Technologies)\n- **Frontend technologies:** React.js, Next.js, Angular, Vue.js, TypeScript, CSS frameworks.\n- **Backend technologies:** Node.js, Python, Laravel, Golang, .NET Core.\n- **How to choose a stack:** depends on business objective, users, performance, security, integrations, scalability, resources and maintenance.",
+      "examples": [
+        "tell me about technologies",
+        "what about your technologies"
+      ],
+      "keywords": [
+        "technologies",
+        "technologies"
+      ],
+      "enabled": true
+    },
     {
       "name": "projects",
-      "answer": "• A snapshot of the work we deliver:\n• *Web platforms:* e-commerce stores, customer portals and internal systems\n• *Mobile apps:* customer and field-force apps for iOS and Android\n• *Enterprise:* CRM/ERP integrations, workflow automation and analytics dashboards\n• *Industries:* retail, healthcare, finance, logistics and education\n• We share client names and detailed case studies only with their written permission — our team can walk you through relevant examples on a call."
+      "answer": "- 1500+ clients served\n- 14 years in operation\n- 120+ projects delivered (Communication & CPaaS)\n- 200+ campaigns run (Digital Growth & Marketing)\n- 60+ apps launched (Web & Mobile)\n- 45+ AI solutions built\n- 0 breaches recorded (Enterprise Hosting & Security)\n\n### Featured milestone\nLeeway Softech signed an MoU with the **Government of Gujarat** to expand into Artificial Intelligence, expected to create **250+ new jobs** and bring next-generation technology to public service delivery.\nRead more: https://leewaysoftech.com/full-story\n\n### Services and capabilities (About page)\nWeb development, mobile app development, SEO, database administration, web hosting, UI/UX design, IT consulting, custom software, e-commerce solutions, media solutions, data centre, enterprise cloud, CPaaS, RCS, bulk email, cloud telecom.\n\n### Industries served\nBanking, Education, Hospitality, Politics, Government, Corporate.\n\n\n### Industry images\n\n### Trusted partners / client logos\n| Client | Logo |\n|---|---|\n| Tata Tele | ![](https://leewaysoftech.com/assets/images/brandlogo/tatatele.webp) |\n| BHEL | ![](https://leewaysoftech.com/assets/images/brandlogo/bhel.webp) |\n| Powergrid | ![](https://leewaysoftech.com/assets/images/brandlogo/powergrid.webp) |\n| Bandhan Bank | ![](https://leewaysoftech.com/assets/images/brandlogo/bandhanbank.webp) |\n| Euro7000 | ![](https://leewaysoftech.com/assets/images/brandlogo/euro.webp) |\n| Club Mahindra | ![](https://leewaysoftech.com/assets/images/brandlogo/Club-Mahindra.webp) |\n| KCG | ![](https://leewaysoftech.com/assets/images/brandlogo/kcg.webp) |\n| VMOU | ![](https://leewaysoftech.com/assets/images/brandlogo/Vardhaman_Mahaveer_Open_University_logo.webp) |\n| GCAS | ![](https://leewaysoftech.com/assets/images/brandlogo/gcas.webp) |\n| Aligarh | ![](https://leewaysoftech.com/assets/images/brandlogo/aligarh.webp) |\n| PU | ![](https://leewaysoftech.com/assets/images/brandlogo/pu-logo.webp) |\n| Cochin | ![](https://leewaysoftech.com/assets/images/brandlogo/cochin.webp) |\n| Lodha | ![](https://leewaysoftech.com/assets/images/brandlogo/lodha.webp) |\n| Dentsu | ![](https://leewaysoftech.com/assets/images/brandlogo/dentsu.webp) |\n| iProspect | ![](https://leewaysoftech.com/assets/images/brandlogo/iprospect.webp) |\n| Delhi | ![](https://leewaysoftech.com/assets/images/brandlogo/delhi.webp) |\n| Airport Authority | ![](https://leewaysoftech.com/assets/images/brandlogo/Airports_Authority.webp) |\n| Indian Railway | ![](https://leewaysoftech.com/assets/images/brandlogo/rail.webp) |\n| RITES | ![](https://leewaysoftech.com/assets/images/brandlogo/RitesLogo.webp) |\n| Cricheroes | ![](https://leewaysoftech.com/assets/images/brandlogo/cricheroes.webp) |\n| Jindal Steel | ![](https://leewaysoftech.com/assets/images/brandlogo/Jindal_Steel_Limited_Logo.webp) |\n| JSL | ![](https://leewaysoftech.com/assets/images/brandlogo/jsl.webp) |\n| Jindal Power | ![](https://leewaysoftech.com/assets/images/brandlogo/jindalpower.webp) |\n| Coforge | ![](https://leewaysoftech.com/assets/images/brandlogo/coforge1.webp) |\n| India Alliance | ![](https://leewaysoftech.com/assets/images/brandlogo/indiaAlliance1.webp) |\n| SSC | ![](https://leewaysoftech.com/assets/images/brandlogo/ssc.webp) |\n| Sarvatra | ![](https://leewaysoftech.com/assets/images/brandlogo/sarvatra.webp) |\n| Alimco | ![](https://leewaysoftech.com/assets/images/brandlogo/ALIMCOS_LOGO.webp) |\n| Petpooja | ![](https://leewaysoftech.com/assets/images/brandlogo/petpooja.webp) |\n| Indixital | ![](https://leeway",
+      "examples": [
+        "tell me about projects",
+        "what about your projects"
+      ],
+      "keywords": [
+        "projects",
+        "projects"
+      ],
+      "enabled": true
     },
     {
       "name": "careers",
-      "answer": "💼 *Open roles at Leewaysoftech:*\n\n*Sales*\n• Sales Executive — 2–4 yrs · Mumbai\n\n*Development*\n• Python Developer — 1-3 yrs · ahmedabad\n• UI/UX Developer — 0-1 yrs · bhavnagar\n\nPlease forward your CV to hr@leewaysoftech.com and specify the role you are interested in. Our team will get back to you shortly. 🙏",
+      "answer": "**Source:** https://leewaysoftech.com/careers\n\n\n**Headline:** Build Your Career Here – \"where great people grow, innovate, and shape tomorrow's technology.\"\n\n### Qualities Leeway looks for\nSelf Motivated, Leadership, Positive Attitude, High Goals, Innovative Ideas, Knowledge & Capabilities.\n\n### Open positions\n| Role | Department | Experience | Location |\n|---|---|---|---|\n| Sales Executive | Sales | 2 to 4 years | Mumbai |\n| BDM Executive | Sales | 2 to 5 years | Mumbai |\n| Back Office Executive | Sales | 0 to 2 years | Bhavnagar |\n| AEO/SEO Executive | Sales | 2 to 4 years | Delhi |\n| QA Tester | Tester | 1 to 2 years | Bhavnagar |\n| Senior Accountant | Account | 3 to 5 years | Bhavnagar |\n| Senior HR Executive | HR | 3 to 5 years | Bhavnagar |\n| Sales Executive | Sales | 2 to 4 years | Bhavnagar |\n| IT Manager | Manager | 0 to 2 years | Bhavnagar |\n| UI & UX Designer | Design | 1 to 2 years | Bhavnagar |\n| L1 Support Executive | Support | 2 to 4 years | Delhi |\n| L2 Support Executive | Support | 2 to 4 years | Delhi |\n\n### How to apply\nApplication form on the Careers page: Full Name, Email, Contact No, Vacancy, Years of Experience, Location, Message, Resume (PDF only, max 2 MB).\n\n### Life @ Leeway (menu: Benefits / culture)\n\n**Source:** https://leewaysoftech.com/leeway\n\nExperience the vibrant Life @ Leeway: a culture that celebrates individuality, where people are free to bring their true selves to work within a dynamic and diverse community. The Careers page itself has no separate benefits list; this page shows culture through photo galleries filtered by: **All, Festival, Anniversary, Event, Trip, Life**.\n\n**Gallery images (base path `https://leewaysoftech.com/assets/event/leeway-life/`)**\n\nFestival: Janmashtami, 15 August, Dhuleti\n\nAnniversary\n\nTrips\n\nFull image list (about 75 files): `janmashtmi1,2,4-10`, `15Aug1-4,6-10`, `Dhuleti1-5`, `Anniversary/1-1 to 1-4`, `Anniversary/anniversary-image1-2`, `Trip/sou/1-1 to 1-6, 2-1 to 2-4, 3-1 to 3-9`, `Trip/trip-image1-12`, and `Mask group` PNGs.",
       "keywords": [
-        "career",
         "careers",
-        "job",
-        "hiring",
-        "vacancy",
-        "internship",
-        "open role"
+        "careers"
       ],
       "examples": [
-        "are you hiring",
-        "job openings at your company"
+        "tell me about careers",
+        "what about your careers"
       ],
       "enabled": true
     },
     {
       "name": "benefits",
-      "answer": "1. Learning and skill development\n\nEmployee reviews from interns mention supportive mentors, guidance from senior team members, and opportunities to learn through practical projects. \n\n\n2. Exposure to different technologies\n\nThe company works in areas including web and mobile development, AI, digital marketing, cloud infrastructure, and business communication platforms. The value to you depends on your role and project assignment. \n\n3. Career growth opportunities\n\nIts careers page lists roles across technical support, testing, UI/UX design, IT management, sales, HR, and other functions. This may offer opportunities to develop your skills and move into more specialized roles. \n\n4. Mentorship and team experience\n\nSome recent interns have praised the guidance they receive and the learning environment. Experiences are not uniform, so the quality of support may vary by team and manager. \n\n5. Experience with a range of business sectors\n\nLeeway Softech serves areas such as banking, education, government, and hospitality. Depending on your assignment, this can help you understand how technology supports real business operations. ",
+      "answer": "1. **Certified security and quality** – ISO 9001:2015, ISO/IEC 27001:2013, CMMI Level 3.\n2. **Proven at scale** – 1,500+ clients.\n3. **Government-grade trust** – active partnership with the Government of Gujarat.\n4. **True end-to-end delivery** – from communication systems to full software builds under one partner.\n\n### Home page FAQs\n- **What services does Leeway Softech provide?** AI development, custom software, enterprise software, SaaS, data engineering, business intelligence, CPaaS, web and mobile development, and digital transformation.\n- **Is Leeway an AI development company?** Yes: Generative AI, AI chatbots, machine learning, computer vision and AI automation.\n- **Enterprise software?** Yes: custom enterprise applications, SaaS products, web apps and API integrations.\n- **CPaaS?** Yes: Bulk SMS, Bulk Email, WhatsApp Business API, IVR, SMS Gateway and more.\n- **Industries?** Government and public sector, banking and financial services, education, enterprise, retail and e-commerce.\n- **Where based?** Founded 2012, headquartered in Mumbai, India.",
       "keywords": [
         "benefits",
-        "why choose you",
-        "why work with you",
-        "advantages",
-        "perks",
-        "what makes you different"
+        "benefits"
       ],
       "examples": [
-        "why should we work with you",
-        "what are the benefits"
+        "tell me about benefits",
+        "what about your benefits"
       ],
       "enabled": true
     },
@@ -194,7 +204,70 @@
     },
     {
       "name": "book_callback",
-      "success_message": "Done! Your callback and Google Meeting have been scheduled."
+      "success_message": "Thank you! Your consultation request has been scheduled with Leeway AI Assistant."
     }
-  ]
+  ],
+  "menu": {
+    "key": "kb_main",
+    "header": "Leeway Softech Pvt Ltd",
+    "body": "Welcome! How can we assist you today?",
+    "footer": "Select an option or type your query directly",
+    "button_text": "Select Option",
+    "buttons": [
+      {
+        "id": "browse-offerings",
+        "title": "Explore Offerings",
+        "description": "Browse catalog or services",
+        "section": "Explore",
+        "sort_order": 1,
+        "enabled": true,
+        "intent": "offerings"
+      },
+      {
+        "id": "technologies",
+        "title": "Technologies",
+        "description": "View our tech stack and tools",
+        "section": "Explore",
+        "sort_order": 2,
+        "enabled": true,
+        "intent": "technologies"
+      },
+      {
+        "id": "careers",
+        "title": "Careers",
+        "description": "Join our team",
+        "section": "Explore",
+        "sort_order": 4,
+        "enabled": true,
+        "intent": "careers"
+      },
+      {
+        "id": "benefits",
+        "title": "Benefits",
+        "description": "Life @ Leeway culture",
+        "section": "Explore",
+        "sort_order": 6,
+        "enabled": true,
+        "intent": "benefits"
+      },
+      {
+        "id": "industries",
+        "title": "Industries",
+        "description": "Solutions by industry",
+        "section": "Explore",
+        "sort_order": 3,
+        "enabled": true,
+        "intent": "industries"
+      },
+      {
+        "id": "contact",
+        "title": "Contact",
+        "description": "Talk to us",
+        "section": "Explore",
+        "sort_order": 5,
+        "enabled": true,
+        "intent": "contact"
+      }
+    ]
+  }
 }
