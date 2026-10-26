@@ -546,7 +546,10 @@ def rebuild_product_faiss_index():
         tenant_data = {}
 
         for row in rows:
-            emb = np.frombuffer(row["embedding"], dtype="float32").reshape(1, dim)
+            arr = np.frombuffer(row["embedding"], dtype="float32")
+            if arr.size != dim:
+                continue
+            emb = arr.reshape(1, dim)
             all_embeddings.append(emb)
             tid = row["tenant_id"] or "default"
             rec = (row["id"], tid)

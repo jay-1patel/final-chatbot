@@ -38,7 +38,7 @@ CROSS_ENCODER_MODEL = _local_ce_path if os.path.exists(_local_ce_path) else "BAA
 _model_cfg_path = os.path.join(EMBEDDING_MODEL, "config.json")
 if os.path.exists(_model_cfg_path):
     with open(_model_cfg_path) as _f:
-        EMBEDDING_DIM = json.load(_f).get("hidden_size", 1024)
+        EMBEDDING_DIM = json.load(_f).get("hidden_size", 384)
 else:
     EMBEDDING_DIM = 1024
 
