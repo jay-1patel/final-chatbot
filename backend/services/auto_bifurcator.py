@@ -385,6 +385,8 @@ You must output a strictly valid JSON object adhering to this structure:
       "short_description": "1 sentence punchy summary",
       "description": "Detailed features, inclusions, and specifications",
       "unit": "unit / package / license / flat / person",
+      "media_url": "Public https image URL if present in the document (or empty string)",
+      "media_type": "image",
       "attrs": {{
         "highlights": "Key bullet points",
         "specifications": "Extra details"
@@ -739,6 +741,17 @@ CRITICAL INSTRUCTIONS:
 
                     sections["catalog"]["tables"].append(tbl)
 
+                elif any(
+                    k in first_row_str
+                    for k in (
+                        "knowledge article",
+                        "article title",
+                        "article content",
+                        "markdown content",
+                    )
+                ):
+                    sections["faqs"]["tables"].append(tbl)
+
                 elif (
 
                     any(k in first_row_str for k in ("question", "frequently asked", "official answer", "verified answer"))
@@ -751,7 +764,7 @@ CRITICAL INSTRUCTIONS:
 
                     sections["faqs"]["tables"].append(tbl)
 
-                elif any(k in first_row_str for k in ("guardrail", "tone & style", "never-do", "bot behavior", "persona")):
+                elif any(k in first_row_str for k in ("guardrail", "tone & style", "never-do", "bot behavior", "persona", "configuration parameter")):
 
                     sections["guardrails"]["tables"].append(tbl)
 
@@ -1085,7 +1098,7 @@ CRITICAL INSTRUCTIONS:
 
             # Filter out brand or menu tables accidentally routed here
 
-            if any(h in headers for h in ("button title", "parameter", "verified answer")):
+            if any(h in headers for h in ("button title", "parameter", "verified answer", "knowledge article")):
 
                 continue
 
@@ -1112,6 +1125,17 @@ CRITICAL INSTRUCTIONS:
                     if idx < len(headers):
 
                         row_dict[headers[idx]] = str(cell).strip()
+
+                def _pick_media_url(rd: Dict[str, str]) -> str:
+                    for key, val in rd.items():
+                        kl = key.lower()
+                        if any(tok in kl for tok in ("image url", "image", "media url", "media_url", "photo", "thumbnail")):
+                            v = (val or "").strip()
+                            if v and not v.startswith("[") and ("http://" in v.lower() or "https://" in v.lower()):
+                                return v
+                            if v and not v.startswith("["):
+                                return v
+                    return ""
 
 
 
@@ -1215,11 +1239,17 @@ CRITICAL INSTRUCTIONS:
 
                     full_desc = desc
 
-                    attrs = {k: v for k, v in row_dict.items() if k not in ("property name", "product name", "service / offering")}
+                    attrs = {
+                        k: v for k, v in row_dict.items()
+                        if k not in ("property name", "product name", "service / offering", "image url", "media url", "image", "photo")
+                    }
 
+                media_url = _pick_media_url(row_dict)
+                media_type = "image"
+                if media_url and media_url.lower().endswith(".pdf"):
+                    media_type = "pdf"
 
-
-                offerings.append({
+                offering: Dict[str, Any] = {
 
                     "name": name,
 
@@ -1235,7 +1265,12 @@ CRITICAL INSTRUCTIONS:
 
                     "attrs": attrs,
 
-                })
+                }
+                if media_url:
+                    offering["media_url"] = media_url
+                    offering["media_type"] = media_type
+
+                offerings.append(offering)
 
 
 
@@ -1286,102 +1321,110 @@ CRITICAL INSTRUCTIONS:
 
 
     def extract_faq_section(self, sec_data: Dict[str, Any], brand_name: str, vertical: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-
-        """Extract FAQs and compose structured Markdown knowledge articles."""
-
+        """Extract FAQs and knowledge articles from FAQS & POLICIES tables."""
         tables = sec_data.get("tables", [])
-
         text = sec_data.get("text", "")
-
         faqs: List[Dict[str, Any]] = []
-
-
-
-        for tbl in tables:
-
-            if len(tbl) >= 1 and len(tbl[0]) >= 2:
-
-                # If first row looks like a question, include it
-
-                is_q = str(tbl[0][0]).strip().endswith("?") or "?" in str(tbl[0][0])
-
-                start_idx = 0 if is_q else 1
-
-                for row in tbl[start_idx:]:
-
-                    if not row or not row[0].strip():
-
-                        continue
-
-                    q = row[0].strip()
-
-                    if q.startswith("[") or q.lower().startswith("add question") or q.lower() == "customer question":
-
-                        continue
-
-                    a = row[1].strip() if len(row) > 1 else ""
-
-                    cat = row[2].strip() if len(row) > 2 else "General"
-
-                    if q and a:
-
-                        faqs.append({"question": q, "answer": a, "category": cat})
-
-
-
-        # Fallback regex search for Q: ... A: ... in text
-
-        if not faqs and text:
-
-            qa_matches = re.findall(r"(?:Q|Question):\s*(.+?)\n+(?:A|Answer):\s*(.+?)(?=\n+(?:Q|Question):|\Z)", text, re.DOTALL | re.IGNORECASE)
-
-            for q, a in qa_matches:
-
-                faqs.append({"question": q.strip(), "answer": a.strip(), "category": "General"})
-
-
-
-        # Compose Knowledge Base Articles
-
         articles: List[Dict[str, Any]] = []
 
+        def _header_blob(tbl: List[List[str]]) -> str:
+            if not tbl or not tbl[0]:
+                return ""
+            return " ".join(str(c or "").lower() for c in tbl[0])
 
+        def _is_kb_table(tbl: List[List[str]]) -> bool:
+            h = _header_blob(tbl)
+            return (
+                "knowledge article" in h
+                or ("article title" in h and "content" in h)
+                or ("article content" in h)
+                or (h.startswith("knowledge") and "title" in h)
+            )
 
-        # Article 1: Company Profile
+        def _is_faq_table(tbl: List[List[str]]) -> bool:
+            if _is_kb_table(tbl):
+                return False
+            h = _header_blob(tbl)
+            if "question" in h or "faq" in h or "answer" in h:
+                return True
+            # Data rows that look like Q&A
+            sample = tbl[1][0].strip() if len(tbl) > 1 and tbl[1] else (tbl[0][0].strip() if tbl[0] else "")
+            return sample.endswith("?") or "?" in sample
 
-        articles.append({
+        for tbl in tables:
+            if not tbl or len(tbl[0]) < 2:
+                continue
 
+            if _is_kb_table(tbl):
+                for row in tbl[1:]:
+                    if not row or not str(row[0]).strip():
+                        continue
+                    title = str(row[0]).strip()
+                    if title.startswith("[") or title.lower().startswith("add "):
+                        continue
+                    # Title | Category | Content  OR  Title | Content
+                    if len(row) >= 3:
+                        cat = str(row[1]).strip() or "Knowledge"
+                        body = str(row[2]).strip()
+                    else:
+                        cat = "Knowledge"
+                        body = str(row[1]).strip()
+                    if title and body:
+                        articles.append({
+                            "title": title,
+                            "category": cat,
+                            "markdown_content": body if body.lstrip().startswith("#") else f"# {title}\n\n{body}",
+                        })
+                continue
+
+            if not _is_faq_table(tbl):
+                continue
+
+            is_q = str(tbl[0][0]).strip().endswith("?") or "?" in str(tbl[0][0])
+            start_idx = 0 if is_q else 1
+            for row in tbl[start_idx:]:
+                if not row or not str(row[0]).strip():
+                    continue
+                q = str(row[0]).strip()
+                if q.startswith("[") or q.lower().startswith("add question") or q.lower() == "customer question":
+                    continue
+                a = str(row[1]).strip() if len(row) > 1 else ""
+                cat = str(row[2]).strip() if len(row) > 2 else "General"
+                if q and a:
+                    faqs.append({"question": q, "answer": a, "category": cat})
+
+        if not faqs and text:
+            qa_matches = re.findall(
+                r"(?:Q|Question):\s*(.+?)\n+(?:A|Answer):\s*(.+?)(?=\n+(?:Q|Question):|\Z)",
+                text,
+                re.DOTALL | re.IGNORECASE,
+            )
+            for q, a in qa_matches:
+                faqs.append({"question": q.strip(), "answer": a.strip(), "category": "General"})
+
+        # Always include a compact company stub + rolled-up FAQ article for retrieval.
+        articles.insert(0, {
             "title": f"About {brand_name}",
-
             "category": "Company",
-
-            "markdown_content": f"# About {brand_name}\n\nWelcome to {brand_name}. We provide industry-leading {vertical.replace('_', ' ')} solutions.\n\nOur team is committed to transparency, excellence, and customer satisfaction.",
-
+            "markdown_content": (
+                f"# About {brand_name}\n\n"
+                f"Welcome to {brand_name}. We provide industry-leading {vertical.replace('_', ' ')} solutions.\n\n"
+                "Our team is committed to transparency, excellence, and customer satisfaction. "
+                "Use the FAQs and knowledge articles below for policies, processes, and support guidance."
+            ),
         })
 
-
-
-        # Article 2: FAQs Guide
-
         if faqs:
-
             faq_md_lines = [f"# Frequently Asked Questions — {brand_name}\n"]
-
             for f in faqs:
-
-                faq_md_lines.append(f"### Q: {f['question']}\n**A:** {f['answer']}\n*(Category: {f['category']})*\n")
-
+                faq_md_lines.append(
+                    f"### Q: {f['question']}\n**A:** {f['answer']}\n*(Category: {f['category']})*\n"
+                )
             articles.append({
-
-                "title": f"Frequently Asked Questions & Customer Support",
-
+                "title": "Frequently Asked Questions & Customer Support",
                 "category": "FAQ",
-
                 "markdown_content": "\n".join(faq_md_lines),
-
             })
-
-
 
         return faqs, articles
 
@@ -1758,11 +1801,20 @@ CRITICAL INSTRUCTIONS:
             desc = (off.get("description") or short_desc).strip()
             attrs = off.get("attrs") or {}
             slug = _slugify(name)
+            media_url = (off.get("media_url") or "").strip() or None
+            if not media_url and isinstance(attrs, dict):
+                for k in ("media_url", "image_url", "image", "photo"):
+                    v = attrs.get(k)
+                    if isinstance(v, str) and v.strip():
+                        media_url = v.strip()
+                        break
+            media_type = (off.get("media_type") or "image").strip() or "image"
+            if media_url and media_url.lower().endswith(".pdf"):
+                media_type = "pdf"
 
             if name.lower() in existing_products:
                 prod_id = existing_products[name.lower()]["id"]
-                update_product(
-                    prod_id,
+                update_kwargs = dict(
                     tenant_id=tenant_id,
                     price=price,
                     description=desc,
@@ -1771,6 +1823,10 @@ CRITICAL INSTRUCTIONS:
                     attrs_json=attrs,
                     is_active=1,
                 )
+                if media_url:
+                    update_kwargs["media_url"] = media_url
+                    update_kwargs["media_type"] = media_type
+                update_product(prod_id, **update_kwargs)
             else:
                 save_product(
                     name=name,
@@ -1780,6 +1836,8 @@ CRITICAL INSTRUCTIONS:
                     short_description=short_desc,
                     description=desc,
                     attrs_json=attrs,
+                    media_url=media_url,
+                    media_type=media_type,
                     tenant_id=tenant_id,
                     actor=self.actor,
                     is_active=1,

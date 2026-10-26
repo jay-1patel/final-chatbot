@@ -24,8 +24,12 @@ from docx.oxml.ns import nsdecls, qn
 from docx.shared import Inches, Pt, RGBColor
 import fitz  # PyMuPDF
 
+from onboarding_company_examples import apply_company_examples
+from onboarding_kit_knowledge import enrich_vertical_configs, ensure_catalog_image_column
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT_DIR / "backend" / "static" / "templates" / "onboarding"
+MEDIA_DIR = OUT_DIR / "media"
 
 # Ensure output directory exists
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -392,6 +396,11 @@ VERTICAL_CONFIGS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+# Expand FAQ/KB, then overlay real client companies + product images.
+enrich_vertical_configs(VERTICAL_CONFIGS)
+apply_company_examples(VERTICAL_CONFIGS)
+ensure_catalog_image_column(VERTICAL_CONFIGS)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. DOCX Generation Helper Functions
@@ -491,9 +500,9 @@ def generate_docx_kit(vertical_key: str, config: Dict[str, Any], output_path: Pa
         ("Tenant ID / Code", "Short unique identifier (lowercase, e.g. dlf, skyline)", config["default_tenant"]),
         ("AI Bot Name", "Friendly name of your AI assistant", config["default_bot"]),
         ("Brand Tagline", "1-2 sentence core value proposition", config["tagline"]),
-        ("Official Website URL", "Company website link", f"https://www.{config['default_tenant']}.com"),
-        ("Customer Support Email", "Official support or sales contact email", f"support@{config['default_tenant']}.com"),
-        ("Support Phone Number", "Official contact telephone with country code", "+91 9876543210"),
+        ("Official Website URL", "Company website link", config.get("website") or f"https://www.{config['default_tenant']}.com"),
+        ("Customer Support Email", "Official support or sales contact email", config.get("support_email") or f"support@{config['default_tenant']}.com"),
+        ("Support Phone Number", "Official contact telephone with country code", config.get("support_phone") or "+91 9876543210"),
         ("WhatsApp Bot Number", "Dedicated phone number to connect to WhatsApp bot", "+91 XXXXXXXXXX"),
         ("Business Working Hours", "Daily operational hours (e.g. 09:30 AM - 06:30 PM)", config["default_hours"]),
     ]
@@ -568,8 +577,20 @@ def generate_docx_kit(vertical_key: str, config: Dict[str, Any], output_path: Pa
     h3.paragraph_format.space_before = Pt(14)
     h3.paragraph_format.space_after = Pt(4)
 
+    cat_note = doc.add_paragraph()
+    cat_note_run = cat_note.add_run(
+        "Image URL column: paste a public https link to the product/property photo (JPG/PNG/WebP). "
+        "Leave blank if none. On publish, images are stored on the offering and shown in chat/catalog."
+    )
+    cat_note_run.font.size = Pt(8.5)
+    cat_note_run.font.italic = True
+
     cat_cols = config["catalog_columns"]
     cat_rows = config["catalog_rows"]
+    image_col_idx = next(
+        (i for i, c in enumerate(cat_cols) if "image" in c.lower() or "media" in c.lower()),
+        None,
+    )
 
     cat_table = doc.add_table(rows=len(cat_rows) + 3, cols=len(cat_cols))
     cat_table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -595,9 +616,35 @@ def generate_docx_kit(vertical_key: str, config: Dict[str, Any], output_path: Pa
         for c_idx in range(len(cat_cols)):
             cell = cat_table.cell(b_idx, c_idx)
             _set_cell_background(cell, "FEF3C7")
-            prun = cell.paragraphs[0].add_run("[Enter Item]" if c_idx == 0 else "")
+            placeholder = ""
+            if c_idx == 0:
+                placeholder = "[Enter Item]"
+            elif image_col_idx is not None and c_idx == image_col_idx:
+                placeholder = "[Paste https image URL]"
+            prun = cell.paragraphs[0].add_run(placeholder)
             prun.font.size = Pt(8)
             prun.font.italic = True
+
+    # Embedded product images as paragraphs (not a table — avoids double-parsing into catalog)
+    media_pairs = config.get("catalog_media") or []
+    if media_pairs:
+        gallery_h = doc.add_heading("Catalog images (embedded preview)", level=2)
+        gallery_h.paragraph_format.space_before = Pt(8)
+        tenant_media = MEDIA_DIR / str(config.get("default_tenant") or vertical_key)
+        for i, (url, fname) in enumerate(media_pairs):
+            name = cat_rows[i][0] if i < len(cat_rows) else fname
+            label = doc.add_paragraph()
+            lr = label.add_run(f"{name} — {url}")
+            lr.font.size = Pt(8)
+            lr.font.bold = True
+            img_path = tenant_media / fname
+            if img_path.exists() and img_path.stat().st_size > 500:
+                pic_p = doc.add_paragraph()
+                run = pic_p.add_run()
+                try:
+                    run.add_picture(str(img_path), width=Inches(2.0))
+                except Exception:
+                    pic_p.add_run("[image]").font.size = Pt(8)
 
     doc.add_paragraph().paragraph_format.space_after = Pt(10)
 
@@ -637,6 +684,38 @@ def generate_docx_kit(vertical_key: str, config: Dict[str, Any], output_path: Pa
             prun = cell.paragraphs[0].add_run("[Add Question]" if c_idx == 0 else "")
             prun.font.size = Pt(8.5)
             prun.font.italic = True
+
+    kb_articles = config.get("kb_articles") or []
+    if kb_articles:
+        kb_note = doc.add_paragraph()
+        kb_run = kb_note.add_run(
+            "Knowledge Base Articles — longer policy / how-to pages indexed for chatbot retrieval "
+            "(keep the Title / Category / Article Content columns)."
+        )
+        kb_run.font.size = Pt(8.5)
+        kb_run.font.italic = True
+
+        kb_table = doc.add_table(rows=len(kb_articles) + 1, cols=3)
+        kb_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        _set_table_borders(kb_table)
+
+        kb_headers = ["Knowledge Article Title", "Category", "Article Content"]
+        for i, h in enumerate(kb_headers):
+            c = kb_table.cell(0, i)
+            _set_cell_background(c, "312E81")
+            cp = c.paragraphs[0].add_run(h)
+            cp.font.bold = True
+            cp.font.size = Pt(9)
+            cp.font.color.rgb = RGBColor(255, 255, 255)
+
+        for r_idx, (title, cat, body) in enumerate(kb_articles, start=1):
+            for c_idx, val in enumerate([title, cat, body]):
+                cell = kb_table.cell(r_idx, c_idx)
+                _set_cell_background(cell, "E0E7FF" if r_idx % 2 == 0 else "FFFFFF")
+                prun = cell.paragraphs[0].add_run(val)
+                prun.font.size = Pt(8)
+                if c_idx == 0:
+                    prun.font.bold = True
 
     doc.add_paragraph().paragraph_format.space_after = Pt(10)
 
@@ -896,9 +975,9 @@ class PDFKitWriter:
             ["Tenant ID / Code", "Short code (e.g. skyline, dlf)", self.config["default_tenant"]],
             ["AI Bot Assistant Name", "Bot assistant persona name", self.config["default_bot"]],
             ["Brand Tagline", "Value proposition sentence", self.config["tagline"]],
-            ["Official Website", "Company website URL", f"https://www.{self.config['default_tenant']}.com"],
-            ["Support Email", "Support desk inbox", f"support@{self.config['default_tenant']}.com"],
-            ["Support Phone", "Helpline number with country code", "+91 9876543210"],
+            ["Official Website", "Company website URL", self.config.get("website") or f"https://www.{self.config['default_tenant']}.com"],
+            ["Support Email", "Support desk inbox", self.config.get("support_email") or f"support@{self.config['default_tenant']}.com"],
+            ["Support Phone", "Helpline number with country code", self.config.get("support_phone") or "+91 9876543210"],
             ["Working Hours", "Operating schedule & days", self.config["default_hours"]],
         ]
         self.draw_table(
@@ -925,6 +1004,14 @@ class PDFKitWriter:
 
         # Section 3: Catalog & Offerings
         self.draw_section_header("[SECTION: CATALOG & OFFERINGS]", color=(0.06, 0.46, 0.43))
+        self.page.insert_text(
+            (self.margin, self.y + 9),
+            "Image URL: paste a public https photo link per item (optional). Stored on the offering at publish.",
+            fontsize=7.5,
+            fontname="helv",
+            color=(0.35, 0.4, 0.45),
+        )
+        self.y += 14
         cat_cols = self.config["catalog_columns"]
         # Distribute available 515 pt width among columns
         w_per_col = float(self.content_w) / len(cat_cols)
@@ -939,6 +1026,54 @@ class PDFKitWriter:
             font_size=6.5,
         )
 
+        # Embedded catalog image gallery
+        media_pairs = self.config.get("catalog_media") or []
+        if media_pairs:
+            self._ensure_space(120)
+            self.page.insert_text(
+                (self.margin, self.y + 10),
+                "Catalog images (embedded preview)",
+                fontsize=9,
+                fontname="hebo",
+                color=(0.06, 0.46, 0.43),
+            )
+            self.y += 16
+            tenant_media = MEDIA_DIR / str(self.config.get("default_tenant") or self.vertical_key)
+            thumb_w, thumb_h = 110.0, 78.0
+            gap = 10.0
+            x = self.margin
+            row_top = self.y
+            for i, (_url, fname) in enumerate(media_pairs):
+                if i and i % 4 == 0:
+                    self.y = row_top + thumb_h + 22
+                    self._ensure_space(thumb_h + 30)
+                    row_top = self.y
+                    x = self.margin
+                img_path = tenant_media / fname
+                name = (self.config["catalog_rows"][i][0] if i < len(self.config["catalog_rows"]) else fname)[:22]
+                if img_path.exists() and img_path.stat().st_size > 500:
+                    try:
+                        self.page.insert_image(
+                            fitz.Rect(x, row_top, x + thumb_w, row_top + thumb_h),
+                            filename=str(img_path),
+                            keep_proportion=True,
+                        )
+                    except Exception:
+                        self.page.draw_rect(
+                            fitz.Rect(x, row_top, x + thumb_w, row_top + thumb_h),
+                            color=(0.8, 0.85, 0.9),
+                            fill=(0.93, 0.95, 0.97),
+                        )
+                self.page.insert_text(
+                    (x, row_top + thumb_h + 10),
+                    name,
+                    fontsize=6.5,
+                    fontname="helv",
+                    color=(0.2, 0.25, 0.3),
+                )
+                x += thumb_w + gap
+            self.y = row_top + thumb_h + 24
+
         # Section 4: FAQs & Policies
         self.draw_section_header("[SECTION: FAQS & POLICIES]", color=(0.26, 0.22, 0.79))
         faq_rows = [
@@ -951,6 +1086,25 @@ class PDFKitWriter:
             header_bg=(0.26, 0.22, 0.79),
             font_size=7.0,
         )
+
+        kb_articles = self.config.get("kb_articles") or []
+        if kb_articles:
+            self.page.insert_text(
+                (self.margin, self.y + 10),
+                "Knowledge Base Articles (indexed for chatbot retrieval)",
+                fontsize=8,
+                fontname="hebo",
+                color=(0.26, 0.22, 0.79),
+            )
+            self.y += 16
+            kb_rows = [[title, cat, body] for (title, cat, body) in kb_articles]
+            self.draw_table(
+                headers=["Knowledge Article Title", "Category", "Article Content"],
+                rows=kb_rows,
+                col_widths=[120.0, 70.0, 325.0],
+                header_bg=(0.19, 0.18, 0.51),
+                font_size=6.5,
+            )
 
         # Section 5: Bot Persona & Guardrails
         self.draw_section_header("[SECTION: BOT PERSONA & GUARDRAILS]", color=(0.6, 0.1, 0.1))
@@ -980,10 +1134,37 @@ class PDFKitWriter:
         return self.output_path
 
 
+def download_catalog_media() -> None:
+    """Fetch catalog preview images into MEDIA_DIR/{tenant}/."""
+    import urllib.request
+
+    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading catalog media into: {MEDIA_DIR}")
+    for cfg in VERTICAL_CONFIGS.values():
+        tenant = str(cfg.get("default_tenant") or cfg.get("slug") or "generic")
+        dest = MEDIA_DIR / tenant
+        dest.mkdir(parents=True, exist_ok=True)
+        for url, fname in cfg.get("catalog_media") or []:
+            path = dest / fname
+            if path.exists() and path.stat().st_size > 1000:
+                continue
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; OnboardingKitBot/1.0)"},
+                )
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    path.write_bytes(resp.read())
+                print(f"  [OK] {tenant}/{fname} ({path.stat().st_size:,} B)")
+            except Exception as exc:
+                print(f"  [WARN] {tenant}/{fname}: {exc}")
+
+
 def generate_all_kits() -> Dict[str, Dict[str, str]]:
     """Generate both DOCX and PDF kits for all 8 verticals."""
     results = {}
     print(f"Generating Onboarding Kits into: {OUT_DIR}")
+    download_catalog_media()
 
     for vertical_key, cfg in VERTICAL_CONFIGS.items():
         docx_path = OUT_DIR / f"{vertical_key}_onboarding_kit.docx"
