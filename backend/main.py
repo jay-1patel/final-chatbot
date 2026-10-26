@@ -62,6 +62,7 @@ from routes.tenant_chat import router as tenant_chat_router
 from routes.tenant_operations import router as tenant_operations_router
 from routes.leads import router as leads_router
 from routes.api_onboarding import router as api_onboarding_router
+from routes.onboarding_kits import router as onboarding_kits_router
 from routes.audit import router as audit_router
 from routes.audit_logs import router as audit_logs_router
 from routes.tenant_approvals import router as tenant_approvals_router
@@ -388,6 +389,7 @@ app.include_router(tenant_chat_router, tags=["tenant-chat"])
 app.include_router(tenant_operations_router, tags=["tenant-operations"])
 app.include_router(leads_router, tags=["leads"])
 app.include_router(api_onboarding_router, tags=["api-onboarding"])
+app.include_router(onboarding_kits_router, tags=["onboarding-kits"])
 app.include_router(audit_router, tags=["audit-history"])
 app.include_router(audit_logs_router, tags=["audit-logs"])
 app.include_router(tenant_approvals_router, tags=["tenant-approvals"])

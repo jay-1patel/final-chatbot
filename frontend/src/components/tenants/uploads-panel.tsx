@@ -291,7 +291,7 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
 
       <Card className="mb-6 border-accent-500/30 bg-accent-950/20">
         <CardHeader
-          title="Automatic document bifurcation"
+          title="Option 1 — Any document (freeform)"
           icon={<Sparkles className="h-4 w-4 text-accent-400" />}
           actions={
             canUpload ? (
@@ -309,8 +309,8 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
         />
         <CardBody className="space-y-3">
           <p className="text-xs text-slate-300">
-            Drop company profiles, brochures, product sheets, FAQs, and policies here.
-            The backend extracts content and publishes it live into the right place — no extra Configure step:
+            Upload any company PDF/Word (brochure, FAQ sheet, product list). The backend LLM extracts products,
+            FAQs and knowledge and publishes them live. For a guided fill-in template, use Option 2 below.
           </p>
 
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">

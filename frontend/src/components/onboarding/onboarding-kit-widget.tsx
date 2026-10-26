@@ -131,14 +131,16 @@ export function OnboardingKitWidget({
                   <Sparkles className="h-4 w-4" />
                 </span>
                 <h3 className="text-sm font-semibold text-surface-fg">
-                  Predefined Onboarding Kit & AI Bifurcation
+                  Option 2 — Predefined industry kit
                 </h3>
                 <Badge variant="outline" className="border-teal-500/40 text-teal-700 bg-teal-500/10">
-                  Local Ollama LLM
+                  Structured sections
                 </Badge>
               </div>
               <p className="text-xs text-surface-muted max-w-xl">
-                Download the predefined DOCX or PDF template for your industry, fill in your property/product listings, WhatsApp menu, and FAQs, then upload it below for zero-touch configuration.
+                Download your industry DOCX/PDF kit, keep the <code className="text-2xs">[SECTION: …]</code> headers
+                unchanged, fill brand / menu / catalog / FAQs, then upload here. We stage a review draft, then publish
+                into Profile, Menu, Offerings, FAQ and KB.
               </p>
 
               {/* Template Dropdown & Download Buttons */}
@@ -218,10 +220,10 @@ export function OnboardingKitWidget({
               </div>
 
               <p className="text-xs font-medium text-surface-fg">
-                {parsing ? 'Bifurcating with local Ollama...' : 'Upload Completed Document'}
+                {parsing ? 'Parsing kit sections…' : 'Upload filled kit'}
               </p>
               <p className="text-[10px] text-surface-muted mt-0.5">
-                Drop filled PDF or DOCX file to auto-populate
+                Only filled industry kits with [SECTION] headers
               </p>
 
               <Button
@@ -231,7 +233,7 @@ export function OnboardingKitWidget({
                 onClick={() => fileInputRef.current?.click()}
                 className="mt-2 text-xs"
               >
-                Upload & Bifurcate
+                Upload & stage for review
               </Button>
             </div>
           </div>
