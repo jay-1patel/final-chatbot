@@ -16,7 +16,13 @@ import os
 from typing import Any, Dict, Optional
 
 from . import cache, store
-from .defaults import DEFAULT_FLOWS, DEFAULT_TENANT_ID, get_vertical_defaults
+from .defaults import (
+    DEFAULT_FLOWS,
+    DEFAULT_TENANT_ID,
+    get_vertical_defaults,
+    scrub_company_info_pages,
+    vertical_has_company_info_pages,
+)
 from .merge import collect_strings, merge_layers
 from .paths import client_config_path, client_dir
 from .schemas import TenantProfile
@@ -126,6 +132,11 @@ def build_profile(tenant_id: str, *, db_layer: Optional[Dict[str, Any]] = None,
         merged["status"] = record["status"]
     merged.pop("version", None)
     merged.pop("source", None)
+
+    # IT-only pages must not survive on banking / ecommerce / etc. even if an
+    # older publish or kit left them in the DB layer.
+    if not vertical_has_company_info_pages(vertical):
+        scrub_company_info_pages(merged)
 
     try:
         return TenantProfile(**merged)

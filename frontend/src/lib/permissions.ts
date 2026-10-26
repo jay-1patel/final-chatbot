@@ -48,8 +48,8 @@ export const PERMISSION_GROUPS: { label: string; permissions: string[] }[] = [
   },
 ]
 
-/** Company info pages (Projects / Technologies / Careers / Benefits) — every tenant. */
-const COMPANY_INFO_PERMS = [
+/** Company info pages (Projects / Technologies / Careers / Benefits) — IT only. */
+const IT_COMPANY_INFO_PERMS = [
   'manage_projects',
   'manage_technologies',
   'manage_careers',
@@ -59,8 +59,8 @@ const COMPANY_INFO_PERMS = [
 /**
  * The catalogue + pages an admin manages, per vertical. A shop tenant's team
  * gets add/edit/delete product switches; a software & IT tenant's team gets
- * services plus the shared company info pages. Unknown or missing verticals
- * fall back to the generic group. Info-page permissions are included for all.
+ * services plus company info pages. Banking / finance / healthcare etc. do
+ * not get Technologies or Careers — those belong to IT menus only.
  */
 function contentGroupsFor(vertical: string | null | undefined): { label: string; permissions: string[] } {
   if (vertical === 'ecommerce') {
@@ -74,7 +74,6 @@ function contentGroupsFor(vertical: string | null | undefined): { label: string;
         'catalogue_new_arrival',
         'view_distributors',
         'manage_distributors',
-        ...COMPANY_INFO_PERMS,
       ],
     }
   }
@@ -84,7 +83,7 @@ function contentGroupsFor(vertical: string | null | undefined): { label: string;
       permissions: [
         'view_products',
         'manage_services',
-        ...COMPANY_INFO_PERMS,
+        ...IT_COMPANY_INFO_PERMS,
       ],
     }
   }
@@ -97,7 +96,6 @@ function contentGroupsFor(vertical: string | null | undefined): { label: string;
         'edit_product',
         'delete_product',
         'catalogue_new_arrival',
-        ...COMPANY_INFO_PERMS,
       ],
     }
   }
@@ -111,7 +109,6 @@ function contentGroupsFor(vertical: string | null | undefined): { label: string;
         'delete_product',
         'manage_services',
         'catalogue_new_arrival',
-        ...COMPANY_INFO_PERMS,
       ],
     }
   }
@@ -124,7 +121,6 @@ function contentGroupsFor(vertical: string | null | undefined): { label: string;
         'edit_product',
         'delete_product',
         'catalogue_new_arrival',
-        ...COMPANY_INFO_PERMS,
       ],
     }
   }
@@ -137,7 +133,6 @@ function contentGroupsFor(vertical: string | null | undefined): { label: string;
         'edit_product',
         'delete_product',
         'manage_services',
-        ...COMPANY_INFO_PERMS,
       ],
     }
   }
@@ -148,7 +143,6 @@ function contentGroupsFor(vertical: string | null | undefined): { label: string;
       'add_product',
       'edit_product',
       'delete_product',
-      ...COMPANY_INFO_PERMS,
     ],
   }
 }

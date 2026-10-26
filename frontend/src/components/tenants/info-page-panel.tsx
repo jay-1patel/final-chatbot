@@ -16,11 +16,11 @@ import { useToast } from '@/components/ui/toast'
 import { useResolved } from '@/components/tenants/hooks'
 
 /**
- * Company info pages for every tenant — projects, technologies, careers,
- * benefits. Each is one intent with answer text: no flow, no backend service,
- * the text is the whole page. Filled from vertical defaults, kit upload
- * ([SECTION: INFO PAGES]), or manual edit. Same save-draft/publish contract
- * as the profile editor.
+ * Company info pages for Software & IT tenants — projects, technologies,
+ * careers, benefits. Each is one intent with answer text: no flow, no backend
+ * service, the text is the whole page. Filled from IT vertical defaults, kit
+ * upload ([SECTION: INFO PAGES]), or manual edit. Same save-draft/publish
+ * contract as the profile editor. Other verticals do not show these in nav.
  */
 
 export type InfoPageId = 'projects' | 'technologies' | 'careers' | 'benefits'

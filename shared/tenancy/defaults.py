@@ -71,8 +71,9 @@ _SUPPORT = {
                  "wrong with", "not right", "broken"],
 }
 
-# Shared company info-page intents (sidebar: Projects / Technologies / Careers / Benefits).
-# Every vertical gets these so kit upload and the console panels work for all tenants.
+# Company info-page intents for Software & IT only (sidebar + WhatsApp menu:
+# Projects / Technologies / Careers / Benefits). Other verticals must not inherit
+# these — a bank should not show Technologies or Careers.
 _INFO_TECHNOLOGIES = {
     "name": "technologies",
     "examples": ["what technologies do you use", "what is your tech stack", "tools you work with"],
@@ -1148,8 +1149,12 @@ VERTICAL_DEFAULTS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# Verticals that ship Projects / Technologies / Careers / Benefits as first-class pages.
+_VERTICALS_WITH_COMPANY_INFO = frozenset({"it_software"})
+
+
 def ensure_company_info_page_intents(intents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Guarantee projects/technologies/careers/benefits exist (for every tenant)."""
+    """Guarantee projects/technologies/careers/benefits exist (IT tenants only)."""
     by_name = {i.get("name"): dict(i) for i in intents if isinstance(i, dict) and i.get("name")}
     for page in _COMPANY_INFO_PAGES:
         name = page["name"]
@@ -1181,6 +1186,42 @@ def ensure_company_info_page_intents(intents: List[Dict[str, Any]]) -> List[Dict
     return ordered
 
 
+def strip_company_info_page_intents(intents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop IT-only info-page intents from non-IT vertical configs."""
+    drop = {p["name"] for p in _COMPANY_INFO_PAGES}
+    return [i for i in intents if not (isinstance(i, dict) and i.get("name") in drop)]
+
+
+def scrub_company_info_pages(layer: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove IT-only info pages (intents + menu buttons) from a profile layer.
+
+    Used when resolving non-IT tenants so a prior kit upload or global ensure
+    cannot leave Technologies / Careers on a banking menu.
+    """
+    drop = {p["name"] for p in _COMPANY_INFO_PAGES}
+    if "intents" in layer and isinstance(layer["intents"], list):
+        layer["intents"] = strip_company_info_page_intents(list(layer["intents"]))
+    menu = layer.get("menu")
+    if isinstance(menu, dict) and isinstance(menu.get("buttons"), list):
+        menu["buttons"] = [
+            b for b in menu["buttons"]
+            if not (
+                isinstance(b, dict)
+                and (
+                    b.get("intent") in drop
+                    or str(b.get("id") or "") in {
+                        "menu_technologies", "menu_projects", "menu_careers", "menu_benefits",
+                    }
+                )
+            )
+        ]
+    return layer
+
+
+def vertical_has_company_info_pages(vertical: str | None) -> bool:
+    return (vertical or "") in _VERTICALS_WITH_COMPANY_INFO
+
+
 def get_vertical_defaults(vertical: str) -> Dict[str, Any]:
     """Deep copy of the default layer for a vertical (safe to mutate)."""
     layer = deepcopy(VERTICAL_DEFAULTS.get(vertical, VERTICAL_DEFAULTS["generic"]))
@@ -1190,7 +1231,12 @@ def get_vertical_defaults(vertical: str) -> Dict[str, Any]:
     if layer.get("vertical") == "tours_travel":
         flows.extend(deepcopy(TOURS_FLOWS))
     layer["flows"] = flows
-    layer["intents"] = ensure_company_info_page_intents(list(layer.get("intents") or []))
+    intents = list(layer.get("intents") or [])
+    if layer.get("vertical") in _VERTICALS_WITH_COMPANY_INFO:
+        layer["intents"] = ensure_company_info_page_intents(intents)
+    else:
+        # Never leak IT company pages into banking / ecommerce / etc.
+        layer["intents"] = strip_company_info_page_intents(intents)
     return layer
 
 

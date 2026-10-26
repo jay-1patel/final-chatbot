@@ -131,16 +131,16 @@ export function OnboardingKitWidget({
                   <Sparkles className="h-4 w-4" />
                 </span>
                 <h3 className="text-sm font-semibold text-surface-fg">
-                  Option 2 — Predefined industry kit
+                  Auto-fill from any document
                 </h3>
                 <Badge variant="outline" className="border-teal-500/40 text-teal-700 bg-teal-500/10">
-                  Structured sections
+                  Every tenant
                 </Badge>
               </div>
               <p className="text-xs text-surface-muted max-w-xl">
-                Download your industry DOCX/PDF kit, keep the <code className="text-2xs">[SECTION: …]</code> headers
-                unchanged, fill brand / menu / catalog / FAQs, then upload here. We stage a review draft, then publish
-                into Profile, Menu, Offerings, FAQ and KB.
+                Upload a kit, website scrape, PDF, Word, Markdown, or CSV for this company. We extract brand, menu,
+                offerings, FAQs, info pages and KB, stage a review draft, then publish into this tenant&apos;s
+                Profile, Menu, Offerings, FAQ and KB. Optional industry kits below are helpers — not required.
               </p>
 
               {/* Template Dropdown & Download Buttons */}
@@ -220,10 +220,10 @@ export function OnboardingKitWidget({
               </div>
 
               <p className="text-xs font-medium text-surface-fg">
-                {parsing ? 'Parsing kit sections…' : 'Upload filled kit'}
+                {parsing ? 'Extracting bot details…' : 'Upload any company document'}
               </p>
               <p className="text-[10px] text-surface-muted mt-0.5">
-                Only filled industry kits with [SECTION] headers
+                PDF, Word, Markdown, CSV, or industry kit — works for every tenant
               </p>
 
               <Button

@@ -396,50 +396,10 @@ COMPANY_EXAMPLES: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# Fallback INFO PAGES for every vertical (used when company block has no info_pages yet).
+# INFO PAGES are Software & IT only (Technologies / Projects / Careers / Benefits).
+# Non-IT verticals intentionally have no fallback — banking must not ship those pages.
 DEFAULT_INFO_PAGES: Dict[str, List[Tuple[str, str]]] = {
-    "real_estate": [
-        ("technologies", "• Construction & living tech we highlight:\n• Smart-home ready wiring, biometric locks, solar options\n• Digital site-visit booking and e-brochures\n• RERA-verified project data shared in chat\n• Ask for the tech sheet of any tower or villa."),
-        ("projects", "• Featured developments:\n• Skyline Elegance — 2 & 3 BHK residences\n• Skyline Grandeur — 4 BHK sky residences & penthouses\n• Skyline Horizon — Grade-A commercial\n• Skyline Orchard Green — gated villas\n• Schedule a site visit for a guided walkthrough."),
-        ("careers", "• Hiring across sales, CRM, site ops and documentation.\n• Share your CV with HR via support email.\n• Mention the role in the subject line."),
-        ("benefits", "• Why buyers choose us:\n• RERA-registered inventory and clear cost sheets\n• Complimentary site-visit cab in city limits\n• Bank tie-ups for home loans\n• Dedicated post-sales desk through possession."),
-    ],
-    "ecommerce": [
-        ("technologies", "• How we make & ship TrooGood:\n• Homemade-style recipes with jaggery and natural ingredients\n• Hygienic production and sealed packaging\n• Online ordering with live courier tracking\n• Ask about ingredients or shelf life for any SKU."),
-        ("projects", "• Product highlights:\n• Classic Peanut, Sesame, Dry Fruit and Millet chikkis\n• Seasonal limited packs and gift hampers\n• Distributor / bulk programs for retailers\n• Browse the catalog for live prices and pack sizes."),
-        ("careers", "• Openings in production, packing, sales and support.\n• Send your CV to support@troogood.com with the role in the subject."),
-        ("benefits", "• Why customers choose TrooGood:\n• Clean, homemade-style recipes\n• Transparent ingredients and pack sizes\n• Easy returns on eligible SKUs\n• Fast dispatch across India."),
-    ],
-    "tours_travel": [
-        ("technologies", "• How we plan your trip:\n• Curated itineraries with live hotel/flight inventory partners\n• Visa document checklists and appointment guidance\n• 24x7 duty phone while you travel\n• Ask for the tech/tools behind a specific package."),
-        ("projects", "• Signature experiences:\n• Best of Gujarat, Rann Utsav, Gir safari, Statue of Unity\n• Custom honeymoon, family and group itineraries\n• Domestic and international circuits on request\n• Ask for a sample day-wise plan."),
-        ("careers", "• We hire destination experts, operations and sales consultants.\n• Share your CV with info@99destinations.in."),
-        ("benefits", "• Why travellers choose us:\n• Gujarat Tourism–recognized operator\n• Customizable packages and visa assistance\n• Transparent inclusions and on-trip support\n• 20,000+ happy guests."),
-    ],
-    "healthcare": [
-        ("technologies", "• Clinical & digital tools:\n• Diagnostics (ECG, Echo, lab panels) with WhatsApp report delivery\n• Video consults for eligible specialties\n• Appointment scheduling in chat\n• Ask which wing or equipment supports your treatment."),
-        ("projects", "• Care programs we run:\n• Cardiology, Orthopedics, Pediatrics, Dermatology OPD\n• Executive and senior health checkup packages\n• Emergency triage with 24x7 hotline\n• Book a slot under the specialty you need."),
-        ("careers", "• Hiring doctors, nurses, lab techs and front-desk staff.\n• Share your CV with the careers / support desk."),
-        ("benefits", "• Why patients choose CareWell:\n• Multi-specialty cover under one roof\n• Insurance / TPA cashless where listed\n• Digital reports and easy reschedule\n• Emergency response when it matters."),
-    ],
-    "banking": [
-        ("technologies", "• Digital banking channels:\n• Mobile app & net banking (never share OTP/PIN in chat)\n• Instant card block and service requests\n• Secure KYC / video-KYC journeys\n• Ask how to activate a product — we guide steps, not passwords."),
-        ("projects", "• Flagship products:\n• Savings & FD schemes\n• Cashback / travel cards\n• Home, personal and vehicle loans\n• Browse offerings or ask eligibility questions."),
-        ("careers", "• Careers across branches, credit and digital teams.\n• Apply via the official careers channel or support email."),
-        ("benefits", "• Why customers bank with Meridian:\n• Clear product guides without phishing asks\n• Fast card-block and fraud escalation\n• Branch/ATM locator help\n• Published grievance timelines."),
-    ],
-    "finance": [
-        ("technologies", "• How we process loans digitally:\n• PLANET app / web journeys with e-KYC\n• Dealer-point two-wheeler financing\n• Secure document vaulting for gold loans\n• We never ask for OTP or MPIN on WhatsApp."),
-        ("projects", "• Lending programs:\n• Two-wheeler, personal, gold, home/LAP and SME finance\n• Balance transfer and top-up options where eligible\n• Ask which product fits your need."),
-        ("careers", "• Hiring credit, sales and customer-care roles.\n• Share your CV via customercare@ltfs.com with the role named."),
-        ("benefits", "• Why borrowers choose L&T Finance:\n• Wide product suite and partner network\n• Fast in-principle decisions on eligible profiles\n• Transparent grievance redressal\n• Chat for guidance — never for passwords."),
-    ],
-    "generic": [
-        ("technologies", "• Platforms & tools we operate with:\n• Tracking systems, EDI/API partner links, warehouse WMS\n• Ask which stack supports your lane or fulfilment need."),
-        ("projects", "• Delivery programs:\n• Domestic express, air cargo, ocean FCL/LCL, 3PL warehousing\n• Ask for a lane quote or SLA summary."),
-        ("careers", "• Hiring ops, warehouse and sales talent.\n• Send your CV to care@apexlogistics.com."),
-        ("benefits", "• Why shippers choose Apex:\n• End-to-end visibility\n• Customs and documentation support\n• Flexible domestic and international lanes\n• Dedicated account coordination."),
-    ],
+    "it_software": [],  # filled from COMPANY_EXAMPLES["it_software"]["info_pages"]
 }
 
 
@@ -459,7 +419,11 @@ def apply_company_examples(configs: Dict[str, Dict[str, Any]]) -> None:
         cfg["website"] = ex.get("website")
         if ex.get("menu_items"):
             cfg["menu_items"] = list(ex["menu_items"])
-        cfg["info_pages"] = list(ex.get("info_pages") or DEFAULT_INFO_PAGES.get(key) or [])
+        # Only IT kits include Technologies / Projects / Careers / Benefits.
+        if key == "it_software":
+            cfg["info_pages"] = list(ex.get("info_pages") or DEFAULT_INFO_PAGES.get(key) or [])
+        else:
+            cfg["info_pages"] = []
         cfg["catalog_columns"] = list(ex["catalog_columns"])
         # Store rows with trailing local filename stripped from table cells
         table_rows: List[List[str]] = []

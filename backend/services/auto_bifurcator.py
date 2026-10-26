@@ -206,6 +206,542 @@ def _is_placeholder_brand_value(key: str, value: Any, tenant_id: str) -> bool:
     return lowered in known
 
 
+# ── Full-corpus helpers (kit-agnostic uploads) ──────────────────────────────
+_CHUNK_CHARS = 14000
+_CHUNK_OVERLAP = 600
+_MAX_LLM_CHUNKS = 10
+_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
+_PHONE_RE = re.compile(
+    r"(?:\+?\d{1,3}[\s\-]?)?(?:\(?\d{2,5}\)?[\s\-]?)?\d{5,10}(?:[\s\-]?\d{3,6})?"
+)
+_URL_RE = re.compile(r"https?://[^\s\)\]\>\"']+|www\.[^\s\)\]\>\"']+", re.IGNORECASE)
+_FAQ_BOLD_RE = re.compile(
+    r"(?m)^\s*[-*]?\s*\*\*(.+?\?)\*\*\s*[-–—:]?\s*(.+?)(?=\n\s*[-*]?\s*\*\*|\n#{1,3}\s|\n---|\Z)",
+    re.DOTALL,
+)
+_FAQ_QA_RE = re.compile(
+    r"(?mi)^\s*(?:Q(?:uestion)?\s*[:.)]\s*)(.+?\?)\s*\n\s*(?:A(?:nswer)?\s*[:.)]\s*)(.+?)(?=\n\s*(?:Q(?:uestion)?\s*[:.)]|\n#{1,3}\s|\n---|\Z))",
+    re.DOTALL,
+)
+
+
+def _chunk_text(text: str, size: int = _CHUNK_CHARS, overlap: int = _CHUNK_OVERLAP) -> List[str]:
+    """Split long corpus into overlapping windows so nothing is dropped for the LLM."""
+    text = text or ""
+    if len(text) <= size:
+        return [text] if text.strip() else []
+    chunks: List[str] = []
+    start = 0
+    n = len(text)
+    while start < n and len(chunks) < _MAX_LLM_CHUNKS:
+        end = min(start + size, n)
+        if end < n:
+            # Prefer breaking on a paragraph / heading boundary
+            window = text[start:end]
+            br = max(window.rfind("\n## "), window.rfind("\n\n"), window.rfind("\n---"))
+            if br > size // 3:
+                end = start + br
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= n:
+            break
+        start = max(end - overlap, start + 1)
+    # Tail remainder if we hit MAX_LLM_CHUNKS early — append a densified tail sample
+    if chunks and start + overlap < n and len(chunks) >= _MAX_LLM_CHUNKS:
+        tail = text[-size:].strip()
+        if tail and tail not in chunks:
+            chunks[-1] = chunks[-1] + "\n\n--- TAIL OF DOCUMENT ---\n" + tail
+    return chunks
+
+
+def _normalize_phone(raw: str) -> str:
+    digits = re.sub(r"[^\d+]", "", raw or "")
+    if digits.startswith("00"):
+        digits = "+" + digits[2:]
+    if len(re.sub(r"\D", "", digits)) < 10:
+        return ""
+    return raw.strip()
+
+
+def _guess_vertical(text: str) -> str:
+    sample = (text or "").lower()
+    slug_hints = (
+        ("it_software", "it_software"),
+        ("software & it", "it_software"),
+        ("cpaas", "it_software"),
+        ("saas product", "it_software"),
+        ("real_estate", "real_estate"),
+        ("rera", "real_estate"),
+        ("tours_travel", "tours_travel"),
+        ("itinerary", "tours_travel"),
+        ("ecommerce", "ecommerce"),
+        ("add to cart", "ecommerce"),
+        ("healthcare", "healthcare"),
+        ("patient", "healthcare"),
+        ("banking", "banking"),
+        ("ifsc", "banking"),
+        ("gst filing", "finance"),
+        ("nbfc", "finance"),
+    )
+    for needle, slug in slug_hints:
+        if needle in sample:
+            return slug
+    scores = {
+        "it_software": sum(
+            1
+            for w in (
+                "software", "devops", "tech stack", "fastapi", "react", "kubernetes",
+                "flutter", "machine learning", "whatsapp business api", "cpaas", "saas",
+            )
+            if w in sample
+        ),
+        "real_estate": sum(1 for w in ("property", "bhk", "villa", "penthouse", "rera", "carpet area") if w in sample),
+        "tours_travel": sum(1 for w in ("flight", "tour", "itinerary", "visa", "holiday") if w in sample),
+        "ecommerce": sum(1 for w in ("sku", "cart", "warranty", "cod", "shipping") if w in sample),
+        "healthcare": sum(1 for w in ("clinic", "doctor", "hospital", "consultation") if w in sample),
+        "banking": sum(1 for w in ("credit card", "atm", "savings account", "loan emi") if w in sample),
+        "finance": sum(1 for w in ("gst", "itr", "gold loan", "accounting") if w in sample),
+    }
+    best = max(scores.items(), key=lambda kv: kv[1])
+    return best[0] if best[1] > 0 else "generic"
+
+
+def _section_body(text: str, headings: Tuple[str, ...], max_chars: int = 4500) -> str:
+    """Pull body text under the first matching markdown/plain heading."""
+    if not text:
+        return ""
+    pattern = "|".join(re.escape(h) for h in headings)
+    # Match: ## 4. Technologies / …  OR  ### Careers  OR  **Why choose…**
+    # Stop only at next H2 (##) / H1 or thematic break — keep ### subsections.
+    m = re.search(
+        rf"(?im)^(?:#{{1,3}}\s*|\*\*)?(?:\d+[.)]\s*)?(?:{pattern})[^\n]*?(?:\*\*)?\s*$"
+        rf"\n+(.*?)(?=\n##\s|\n#\s|\n---\s*\n|\Z)",
+        text,
+        flags=re.DOTALL,
+    )
+    if not m:
+        return ""
+    body = _clean_text(m.group(1))
+    lines = []
+    for line in body.splitlines():
+        s = line.strip()
+        if s.startswith("![") and "](" in s:
+            continue
+        lines.append(line)
+    body = "\n".join(lines).strip()
+    return body[:max_chars]
+
+
+def _extract_markdown_table_rows(text: str) -> List[List[str]]:
+    """Parse simple GitHub-flavored markdown tables into row lists."""
+    rows: List[List[str]] = []
+    for block in re.split(r"\n{2,}", text or ""):
+        lines = [ln.strip() for ln in block.splitlines() if ln.strip().startswith("|")]
+        if len(lines) < 2:
+            continue
+        parsed = []
+        for ln in lines:
+            if re.match(r"^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?$", ln):
+                continue
+            cells = [c.strip() for c in ln.strip("|").split("|")]
+            if cells:
+                parsed.append(cells)
+        if len(parsed) >= 2:
+            rows.extend(parsed)
+    return rows
+
+
+def heuristic_extract_corpus(text: str, tenant_id: str = "") -> Dict[str, Any]:
+    """Deterministic extraction from any free-form / scraped document (no kit needed)."""
+    text = text or ""
+    brand: Dict[str, str] = {}
+
+    # Company name: first H1 or leading title line
+    h1 = re.search(r"(?m)^#\s+(.+?)(?:\s*[–—-].*)?$", text)
+    if h1:
+        name = re.sub(r"\s*[–—:].*$", "", h1.group(1)).strip()
+        name = re.sub(r"\b(website knowledge base|knowledge base|onboarding)\b", "", name, flags=re.I).strip(" –—-|")
+        if name and len(name) > 2:
+            brand["name"] = name[:80]
+
+    tag = re.search(r"(?im)(?:tagline|motto)\s*[:\-–]\s*\*?([^*\n]{8,120})\*?", text)
+    if tag:
+        brand["tagline"] = tag.group(1).strip(" *")
+    else:
+        italic = re.search(r"(?m)^\s*\*([^*\n]{12,120})\*\s*$", text)
+        if italic:
+            brand["tagline"] = italic.group(1).strip()
+
+    emails = _EMAIL_RE.findall(text)
+    # Prefer sales/support/info over personal
+    ranked_emails = sorted(
+        set(emails),
+        key=lambda e: (
+            0 if re.search(r"^(sales|support|info|hello|contact|admin)@", e, re.I) else 1,
+            len(e),
+        ),
+    )
+    if ranked_emails:
+        brand["support_email"] = ranked_emails[0]
+
+    phones: List[str] = []
+    for m in re.finditer(
+        r"(?:\+91[\s\-]?)?(?:0)?[6-9]\d{9}|\+\d{1,3}[\s\-]?\d{6,14}",
+        text,
+    ):
+        p = _normalize_phone(m.group(0))
+        if p and p not in phones:
+            phones.append(p)
+    if phones:
+        brand["support_phone"] = phones[0]
+
+    urls = _URL_RE.findall(text)
+    site = ""
+    for u in urls:
+        low = u.lower().rstrip(").,;")
+        if any(x in low for x in ("facebook", "instagram", "linkedin", "twitter", "youtube", "wa.me")):
+            continue
+        if "/assets/" in low or low.endswith((".webp", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".avif")):
+            continue
+        site = u.rstrip(").,;")
+        break
+    if site:
+        brand["website"] = site if site.startswith("http") else f"https://{site}"
+
+    if brand.get("name"):
+        brand["bot_name"] = f"{brand['name'].split()[0]} Assistant"
+        brand["signature"] = f"{brand['name']} — At your service."
+
+    # Hours
+    hours_m = re.search(
+        r"(?i)(?:business\s+hours|working\s+hours|office\s+hours|timing)\s*[:\-–]\s*([^\n]{6,80})",
+        text,
+    )
+    always = bool(re.search(r"\b24\s*/\s*7\b|\balways\s+open\b", text, re.I))
+    business_hours: Dict[str, Any] = {
+        "timezone": "Asia/Kolkata",
+        "open": "09:30",
+        "close": "18:30",
+        "open_days": [0, 1, 2, 3, 4, 5],
+        "always_open": always,
+    }
+    if hours_m:
+        business_hours["raw"] = hours_m.group(1).strip()
+
+    # FAQs
+    faqs: List[Dict[str, str]] = []
+    seen_q: set = set()
+    _faq_noise = re.compile(
+        r"(?i)^(source|note|pages?|http|www\.|menu:|read more|click|image)",
+    )
+
+    def _add_faq(q: str, a: str, category: str = "General") -> None:
+        q = _clean_text(q).strip(" *")
+        a = _clean_text(a)
+        if len(q) < 12 or len(a) < 8:
+            return
+        if not q.endswith("?"):
+            return
+        if _faq_noise.search(q) or "http" in q.lower():
+            return
+        if a.lower().startswith("http") and len(a) < 80:
+            return
+        key = q.lower()
+        if key in seen_q:
+            return
+        seen_q.add(key)
+        faqs.append({"question": q[:300], "answer": a[:2000], "category": category})
+
+    for q, a in _FAQ_BOLD_RE.findall(text):
+        _add_faq(q, a)
+    for q, a in _FAQ_QA_RE.findall(text):
+        _add_faq(q, a)
+    for m in re.finditer(
+        r"(?m)^\s*[-*]\s+\*\*(.+?\?)\*\*\s*(.+)$",
+        text,
+    ):
+        _add_faq(m.group(1), m.group(2))
+
+    # Info-page intents from common headings
+    info_specs = [
+        ("technologies", ("technologies", "tech stack", "our stack", "technologies / development")),
+        ("projects", ("projects", "portfolio", "case studies", "our work", "trusted partners", "impact numbers")),
+        ("careers", ("careers", "open positions", "hiring", "jobs", "life @ leeway", "life @")),
+        ("benefits", ("why choose", "why us", "benefits", "why work with", "why choose leeway")),
+    ]
+    intents: List[Dict[str, Any]] = []
+    for name, heads in info_specs:
+        body = _section_body(text, heads)
+        if body and len(body) > 40:
+            intents.append({
+                "name": name,
+                "description": name.replace("_", " ").title(),
+                "keywords": [name, name.replace("_", " ")],
+                "examples": [f"tell me about {name}", f"what about your {name}"],
+                "answer": body[:3500],
+                "flow": None,
+                "enabled": True,
+            })
+
+    # Offerings from markdown product/service tables and ### headings under Services
+    offerings: List[Dict[str, Any]] = []
+    seen_off: set = set()
+
+    _offering_blocklist = {
+        "need", "solutions", "category", "product", "role", "department", "office",
+        "location", "client", "logo", "frontend", "backend", "ai & ml", "mobile",
+        "databases and data platforms", "certified security and quality",
+        "proven at scale", "government-grade trust", "true end-to-end delivery",
+    }
+
+    def _add_offering(name: str, category: str, desc: str, media: str = "") -> None:
+        name = _clean_text(name).strip(" *")
+        if len(name) < 3:
+            return
+        key = name.lower()
+        if key in seen_off or key in _offering_blocklist or key.startswith("product"):
+            return
+        # Skip job-title / office-looking rows without a product signal
+        if category and category.lower() in ("sales", "tester", "account", "hr", "manager", "design", "support", "mumbai", "bhavnagar", "delhi/ncr"):
+            return
+        seen_off.add(key)
+        offerings.append({
+            "name": name[:120],
+            "category": (category or "Services")[:80],
+            "price": "",
+            "short_description": (desc or "")[:180],
+            "description": (desc or name)[:2000],
+            "unit": "package",
+            "media_url": media or "",
+            "media_type": "image" if media else "",
+            "attrs": {},
+        })
+
+    def _skip_table_rows(start_idx: int) -> int:
+        j = start_idx + 1
+        header_words = {
+            "product", "service", "name", "package", "role", "need", "client",
+            "office", "category", "what it does",
+        }
+        while j < len(md_rows):
+            first = (md_rows[j][0] if md_rows[j] else "").strip().lower()
+            row_l = " ".join(c.lower() for c in md_rows[j])
+            if first in header_words or (
+                any(k in row_l for k in ("what it does", "department", "experience", "address"))
+                and first in header_words.union({"product", "role", "office", "need"})
+            ):
+                break
+            # New header if most cells look like labels
+            if first in header_words:
+                break
+            j += 1
+        return j
+
+    md_rows = _extract_markdown_table_rows(text)
+    i = 0
+    while i < len(md_rows):
+        row = md_rows[i]
+        header_l = " ".join(c.lower() for c in row)
+        first_h = (row[0] if row else "").strip().lower()
+        is_career = "role" in header_l and ("department" in header_l or "experience" in header_l)
+        is_need_matrix = first_h == "need" or ("need" in header_l and "solution" in header_l)
+        is_logo_table = "client" in header_l and "logo" in header_l
+        is_office_table = first_h == "office" or ("office" in header_l and "address" in header_l)
+        is_tech_table = first_h == "category" and "technologies" in header_l
+        is_productish = any(
+            k in header_l for k in ("product", "what it does", "service name", "package name", "sku")
+        )
+        if is_career or is_need_matrix or is_logo_table or is_office_table or is_tech_table:
+            i = _skip_table_rows(i)
+            continue
+        if is_productish:
+            headers = [c.lower() for c in row]
+            i += 1
+            while i < len(md_rows):
+                data = md_rows[i]
+                first = (data[0] if data else "").strip().lower()
+                if first in ("product", "service", "name", "package", "role", "need", "office", "category"):
+                    break
+                name = data[0] if data else ""
+                desc = data[1] if len(data) > 1 else ""
+                cat = "Services"
+                if "category" in headers:
+                    try:
+                        ci = headers.index("category")
+                        cat = data[ci] if ci < len(data) else cat
+                    except Exception:
+                        pass
+                link = ""
+                for cell in data:
+                    um = _URL_RE.search(cell)
+                    if um:
+                        link = um.group(0).rstrip(").,;")
+                        break
+                if name and not str(name).lower().endswith("?"):
+                    _add_offering(str(name), str(cat), str(desc), link)
+                i += 1
+            continue
+        i += 1
+
+    # Numbered service groups only (1. **Name** – desc) — skip why-choose / qualities lists
+    for m in re.finditer(
+        r"(?m)^\s*\d+\.\s+\*\*([^*]{3,80})\*\*\s*[–—:-]\s*(.+)$",
+        text,
+    ):
+        title = m.group(1).strip()
+        low = title.lower()
+        if low in _offering_blocklist or low in ("source", "note", "headline"):
+            continue
+        # Prefer capability-style titles
+        if any(w in low for w in ("cpaas", "marketing", "development", "hosting", "security", "ai", "mobile", "web", "growth", "communication", "software", "cloud", "data")):
+            _add_offering(title, "Services", m.group(2))
+
+    # Knowledge articles from ## sections
+    articles: List[Dict[str, str]] = []
+    for m in re.finditer(
+        r"(?m)^(#{2,3})\s+(.+?)\s*$",
+        text,
+    ):
+        title = m.group(2).strip()
+        if re.match(r"(?i)pages still to scrape|source:|note:", title):
+            continue
+        start = m.end()
+        nxt = re.search(r"(?m)^#{2,3}\s+", text[start:])
+        end = start + nxt.start() if nxt else len(text)
+        body = _clean_text(text[start:end])[:6000]
+        if len(body) < 80:
+            continue
+        articles.append({
+            "title": re.sub(r"^\d+\.\s*", "", title)[:120],
+            "category": "Company",
+            "markdown_content": f"# {title}\n\n{body}",
+        })
+        if len(articles) >= 20:
+            break
+
+    vertical = _guess_vertical(text)
+    return {
+        "vertical": vertical,
+        "brand": brand,
+        "business_hours": business_hours,
+        "menu_items": [],
+        "intents": intents,
+        "offerings": offerings,
+        "faqs": faqs,
+        "knowledge_articles": articles,
+    }
+
+
+def _dedupe_key_offering(item: Dict[str, Any]) -> str:
+    return _slugify(str(item.get("name") or ""))
+
+
+def _dedupe_key_faq(item: Dict[str, Any]) -> str:
+    return _slugify(str(item.get("question") or ""))[:80]
+
+
+def _dedupe_key_intent(item: Dict[str, Any]) -> str:
+    return str(item.get("name") or "").strip().lower()
+
+
+def _dedupe_key_article(item: Dict[str, Any]) -> str:
+    return _slugify(str(item.get("title") or ""))
+
+
+def merge_bifurcation_results(*parts: Optional[Dict[str, Any]], tenant_id: str = "") -> Dict[str, Any]:
+    """Union multiple bifurcation JSON blobs; prefer richer non-placeholder values."""
+    merged: Dict[str, Any] = {
+        "vertical": "generic",
+        "brand": {},
+        "business_hours": {},
+        "menu_items": [],
+        "intents": [],
+        "offerings": [],
+        "faqs": [],
+        "knowledge_articles": [],
+    }
+    vertical_votes: Dict[str, int] = {}
+
+    def _prefer_brand(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
+        for key, val in (src or {}).items():
+            if not val:
+                continue
+            if _is_placeholder_brand_value(key, val, tenant_id):
+                continue
+            cur = dst.get(key)
+            if not cur or _is_placeholder_brand_value(key, cur, tenant_id) or len(str(val)) > len(str(cur)):
+                dst[key] = val
+
+    def _extend(list_key: str, items: Any, key_fn) -> None:
+        if not isinstance(items, list):
+            return
+        existing: Dict[str, int] = {}
+        for i, x in enumerate(merged[list_key]):
+            if isinstance(x, dict):
+                ek = str(key_fn(x) or "").strip().lower()
+                if ek:
+                    existing[ek] = i
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            sk = str(key_fn(item) or "").strip().lower()
+            if not sk:
+                continue
+            if sk in existing:
+                cur = merged[list_key][existing[sk]]
+                for field in ("answer", "description", "short_description", "markdown_content", "question"):
+                    if len(str(item.get(field) or "")) > len(str(cur.get(field) or "")):
+                        cur[field] = item[field]
+                for field, val in item.items():
+                    if val and (field not in cur or not cur.get(field)):
+                        cur[field] = val
+            else:
+                existing[sk] = len(merged[list_key])
+                merged[list_key].append(dict(item))
+
+    for part in parts:
+        if not part or not isinstance(part, dict):
+            continue
+        v = part.get("vertical")
+        if v and v in VALID_VERTICALS:
+            vertical_votes[v] = vertical_votes.get(v, 0) + 1
+        _prefer_brand(merged["brand"], part.get("brand") or {})
+        bh = part.get("business_hours")
+        if isinstance(bh, dict) and (bh.get("raw") or bh.get("open") or bh.get("always_open")):
+            if not merged["business_hours"] or bh.get("raw") or bh.get("always_open"):
+                merged["business_hours"] = {**merged["business_hours"], **bh}
+        _extend("menu_items", part.get("menu_items"), lambda x: _slugify(str(x.get("id") or x.get("title") or "")))
+        _extend("intents", part.get("intents"), _dedupe_key_intent)
+        _extend("offerings", part.get("offerings"), _dedupe_key_offering)
+        _extend("faqs", part.get("faqs"), _dedupe_key_faq)
+        _extend("knowledge_articles", part.get("knowledge_articles"), _dedupe_key_article)
+
+    if vertical_votes:
+        merged["vertical"] = max(vertical_votes.items(), key=lambda kv: kv[1])[0]
+    elif merged.get("vertical") not in VALID_VERTICALS:
+        merged["vertical"] = "generic"
+
+    brand = merged["brand"]
+    if brand.get("name") and not brand.get("bot_name"):
+        brand["bot_name"] = f"{str(brand['name']).split()[0]} Assistant"
+    if brand.get("name") and not brand.get("signature"):
+        brand["signature"] = f"{brand['name']} — At your service."
+
+    if len(merged["menu_items"]) < 3:
+        v_defaults = get_vertical_defaults(merged["vertical"]) or {}
+        for b in (v_defaults.get("menu", {}) or {}).get("buttons", [])[:6]:
+            merged["menu_items"].append({
+                "id": b.get("id", "menu_item"),
+                "title": str(b.get("title", "Explore"))[:24],
+                "description": str(b.get("description", "View options"))[:72],
+                "section": str(b.get("section", "Explore"))[:24],
+                "action": b.get("flow") or b.get("requires_feature") or b.get("intent") or "offerings",
+            })
+
+    return merged
+
+
 class AutoBifurcator:
     """Core auto-bifurcation and auto-configuration pipeline."""
 
@@ -312,150 +848,147 @@ class AutoBifurcator:
     # 2. LLM Semantic Bifurcation & Synthesis
     # ──────────────────────────────────────────────────────────────────────────
 
-    def bifurcate_with_llm(self, doc_summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Send aggregated document contents to LLM to bifurcate into components."""
-        # Concatenate text from all uploaded documents up to ~30,000 chars
-        combined_chunks = []
-        for doc in doc_summaries:
-            txt = doc["text"]
-            # Keep up to 12,000 chars per doc to give balanced coverage
-            sample = txt[:12000]
-            combined_chunks.append(f"================ DOCUMENT: {doc['filename']} ================\n{sample}")
+    def _bifurcation_system_prompt(self, focus: str = "full") -> str:
+        """Shared JSON schema prompt; ``focus`` narrows extraction for multi-pass."""
+        focus_note = {
+            "full": "Extract EVERYTHING: brand, menu, intents, offerings, faqs, knowledge_articles.",
+            "brand": "Focus on brand profile, vertical, business_hours, and WhatsApp menu_items. Leave offerings/faqs thin if needed.",
+            "catalog": "Focus on offerings (every product/service/package) and knowledge_articles. Keep brand minimal.",
+            "faq_info": "Focus on faqs (every Q&A) and intents (technologies/projects/careers/benefits with full answer text). Keep brand minimal.",
+        }.get(focus, "Extract all fields you can from this chunk.")
 
-        full_corpus = "\n\n".join(combined_chunks)
-        if len(full_corpus) > 40000:
-            full_corpus = full_corpus[:40000] + "\n...[Additional document content truncated]..."
+        return f"""You are an elite enterprise AI data architect and WhatsApp chatbot configurator.
+Tenant ID: '{self.tenant_id}'.
+Documents may be onboarding kits, website scrapes, PDFs, Markdown knowledge bases, or unstructured notes — treat all equally.
+Pass focus: {focus_note}
 
-        system_prompt = f"""You are an elite enterprise AI data architect and WhatsApp chatbot configurator.
-Your mission is to read raw client documents (brochures, catalogs, FAQ sheets, company profiles) and automatically BIFURCATE and CONFIGURE the entire tenant chatbot system for tenant ID '{self.tenant_id}'.
-
-You must output a strictly valid JSON object adhering to this structure:
+Output a strictly valid JSON object:
 {{
   "vertical": "real_estate" | "tours_travel" | "ecommerce" | "it_software" | "banking" | "finance" | "healthcare" | "generic",
   "brand": {{
     "name": "Official Company / Entity Name",
-    "bot_name": "Friendly AI Assistant Name (e.g. Skyline Assistant, DLF Concierge)",
-    "tagline": "1-2 sentence compelling value proposition",
-    "website": "Valid URL (e.g. https://company.com or www.company.com)",
-    "support_email": "Official support email address",
-    "support_phone": "Official phone number with country code (e.g. +91 9876543210)",
-    "signature": "Brand closing sign-off line"
+    "bot_name": "Friendly AI Assistant Name",
+    "tagline": "1-2 sentence value proposition",
+    "website": "Valid URL",
+    "support_email": "Official support email",
+    "support_phone": "Phone with country code",
+    "signature": "Brand sign-off"
   }},
   "business_hours": {{
     "timezone": "Asia/Kolkata",
     "open": "09:30",
     "close": "18:30",
-    "open_days": [0, 1, 2, 3, 4, 5]
+    "open_days": [0, 1, 2, 3, 4, 5],
+    "always_open": false
   }},
   "menu_items": [
-    // 3 to 6 interactive WhatsApp menu options
-    // CRITICAL META API CONSTRAINTS:
-    // - "title" MUST BE <= 24 CHARACTERS (e.g. "Explore Properties", "Book Site Visit", "Pricing Plans", "Customer Support")
-    // - "description" MUST BE <= 72 CHARACTERS
-    // - "section" MUST BE <= 24 CHARACTERS (e.g. "Main Menu", "Explore", "Assistance")
-    // - "action" should map to one of: "offerings", "get_quote", "book_callback", "raise_ticket", "faq"
     {{
       "id": "browse_offerings",
       "title": "Explore Offerings",
-      "description": "Browse catalog, projects, or service offerings",
+      "description": "Browse catalog or services",
       "section": "Explore",
       "action": "offerings"
     }}
   ],
   "intents": [
-    // Include informational pages when present (IT/software especially):
-    // technologies, projects, careers, benefits — each MUST include a full "answer" the bot will speak.
     {{
       "name": "technologies",
       "description": "Tech stack and tools",
-      "keywords": ["tech stack", "technologies", "framework"],
-      "examples": ["what technologies do you use", "what is your tech stack"],
-      "answer": "• Bullet list of frontend/backend/mobile/cloud technologies…",
-      "flow": null
-    }},
-    {{
-      "name": "projects",
-      "description": "Portfolio and case studies",
-      "keywords": ["projects", "portfolio", "case study"],
-      "examples": ["show me your projects", "who have you built for"],
-      "answer": "• Snapshot of delivered work…",
-      "flow": null
-    }},
-    {{
-      "name": "careers",
-      "description": "Hiring and openings",
-      "keywords": ["careers", "hiring", "jobs"],
-      "examples": ["are you hiring", "job openings"],
-      "answer": "• Open roles and how to apply…",
-      "flow": null
-    }},
-    {{
-      "name": "benefits",
-      "description": "Why clients / candidates choose you",
-      "keywords": ["benefits", "why choose you"],
-      "examples": ["why work with you", "what are the benefits"],
-      "answer": "• Key differentiators…",
+      "keywords": ["tech stack", "technologies"],
+      "examples": ["what technologies do you use"],
+      "answer": "• Real bullet content from the document…",
       "flow": null
     }}
   ],
   "offerings": [
-    // All individual products, services, properties, or packages extracted from documents
     {{
-      "name": "Item or Package Name",
-      "category": "Category or Segment",
-      "price": "Price, starting rate, or range (e.g. '₹85 Lakhs' or '$499/mo' or 'Starting ₹25,000')",
-      "short_description": "1 sentence punchy summary",
-      "description": "Detailed features, inclusions, and specifications",
-      "unit": "unit / package / license / flat / person",
-      "media_url": "Public https image URL if present in the document (or empty string)",
+      "name": "Item Name",
+      "category": "Category",
+      "price": "Price or empty string",
+      "short_description": "One sentence",
+      "description": "Details from document",
+      "unit": "package",
+      "media_url": "",
       "media_type": "image",
-      "attrs": {{
-        "highlights": "Key bullet points",
-        "specifications": "Extra details"
-      }}
+      "attrs": {{}}
     }}
   ],
   "faqs": [
-    // Explicit Q&A pairs found in the documents (policies, how-tos, support)
-    {{
-      "question": "What is the cancellation policy?",
-      "answer": "Cancellations made 48 hours before arrival receive a full refund.",
-      "category": "Policies"
-    }}
+    {{"question": "…?", "answer": "…", "category": "General"}}
   ],
   "knowledge_articles": [
-    // Structured knowledge base documents formatted in Clean Markdown
-    {{
-      "title": "Company Overview & Profile",
-      "category": "Company",
-      "markdown_content": "# Company Overview\\n\\nDetailed background, history, certifications..."
-    }},
-    {{
-      "title": "Booking Process, Policies & FAQs",
-      "category": "FAQ",
-      "markdown_content": "# Frequently Asked Questions\\n\\n### Q: ...\\nA: ..."
-    }}
+    {{"title": "…", "category": "Company", "markdown_content": "# Title\\n\\nBody…"}}
   ]
 }}
 
-CRITICAL INSTRUCTIONS:
-1. Extract ALL tangible products/services/properties you find into the 'offerings' array.
-2. Extract every clear question/answer pair into the 'faqs' array (do not leave FAQs only inside markdown articles).
-3. For IT/software collateral, ALWAYS fill intents technologies, projects, careers, and benefits with real 'answer' text when those topics appear (tech stack lists, portfolio, hiring, why-us).
-4. Ensure 'menu_items' titles are UNDER 24 CHARACTERS (strictly enforced by WhatsApp API). Map Technologies/Projects/Careers/Benefits buttons to action values of the same name.
-5. If phone or email is genuinely missing in the text, omit those brand fields or leave them empty — do NOT invent placeholder contacts.
-6. Respond ONLY with the JSON object. Do not enclose in backticks or markdown if possible.
+RULES:
+1. Extract ALL products/services/properties into offerings — do not stop at a few examples.
+2. Extract EVERY explicit Q&A into faqs.
+3. For IT/software content fill intents technologies, projects, careers, benefits with real answer text when present.
+4. menu_items titles MUST be <= 24 chars; descriptions <= 72. Map tech/projects/careers/benefits actions to those names.
+5. NEVER invent phone, email, website, prices, or hours — omit if missing.
+6. Respond ONLY with JSON (no markdown fences).
 """
 
-        user_prompt = f"Please bifurcate and configure the chatbot system based on the following uploaded client collateral:\n\n{full_corpus}"
-
-        response_json = self._call_llm_json(system_prompt, user_prompt)
-        if not response_json:
-            raise RuntimeError(
-                "Bifurcation LLM unavailable: no provider (Ollama/Groq/Mistral) returned valid JSON."
+    def bifurcate_with_llm(self, doc_summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Bifurcate any document type via heuristics + multi-pass LLM (full corpus)."""
+        combined_chunks = []
+        for doc in doc_summaries:
+            txt = doc.get("text") or ""
+            combined_chunks.append(
+                f"================ DOCUMENT: {doc.get('filename', 'doc')} ================\n{txt}"
             )
+        full_corpus = "\n\n".join(combined_chunks)
 
-        return response_json
+        # Always run deterministic heuristics on the COMPLETE text (no truncation)
+        heuristic = heuristic_extract_corpus(full_corpus, tenant_id=self.tenant_id)
+        logger.info(
+            "HEURISTIC_EXTRACT | tenant=%s | brand_keys=%s | offerings=%s | faqs=%s | intents=%s | articles=%s",
+            self.tenant_id,
+            list((heuristic.get("brand") or {}).keys()),
+            len(heuristic.get("offerings") or []),
+            len(heuristic.get("faqs") or []),
+            len(heuristic.get("intents") or []),
+            len(heuristic.get("knowledge_articles") or []),
+        )
+
+        windows = _chunk_text(full_corpus)
+        if not windows:
+            return merge_bifurcation_results(heuristic, tenant_id=self.tenant_id)
+
+        llm_parts: List[Dict[str, Any]] = []
+        # Pass strategy: brand on first window; catalog/faq on every window
+        for idx, window in enumerate(windows):
+            if idx == 0:
+                focuses = ("brand", "catalog", "faq_info")
+            else:
+                focuses = ("catalog", "faq_info")
+            for focus in focuses:
+                system_prompt = self._bifurcation_system_prompt(focus=focus)
+                user_prompt = (
+                    f"This is chunk {idx + 1} of {len(windows)} from uploaded client collateral.\n"
+                    f"Extract per focus='{focus}'. Merge-safe partial JSON is OK.\n\n{window}"
+                )
+                try:
+                    part = self._call_llm_json(system_prompt, user_prompt)
+                except Exception as exc:
+                    logger.warning("LLM bifurcate chunk=%s focus=%s failed: %s", idx, focus, exc)
+                    part = None
+                if part:
+                    llm_parts.append(part)
+
+        if not llm_parts:
+            logger.warning(
+                "Bifurcation LLM returned no parts — using heuristics only | tenant=%s",
+                self.tenant_id,
+            )
+            return merge_bifurcation_results(heuristic, tenant_id=self.tenant_id)
+
+        merged = merge_bifurcation_results(heuristic, *llm_parts, tenant_id=self.tenant_id)
+        # Prefer heuristic vertical when LLM is generic but heuristics are specific
+        if merged.get("vertical") == "generic" and heuristic.get("vertical") in VALID_VERTICALS:
+            merged["vertical"] = heuristic["vertical"]
+        return merged
 
     def _call_llm_json(self, system_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
         """Call local Ollama first, then Groq or Mistral as fallbacks.
@@ -826,17 +1359,15 @@ CRITICAL INSTRUCTIONS:
 
         else:
 
-            # Fallback for unformatted/raw collateral
-
-            sections["brand"]["text"] = combined_text[:6000]
-
+            # Fallback for unformatted/raw collateral — feed full text to every
+            # extractor so kit-less uploads still have something to parse.
+            sections["brand"]["text"] = combined_text
             sections["catalog"]["text"] = combined_text
-
             sections["catalog"]["tables"] = all_tables
-
             sections["faqs"]["text"] = combined_text
-
-
+            sections["info_pages"]["text"] = combined_text
+            sections["menu"]["text"] = combined_text
+            sections["guardrails"]["text"] = combined_text
 
         return sections
 
@@ -952,6 +1483,24 @@ CRITICAL INSTRUCTIONS:
                 vertical = best[0]
 
 
+
+        # Free-text contact scrape when kit tables are missing fields
+        if text:
+            heur_brand = (heuristic_extract_corpus(text, tenant_id=self.tenant_id).get("brand") or {})
+            for src_key, dst_key in (
+                ("name", "brand_name"),
+                ("tagline", "tagline"),
+                ("website", "website"),
+                ("support_email", "support_email"),
+                ("support_phone", "support_phone"),
+                ("bot_name", "bot_name"),
+            ):
+                if heur_brand.get(src_key) and not parsed_fields.get(dst_key):
+                    parsed_fields[dst_key] = heur_brand[src_key]
+            if not vertical or vertical == default_vertical:
+                guessed = _guess_vertical(text)
+                if guessed != "generic":
+                    vertical = guessed
 
         # Fallback values
 
@@ -1668,7 +2217,12 @@ CRITICAL INSTRUCTIONS:
     # ──────────────────────────────────────────────────────────────────────────
 
     def stage_files(self, files_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Parse files section-by-section and return a reviewable staging draft without committing."""
+        """Parse files into a reviewable staging draft without committing.
+
+        Kit files with ``[SECTION: …]`` markers use deterministic parsers.
+        Any other collateral (website scrapes, MD/PDF/DOCX dumps) uses
+        full-corpus heuristics + multi-pass LLM so bot details fill without a kit.
+        """
         extracted_docs = []
         for f in files_data:
             fname = f.get("filename") or "onboarding_doc.docx"
@@ -1678,12 +2232,94 @@ CRITICAL INSTRUCTIONS:
                 content = base64.b64decode(content)
             extracted_docs.append(self.extract_file_content(fname, content))
 
+        combined_text = "\n\n".join(d.get("text") or "" for d in extracted_docs)
+        has_kit_markers = bool(
+            re.search(r"\[SECTION:\s*(BRAND|WHATSAPP|CATALOG|FAQS|INFO\s*PAGES|BOT\s*PERSONA)", combined_text, re.I)
+        )
+
+        if not has_kit_markers:
+            # Kit-agnostic path: heuristics + multi-pass LLM over the full corpus
+            try:
+                draft = self.bifurcate_with_llm(extracted_docs)
+            except Exception as exc:
+                logger.warning("stage_files LLM path failed (%s); heuristics-only fallback", exc)
+                draft = merge_bifurcation_results(
+                    heuristic_extract_corpus(combined_text, tenant_id=self.tenant_id),
+                    tenant_id=self.tenant_id,
+                )
+            brand = draft.get("brand") or {}
+            if not brand.get("name"):
+                brand["name"] = self.tenant_id.replace("-", " ").replace("_", " ").title()
+            business_hours = _sanitize_business_hours(draft.get("business_hours") or {})
+            menu_items = draft.get("menu_items") or []
+            if len(menu_items) < 3:
+                menu_items = self.extract_menu_section({"text": "", "tables": []}, vertical=draft.get("vertical") or "generic")
+            offerings = draft.get("offerings") or []
+            faqs = draft.get("faqs") or []
+            articles = draft.get("knowledge_articles") or []
+            intents = draft.get("intents") or []
+            # Merge kit-style info-page regex hits if LLM missed a page
+            extra_info = self.extract_info_pages_section({"text": combined_text, "tables": []})
+            if extra_info:
+                by_name = {i.get("name"): i for i in intents if isinstance(i, dict)}
+                for item in extra_info:
+                    name = item.get("name")
+                    if not name:
+                        continue
+                    if name not in by_name or len(str(item.get("answer") or "")) > len(str(by_name[name].get("answer") or "")):
+                        by_name[name] = item
+                intents = list(by_name.values())
+            vertical = draft.get("vertical") or _guess_vertical(combined_text)
+            guardrails = {}
+            staged_draft = {
+                "status": "staged",
+                "tenant_id": self.tenant_id,
+                "vertical": vertical,
+                "brand": brand,
+                "business_hours": business_hours,
+                "menu_items": menu_items,
+                "offerings": offerings,
+                "faqs": faqs,
+                "knowledge_articles": articles,
+                "intents": intents,
+                "guardrails": guardrails,
+                "source_files": [d["filename"] for d in extracted_docs],
+                "extraction_mode": "universal",
+                "stats": {
+                    "offerings_count": len(offerings),
+                    "menu_items_count": len(menu_items),
+                    "faqs_count": len(faqs),
+                    "articles_count": len(articles),
+                    "intents_count": len(intents),
+                },
+            }
+            return staged_draft
+
         sections = self.partition_sections(extracted_docs)
         brand, business_hours, vertical = self.extract_brand_section(sections["brand"])
+        # Enrich brand contacts from full corpus when kit tables omit them
+        heur = heuristic_extract_corpus(combined_text, tenant_id=self.tenant_id)
+        for key in ("support_email", "support_phone", "website", "tagline", "name"):
+            hv = (heur.get("brand") or {}).get(key)
+            if hv and (not brand.get(key) or _is_placeholder_brand_value(key, brand.get(key), self.tenant_id)):
+                brand[key] = hv
         menu_items = self.extract_menu_section(sections["menu"], vertical=vertical)
         offerings = self.extract_catalog_section(sections["catalog"], vertical=vertical)
         faqs, articles = self.extract_faq_section(sections["faqs"], brand_name=brand["name"], vertical=vertical)
         intents = self.extract_info_pages_section(sections.get("info_pages") or {"text": "", "tables": []})
+        # Soft-merge heuristic extras so kit uploads still gain scraped-style coverage
+        if heur.get("offerings") and len(offerings) < 3:
+            offerings = merge_bifurcation_results(
+                {"offerings": offerings}, {"offerings": heur["offerings"]}, tenant_id=self.tenant_id
+            ).get("offerings") or offerings
+        if heur.get("faqs"):
+            faqs = merge_bifurcation_results(
+                {"faqs": faqs}, {"faqs": heur["faqs"]}, tenant_id=self.tenant_id
+            ).get("faqs") or faqs
+        if heur.get("intents"):
+            intents = merge_bifurcation_results(
+                {"intents": intents}, {"intents": heur["intents"]}, tenant_id=self.tenant_id
+            ).get("intents") or intents
         guardrails = self.extract_guardrails_section(sections["guardrails"])
 
         staged_draft = {
@@ -1699,6 +2335,7 @@ CRITICAL INSTRUCTIONS:
             "intents": intents,
             "guardrails": guardrails,
             "source_files": [d["filename"] for d in extracted_docs],
+            "extraction_mode": "kit",
             "stats": {
                 "offerings_count": len(offerings),
                 "menu_items_count": len(menu_items),
@@ -1900,23 +2537,32 @@ CRITICAL INSTRUCTIONS:
                     "buttons": menu_buttons,
                 }
 
-            # Always keep company info-page intents present for every tenant
+            # Company info-page intents (technologies/projects/careers/benefits)
+            # are IT-only — never inject them into banking / ecommerce / etc.
             existing_intents = {
                 i["name"]: dict(i)
                 for i in draft.get("intents", [])
                 if isinstance(i, dict) and i.get("name")
             }
+            _IT_INFO = ("technologies", "projects", "careers", "benefits")
             try:
-                from shared.tenancy.defaults import ensure_company_info_page_intents, get_vertical_defaults
-                for di in (get_vertical_defaults(vertical).get("intents") or []):
-                    name = di.get("name")
-                    if name in ("technologies", "projects", "careers", "benefits") and name not in existing_intents:
-                        existing_intents[name] = dict(di)
+                from shared.tenancy.defaults import get_vertical_defaults
+                if vertical == "it_software":
+                    for di in (get_vertical_defaults(vertical).get("intents") or []):
+                        name = di.get("name")
+                        if name in _IT_INFO and name not in existing_intents:
+                            existing_intents[name] = dict(di)
+                else:
+                    for name in _IT_INFO:
+                        existing_intents.pop(name, None)
             except Exception:
                 pass
 
             if clean_intents:
                 for ci in clean_intents:
+                    # Skip IT info pages when uploading kits for non-IT verticals
+                    if vertical != "it_software" and ci.get("name") in _IT_INFO:
+                        continue
                     prev = existing_intents.get(ci["name"], {})
                     merged = {**prev, **{k: v for k, v in ci.items() if v not in (None, "", [], {})}}
                     # Never wipe a prior answer with an empty one
@@ -1930,8 +2576,15 @@ CRITICAL INSTRUCTIONS:
 
             if clean_intents or existing_intents:
                 try:
-                    from shared.tenancy.defaults import ensure_company_info_page_intents
-                    draft["intents"] = ensure_company_info_page_intents(list(existing_intents.values()))
+                    from shared.tenancy.defaults import (
+                        ensure_company_info_page_intents,
+                        strip_company_info_page_intents,
+                    )
+                    intent_list = list(existing_intents.values())
+                    if vertical == "it_software":
+                        draft["intents"] = ensure_company_info_page_intents(intent_list)
+                    else:
+                        draft["intents"] = strip_company_info_page_intents(intent_list)
                 except Exception:
                     draft["intents"] = list(existing_intents.values())
 
@@ -2152,9 +2805,15 @@ CRITICAL INSTRUCTIONS:
         auto_publish: bool = True,
         careful_brand_merge: bool = True,
     ) -> Dict[str, Any]:
-        """Extract + bifurcate a single already-saved upload without re-writing the file."""
+        """Extract + bifurcate a single already-saved upload for this tenant."""
         doc_data = self.extract_file_content(filename, content)
         bifurcation = self.bifurcate_with_llm([doc_data])
+        # Guarantee vertical-aware menu when LLM/heuristics left it thin
+        if len(bifurcation.get("menu_items") or []) < 3:
+            bifurcation["menu_items"] = self.extract_menu_section(
+                {"text": "", "tables": []},
+                vertical=bifurcation.get("vertical") or "generic",
+            )
         result = self.apply_bifurcation(
             bifurcation=bifurcation,
             raw_files=[doc_data],
@@ -2163,6 +2822,7 @@ CRITICAL INSTRUCTIONS:
             source_file=filename,
         )
         result["files_processed"] = [filename]
+        result["tenant_id"] = self.tenant_id
         return result
 
     # ──────────────────────────────────────────────────────────────────────────

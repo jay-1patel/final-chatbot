@@ -52,16 +52,19 @@ export interface NavItem {
 }
 
 /**
- * Company info pages available for every tenant. Advertised in the navigation —
- * the panel behind each is `InfoPagePanel` (info-page-panel.tsx). Kit upload /
- * publish fills the matching intents (projects, technologies, careers, benefits).
+ * Company info pages for Software & IT tenants only (tech stack, portfolio,
+ * hiring, why-us). Other verticals use their own menus — banking has products /
+ * eligibility, not Technologies or Careers.
  */
-const COMPANY_INFO_ITEMS: NavItem[] = [
+const IT_COMPANY_INFO_ITEMS: NavItem[] = [
   { id: 'projects', label: 'Projects', icon: FolderOpen, permissions: ['manage_projects'] },
   { id: 'technologies', label: 'Technologies', icon: Cpu, permissions: ['manage_technologies'] },
   { id: 'careers', label: 'Careers', icon: Briefcase, permissions: ['manage_careers'] },
   { id: 'benefits', label: 'Benefits', icon: Gift, permissions: ['manage_benefits'] },
 ]
+
+/** Verticals that show the IT company-info sidebar pages. */
+const VERTICALS_WITH_COMPANY_INFO = new Set(['it_software'])
 
 /**
  * Build the sidebar for one tenant.
@@ -79,6 +82,9 @@ export function buildTenantNav(opts: {
 }): NavItem[] {
   const content = getVertical(opts.vertical).content
   const features = opts.features ?? null
+  const companyInfo = VERTICALS_WITH_COMPANY_INFO.has(opts.vertical ?? '')
+    ? IT_COMPANY_INFO_ITEMS
+    : []
 
   const items: NavItem[] = [
     { id: 'overview', label: 'Overview', icon: LayoutGrid },
@@ -90,7 +96,7 @@ export function buildTenantNav(opts: {
       feature: 'offerings',
       showsCount: true,
     },
-    ...COMPANY_INFO_ITEMS,
+    ...companyInfo,
     {
       id: 'orders',
       label: 'Orders',

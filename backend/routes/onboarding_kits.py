@@ -97,13 +97,16 @@ def download_onboarding_kit(vertical: str, fmt: str):
 # 2. Document Staging Endpoints (Parse & Preview before Publish)
 # ──────────────────────────────────────────────────────────────────────────────
 
-@router.post("/onboarding/stage")
-async def stage_onboarding_document_global(
+async def _parse_stage_upload_payload(
     request: Request,
-    file: Optional[UploadFile] = File(None),
-):
-    """Parse an onboarding document globally (e.g. inside new registration wizard)."""
-    files_payload = []
+    file: Optional[UploadFile],
+) -> tuple[list, Optional[str]]:
+    """Parse multipart/JSON upload body used by both global and tenant stage routes.
+
+    Returns ``(files_payload, optional_tenant_id_from_body)``.
+    """
+    files_payload: List[Dict[str, Any]] = []
+    body_tenant: Optional[str] = None
     content_type = request.headers.get("content-type", "")
 
     if file:
@@ -114,6 +117,9 @@ async def stage_onboarding_document_global(
         })
     elif "multipart/form-data" in content_type:
         form = await request.form()
+        maybe_tid = form.get("tenant_id")
+        if maybe_tid and isinstance(maybe_tid, str):
+            body_tenant = maybe_tid.strip()
         for field_name in ("file", "files", "document"):
             uploaded = form.getlist(field_name)
             for uf in uploaded:
@@ -125,6 +131,8 @@ async def stage_onboarding_document_global(
                     })
     elif "application/json" in content_type:
         body = await request.json()
+        if isinstance(body.get("tenant_id"), str) and body.get("tenant_id").strip():
+            body_tenant = body["tenant_id"].strip()
         raw_files = body.get("files") or []
         for rf in raw_files:
             files_payload.append({
@@ -132,13 +140,30 @@ async def stage_onboarding_document_global(
                 "content": rf.get("content", ""),
             })
 
+    return files_payload, body_tenant
+
+
+@router.post("/onboarding/stage")
+async def stage_onboarding_document_global(
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+):
+    """Parse any document globally (registration wizard) or for an optional tenant_id.
+
+    Works for kits and unstructured uploads (MD/PDF/DOCX/scrapes). When
+    ``tenant_id`` is provided in the JSON/multipart body, the staged draft is
+    tagged for that tenant so publish can target any company.
+    """
+    files_payload, body_tenant = await _parse_stage_upload_payload(request, file)
     if not files_payload:
         raise HTTPException(status_code=400, detail="No document provided to stage")
 
+    target_tenant = (body_tenant or "draft_tenant").strip() or "draft_tenant"
     from services.auto_bifurcator import AutoBifurcator
-    bifurcator = AutoBifurcator(tenant_id="draft_tenant")
+    bifurcator = AutoBifurcator(tenant_id=target_tenant)
     try:
         staged = bifurcator.stage_files(files_payload)
+        staged["tenant_id"] = target_tenant
         return staged
     except Exception as exc:
         logger.error("Global onboarding document staging failed: %s", exc, exc_info=True)
@@ -152,47 +177,24 @@ async def stage_onboarding_document_tenant(
     file: Optional[UploadFile] = File(None),
     principal: dict = Depends(require_tenant_access()),
 ):
-    """Parse an onboarding document for a specific tenant in staging mode."""
-    files_payload = []
-    content_type = request.headers.get("content-type", "")
-
-    if file:
-        raw = await file.read()
-        files_payload.append({
-            "filename": file.filename or "onboarding_doc.docx",
-            "content": raw,
-        })
-    elif "multipart/form-data" in content_type:
-        form = await request.form()
-        for field_name in ("file", "files", "document"):
-            uploaded = form.getlist(field_name)
-            for uf in uploaded:
-                if uf and hasattr(uf, "read"):
-                    raw = await uf.read()
-                    files_payload.append({
-                        "filename": uf.filename or "onboarding_doc.docx",
-                        "content": raw,
-                    })
-    elif "application/json" in content_type:
-        body = await request.json()
-        raw_files = body.get("files") or []
-        for rf in raw_files:
-            files_payload.append({
-                "filename": rf.get("filename", "document.docx"),
-                "content": rf.get("content", ""),
-            })
-
+    """Parse any document for a specific tenant (works for every tenant slug/id)."""
+    files_payload, _ = await _parse_stage_upload_payload(request, file)
     if not files_payload:
         raise HTTPException(status_code=400, detail="No document provided to stage")
 
+    tid = (tenant_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="tenant_id is required")
+
     from services.auto_bifurcator import AutoBifurcator
-    actor = principal.get("actor") or {"username": "admin", "role": "super_admin", "tenant_id": tenant_id}
-    bifurcator = AutoBifurcator(tenant_id=tenant_id, actor=actor)
+    actor = principal.get("actor") or {"username": "admin", "role": "super_admin", "tenant_id": tid}
+    bifurcator = AutoBifurcator(tenant_id=tid, actor=actor)
     try:
         staged = bifurcator.stage_files(files_payload)
+        staged["tenant_id"] = tid
         return staged
     except Exception as exc:
-        logger.error("Tenant onboarding document staging failed for %s: %s", tenant_id, exc, exc_info=True)
+        logger.error("Tenant onboarding document staging failed for %s: %s", tid, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Document parsing failed: {exc}")
 
 
@@ -206,7 +208,11 @@ async def publish_onboarding_bifurcation(
     request: Request,
     principal: dict = Depends(require_tenant_access()),
 ):
-    """Commit and publish reviewed bifurcated configuration to live tenant system."""
+    """Commit and publish reviewed bifurcated configuration for this tenant (any company)."""
+    tid = (tenant_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="tenant_id is required")
+
     body = await request.json()
     bifurcation_draft = body.get("draft") or body
     if not bifurcation_draft:
@@ -220,11 +226,13 @@ async def publish_onboarding_bifurcation(
     actor = principal.get("actor") or {
         "username": principal.get("username") or principal.get("label") or "admin",
         "role": principal.get("role") or "super_admin",
-        "tenant_id": tenant_id,
+        "tenant_id": tid,
     }
-    bifurcator = AutoBifurcator(tenant_id=tenant_id, actor=actor)
+    bifurcator = AutoBifurcator(tenant_id=tid, actor=actor)
 
     draft = dict(bifurcation_draft)
+    # Always publish into the path tenant — never a leftover draft_tenant tag
+    draft["tenant_id"] = tid
     if isinstance(draft.get("business_hours"), dict):
         draft["business_hours"] = _sanitize_business_hours(draft["business_hours"])
 
@@ -235,12 +243,14 @@ async def publish_onboarding_bifurcation(
             auto_publish=True,
             careful_brand_merge=False,
         )
+        summary["tenant_id"] = tid
         return {
             "status": "published",
+            "tenant_id": tid,
             "summary": summary,
         }
     except Exception as exc:
-        logger.error("Publishing bifurcated draft failed for %s: %s", tenant_id, exc, exc_info=True)
+        logger.error("Publishing bifurcated draft failed for %s: %s", tid, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Publishing failed: {exc}")
 
 
