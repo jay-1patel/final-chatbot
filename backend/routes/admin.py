@@ -675,8 +675,13 @@ def _process_document_background(
     effective_media_type: str,
     tenant_id: str | None,
 ):
-    """Background worker for document text extraction, chunking, and vector index builds."""
+    """Background worker for document text extraction, chunking, and vector index builds.
+
+    After chunk indexing, runs full LLM auto-bifurcation (products / FAQ / KB / careful
+    brand merge) when AUTO_BIFURCATE_FULL is enabled (default on).
+    """
     chunks = []
+    bifurcation_stats = None
     try:
         results = process_file(filepath)
         if results:
@@ -702,11 +707,51 @@ def _process_document_background(
                 except Exception as e:
                     logger.warning(f"FAQ index auto-sync failed after background upload {filename}: {e}")
 
+                if os.environ.get("AUTO_BIFURCATE", "1").strip().lower() not in ("0", "false", "no", "off"):
+                    try:
+                        try:
+                            from bifurcate import bifurcate_and_save_chunks
+                        except ImportError:
+                            from backend.bifurcate import bifurcate_and_save_chunks
+                        target_tenant = tenant_id or os.environ.get("DEFAULT_TENANT_ID") or "default"
+                        split = bifurcate_and_save_chunks(
+                            chunks,
+                            target_tenant,
+                            use_llm=os.environ.get("BIFURCATE_USE_LLM", "1").strip().lower()
+                            not in ("0", "false", "no", "off"),
+                        )
+                        logger.info(
+                            "AUTO_BIFURCATION_COMPLETED | %s | tenant=%s | industry=%s | kb=%d faq=%d",
+                            filename, target_tenant, split["industry"], split["kb_chunks"], split["faq_chunks"],
+                        )
+                    except Exception as e:
+                        logger.warning(f"Auto-bifurcation failed after background upload {filename}: {e}")
+
+        # Full semantic route: products (live) + FAQs + KB + careful brand/menu merge
+        if tenant_id and os.path.exists(filepath):
+            try:
+                with open(filepath, "rb") as disk_f:
+                    raw_bytes = disk_f.read()
+                try:
+                    from services.upload_auto_router import route_uploaded_document
+                except ImportError:
+                    from backend.services.upload_auto_router import route_uploaded_document
+                bifurcation_stats = route_uploaded_document(
+                    tenant_id=tenant_id,
+                    filename=filename,
+                    content=raw_bytes,
+                    actor={"username": "upload_auto_router", "role": "system", "tenant_id": tenant_id},
+                )
+            except Exception as e:
+                logger.warning(f"Full upload auto-router failed for {filename}: {e}", exc_info=True)
+                bifurcation_stats = {"status": "error", "error": str(e), "files_processed": [filename]}
+
         update_admin_file_status(
             filename,
             status="ready",
             chunks_count=len(chunks),
             tenant_id=tenant_id,
+            bifurcation_stats=bifurcation_stats,
         )
         logger.info(f"ASYNC_INGESTION_COMPLETED | {filename} | chunks={len(chunks)} | tenant={tenant_id}")
     except Exception as exc:
@@ -716,6 +761,7 @@ def _process_document_background(
             status="failed",
             error_message=str(exc),
             tenant_id=tenant_id,
+            bifurcation_stats=bifurcation_stats,
         )
 
 

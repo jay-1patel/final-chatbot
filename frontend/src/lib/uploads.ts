@@ -11,6 +11,23 @@ import { api, getToken, ApiError } from './api'
 
 const base = (tenantId: string) => `/api/admin/tenants/${encodeURIComponent(tenantId)}`
 
+export interface BifurcationStats {
+  tenant_id?: string
+  vertical?: string | null
+  brand?: Partial<BifurcationResult['brand']> | Record<string, string>
+  menu_buttons_count?: number
+  intents_count?: number
+  offerings_created?: number
+  offerings_sample?: string[]
+  faqs_saved?: number
+  kb_chunks_indexed?: number
+  brand_updated?: boolean
+  version?: number
+  status?: string
+  files_processed?: string[]
+  error?: string
+}
+
 export interface AdminFile {
   id: number
   name: string
@@ -25,6 +42,7 @@ export interface AdminFile {
   status?: string
   chunks_count?: number
   error_message?: string | null
+  bifurcation_stats?: BifurcationStats | string | null
 }
 
 export interface KnowledgeGap {
@@ -145,10 +163,111 @@ export interface BifurcationResult {
   intents_count: number
   offerings_created: number
   offerings_sample: string[]
+  faqs_saved?: number
   kb_chunks_indexed: number
+  brand_updated?: boolean
   version: number
   status: string
   files_processed: string[]
+}
+
+/** Normalize and sum bifurcation_stats from one or more ready admin files. */
+export function aggregateBifurcationStats(
+  files: AdminFile[],
+  filenames?: string[],
+): BifurcationResult | null {
+  const target = filenames?.length ? new Set(filenames) : null
+  const ready = files.filter((f) => {
+    if (target && !target.has(f.name)) return false
+    return f.status === 'ready' && f.bifurcation_stats
+  })
+  if (ready.length === 0) return null
+
+  let offerings_created = 0
+  let faqs_saved = 0
+  let kb_chunks_indexed = 0
+  let menu_buttons_count = 0
+  let intents_count = 0
+  let version = 0
+  const offerings_sample: string[] = []
+  const files_processed: string[] = []
+  let brand: BifurcationResult['brand'] = {
+    name: '',
+    bot_name: '',
+    tagline: '',
+    website: '',
+    support_email: '',
+    support_phone: '',
+    signature: '',
+  }
+  let vertical = 'generic'
+  let tenant_id = ''
+
+  for (const file of ready) {
+    let stats = file.bifurcation_stats
+    if (typeof stats === 'string') {
+      try {
+        stats = JSON.parse(stats) as BifurcationStats
+      } catch {
+        continue
+      }
+    }
+    if (!stats || typeof stats !== 'object') continue
+    offerings_created += Number(stats.offerings_created || 0)
+    faqs_saved += Number(stats.faqs_saved || 0)
+    kb_chunks_indexed += Number(stats.kb_chunks_indexed || 0)
+    menu_buttons_count = Math.max(menu_buttons_count, Number(stats.menu_buttons_count || 0))
+    intents_count = Math.max(intents_count, Number(stats.intents_count || 0))
+    version = Math.max(version, Number(stats.version || 0))
+    for (const name of stats.offerings_sample || []) {
+      if (offerings_sample.length < 5 && !offerings_sample.includes(name)) offerings_sample.push(name)
+    }
+    files_processed.push(file.name)
+    if (stats.brand && (stats.brand as { name?: string }).name) {
+      brand = { ...brand, ...(stats.brand as BifurcationResult['brand']) }
+    }
+    if (stats.vertical) vertical = String(stats.vertical)
+    if (stats.tenant_id) tenant_id = String(stats.tenant_id)
+  }
+
+  return {
+    tenant_id,
+    vertical,
+    brand,
+    menu_buttons_count,
+    intents_count,
+    offerings_created,
+    offerings_sample,
+    faqs_saved,
+    kb_chunks_indexed,
+    version,
+    status: 'configured',
+    files_processed,
+  }
+}
+
+/** Poll file list until named uploads leave `processing` (or timeout). */
+export async function waitForUploadReady(
+  tenantId: string,
+  filenames: string[],
+  opts: { module?: string; timeoutMs?: number; intervalMs?: number } = {},
+): Promise<AdminFile[]> {
+  const timeoutMs = opts.timeoutMs ?? 180_000
+  const intervalMs = opts.intervalMs ?? 2500
+  const wanted = new Set(filenames)
+  const started = Date.now()
+
+  while (Date.now() - started < timeoutMs) {
+    const files = await uploadsApi.list(tenantId, { module: opts.module })
+    const matched = files.filter((f) => wanted.has(f.name))
+    if (matched.length >= wanted.size && matched.every((f) => f.status && f.status !== 'processing')) {
+      return matched
+    }
+    await new Promise((r) => setTimeout(r, intervalMs))
+  }
+  return uploadsApi.list(tenantId, { module: opts.module }).then((files) =>
+    files.filter((f) => wanted.has(f.name)),
+  )
 }
 
 export const FILE_MODULES = [

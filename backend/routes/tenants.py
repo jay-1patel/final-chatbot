@@ -26,11 +26,18 @@ import re
 import secrets
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
 
 from database import get_db_context, record_admin_audit_event
+from database import (
+    delete_crawl_schedule,
+    get_crawl_schedule,
+    mark_crawl_finished,
+    mark_crawl_started,
+    upsert_crawl_schedule,
+)
 from routes.auth import (
     get_current_admin,
     has_permission,
@@ -57,6 +64,8 @@ class TenantCreate(BaseModel):
     display_name: str = ""
     waba_phone_id: str = ""
     status: str = "active"
+    website: str = ""
+    auto_scrape: bool = True
 
     @field_validator("waba_phone_id")
     @classmethod
@@ -110,6 +119,21 @@ class WebhookSecretSet(BaseModel):
 
 class ActiveTestTenantRequest(BaseModel):
     tenant_id: Optional[str] = None
+
+
+class UrlAutoOnboardRequest(BaseModel):
+    url: str
+    tenant_id: Optional[str] = None
+    vertical: Optional[str] = None
+    auto_publish: bool = True
+
+
+class CrawlScheduleIn(BaseModel):
+    url: str
+    interval_hours: int = Field(default=24, ge=1, le=24 * 30)
+    max_pages: int = Field(default=8, ge=1, le=25)
+    auto_publish: bool = True
+    is_enabled: bool = True
 
 
 def _admin_only(principal: dict) -> str:
@@ -166,9 +190,68 @@ def set_current_active_test_tenant(
     return {"ok": True, "active_test_tenant": tid}
 
 
+@router.post("/auto-onboard-preview")
+def auto_onboard_preview(
+    body: UrlAutoOnboardRequest,
+    current_admin: dict = Depends(get_current_admin),
+):
+    url = (body.url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Website URL is required")
+    try:
+        from services.url_scraper import WebScraperCrawler, UrlAutoOnboarder, slugify
+        crawler = WebScraperCrawler(base_url=url, max_pages=8)
+        crawl_res = crawler.crawl()
+        if crawl_res.get("blocked_by_robots"):
+            raise HTTPException(status_code=403, detail="This website's robots.txt disallows automated crawling.")
+        if not crawl_res.get("pages"):
+            raise HTTPException(status_code=400, detail="Could not reach or crawl website. Please check the URL.")
+        onboarder = UrlAutoOnboarder(tenant_id=body.tenant_id, actor=current_admin)
+        extracted = onboarder.extract_bifurcation(crawl_res)
+        brand = extracted.get("brand", {})
+        domain = crawl_res.get("domain", "")
+        suggested_id = body.tenant_id or slugify(brand.get("name") or domain)
+        return {
+            "ok": True,
+            "url": crawl_res.get("root_url"),
+            "domain": domain,
+            "pages_crawled": [p.get("url") for p in crawl_res.get("pages", [])],
+            "suggested_tenant_id": suggested_id,
+            "extracted": extracted,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Auto-onboard preview failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Website analysis failed: {exc}")
+
+
+@router.post("/auto-onboard-execute")
+def auto_onboard_execute(
+    body: UrlAutoOnboardRequest,
+    current_admin: dict = Depends(get_current_admin),
+):
+    url = (body.url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Website URL is required")
+    try:
+        from services.url_scraper import UrlAutoOnboarder
+        onboarder = UrlAutoOnboarder(tenant_id=body.tenant_id, actor=current_admin)
+        result = onboarder.execute_onboarding(
+            url=url,
+            target_tenant_id=body.tenant_id,
+            auto_publish=body.auto_publish,
+        )
+        return {"ok": True, "result": result}
+    except Exception as exc:
+        logger.error("Auto-onboard execute failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Auto-onboarding failed: {exc}")
+
+
 @router.post("")
 def create_tenant(
     body: TenantCreate,
+    background_tasks: BackgroundTasks,
     current_admin: dict = Depends(require_permission("manage_operations")),
 ):
     if current_admin.get("role") != "super_admin":
@@ -195,6 +278,7 @@ def create_tenant(
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Invalid vertical: {exc}")
 
+    website_clean = (body.website or "").strip()
     with get_db_context() as conn:
         if conn.execute("SELECT 1 FROM tenants WHERE id = ?", (tid,)).fetchone():
             raise HTTPException(status_code=409, detail=f"tenant '{tid}' already exists")
@@ -207,6 +291,8 @@ def create_tenant(
             status=body.status,
             conn=conn,
         )
+        if website_clean:
+            conn.execute("UPDATE tenants SET domain = ? WHERE id = ? OR slug = ?", (website_clean, tid, tid))
         record_admin_audit_event(
             conn,
             action="tenant_created",
@@ -214,11 +300,26 @@ def create_tenant(
             resource_type="tenant",
             resource_id=tid,
             tenant_id=tid,
-            details={"vertical": body.vertical, "status": body.status},
+            details={"vertical": body.vertical, "status": body.status, "website": website_clean},
         )
     tenancy_cache.purge(tid)
     logger.info("TENANT_CREATED | tenant=%s | vertical=%s | by=%s",
                 tid, body.vertical, current_admin.get("username"))
+
+    if website_clean and body.auto_scrape and website_clean.startswith("http"):
+        def _bg_crawl(target_tid: str, crawl_url: str, actor: dict):
+            try:
+                from services.url_scraper import UrlAutoOnboarder
+                logger.info("Auto-onboarding background crawler starting for %s at %s", target_tid, crawl_url)
+                onboarder = UrlAutoOnboarder(tenant_id=target_tid, actor=actor)
+                res = onboarder.execute_onboarding(url=crawl_url, target_tenant_id=target_tid, auto_publish=True)
+                logger.info("Auto-onboarding background crawler finished for %s: %s offerings, %s faqs",
+                            target_tid, res.get("offerings_seeded", 0), res.get("faqs_seeded", 0))
+            except Exception as e:
+                logger.error("Auto-onboarding background crawler error for %s: %s", target_tid, e, exc_info=True)
+
+        background_tasks.add_task(_bg_crawl, tid, website_clean, current_admin)
+
     return {"ok": True, "tenant": _public_tenant(tenancy_store.get_tenant(tid))}
 
 
@@ -361,6 +462,9 @@ def save_profile_draft(    tenant_id: str,
     merged = merge_drafts(draft, body.snapshot)
     with get_db_context() as conn:
         tenancy_store.save_draft(tenant_id, merged, updated_by=by, conn=conn)
+        website = (body.snapshot.get("brand") or {}).get("website") or ""
+        if website:
+            conn.execute("UPDATE tenants SET domain = ? WHERE (id = ? OR slug = ?) AND (domain IS NULL OR domain = '')", (website.strip(), tenant_id, tenant_id))
         if principal.get("type") == "admin":
             audit_details: Dict[str, Any] = {
                 "changed_sections": sorted(body.snapshot.keys()),
@@ -503,6 +607,9 @@ def save_intent_draft(
     merged = deep_merge(draft, {"intents": [override]})
     with get_db_context() as conn:
         tenancy_store.save_draft(tenant_id, merged, updated_by=by, conn=conn)
+        website = (body.snapshot.get("brand") or {}).get("website") or ""
+        if website:
+            conn.execute("UPDATE tenants SET domain = ? WHERE (id = ? OR slug = ?) AND (domain IS NULL OR domain = '')", (website.strip(), tenant_id, tenant_id))
         if principal.get("type") == "admin":
             record_admin_audit_event(
                 conn,
@@ -546,6 +653,135 @@ def _draft_changes_menu_only(draft, live) -> bool:
         return False
     changed = {key for key in set(draft) | set(live) if draft.get(key) != live.get(key)}
     return changed <= {"menu", "intents"}
+
+
+@router.post("/{tenant_id}/scrape-website")
+def scrape_website_for_tenant(
+    tenant_id: str,
+    body: UrlAutoOnboardRequest,
+    principal: dict = Depends(require_tenant_access()),
+):
+    url = (body.url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Website URL is required")
+    try:
+        from services.url_scraper import UrlAutoOnboarder
+        onboarder = UrlAutoOnboarder(tenant_id=tenant_id, actor=principal)
+        result = onboarder.execute_onboarding(
+            url=url,
+            target_tenant_id=tenant_id,
+            auto_publish=body.auto_publish,
+        )
+        return {"ok": True, "result": result}
+    except Exception as exc:
+        logger.error("Scrape website failed for tenant %s: %s", tenant_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Website crawl and sync failed: {exc}")
+
+
+# ── Scheduled website re-crawling ─────────────────────────────────────────
+# A schedule stores the tenant's source URL and a refresh interval; the
+# background scheduler in main.py re-runs UrlAutoOnboarder when it is due.
+
+def _run_scheduled_crawl(tenant_id: str, url: str, auto_publish: bool, max_pages: int = 8) -> None:
+    """Blocking crawl run — invoked from a background task's threadpool."""
+    try:
+        mark_crawl_started(tenant_id)
+        from services.url_scraper import UrlAutoOnboarder
+
+        onboarder = UrlAutoOnboarder(
+            tenant_id=tenant_id,
+            actor={"username": "crawl_schedule", "role": "system", "tenant_id": tenant_id},
+        )
+        onboarder.execute_onboarding(
+            url=url,
+            target_tenant_id=tenant_id,
+            auto_publish=auto_publish,
+            max_pages=max_pages,
+        )
+        mark_crawl_finished(tenant_id, "success")
+    except Exception as exc:
+        logger.error("Scheduled crawl failed for tenant %s: %s", tenant_id, exc, exc_info=True)
+        mark_crawl_finished(tenant_id, "failed", str(exc)[:500])
+
+
+@router.get("/{tenant_id}/crawl-schedule")
+def get_tenant_crawl_schedule(
+    tenant_id: str,
+    principal: dict = Depends(require_tenant_access()),
+):
+    return {"ok": True, "tenant_id": tenant_id, "schedule": get_crawl_schedule(tenant_id)}
+
+
+@router.put("/{tenant_id}/crawl-schedule")
+def set_tenant_crawl_schedule(
+    tenant_id: str,
+    body: CrawlScheduleIn,
+    principal: dict = Depends(require_tenant_access()),
+):
+    url = (body.url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Website URL is required")
+    schedule = upsert_crawl_schedule(
+        tenant_id=tenant_id,
+        url=url,
+        interval_hours=body.interval_hours,
+        max_pages=body.max_pages,
+        auto_publish=body.auto_publish,
+        is_enabled=body.is_enabled,
+    )
+    with get_db_context() as conn:
+        record_admin_audit_event(
+            conn,
+            action="crawl_schedule_saved",
+            actor=principal,
+            resource_type="crawl_schedule",
+            resource_id=tenant_id,
+            tenant_id=tenant_id,
+            details={"url": url[:200], "interval_hours": body.interval_hours},
+        )
+    return {"ok": True, "schedule": schedule}
+
+
+@router.delete("/{tenant_id}/crawl-schedule")
+def remove_tenant_crawl_schedule(
+    tenant_id: str,
+    principal: dict = Depends(require_tenant_access()),
+):
+    deleted = delete_crawl_schedule(tenant_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="No crawl schedule exists for this tenant")
+    with get_db_context() as conn:
+        record_admin_audit_event(
+            conn,
+            action="crawl_schedule_deleted",
+            actor=principal,
+            resource_type="crawl_schedule",
+            resource_id=tenant_id,
+            tenant_id=tenant_id,
+        )
+    return {"ok": True, "deleted": True}
+
+
+@router.post("/{tenant_id}/crawl-schedule/run")
+def run_tenant_crawl_now(
+    tenant_id: str,
+    background_tasks: BackgroundTasks,
+    principal: dict = Depends(require_tenant_access()),
+):
+    """Trigger the tenant's scheduled crawl immediately, in the background."""
+    schedule = get_crawl_schedule(tenant_id)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Save a crawl schedule first")
+    if schedule.get("last_status") == "running":
+        raise HTTPException(status_code=409, detail="A crawl is already running for this tenant")
+    background_tasks.add_task(
+        _run_scheduled_crawl,
+        tenant_id,
+        schedule["url"],
+        schedule["auto_publish"],
+        schedule["max_pages"],
+    )
+    return {"ok": True, "status": "queued", "url": schedule["url"]}
 
 
 @router.post("/{tenant_id}/publish")

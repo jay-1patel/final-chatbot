@@ -839,6 +839,7 @@ def init_db():
             ("status", "TEXT DEFAULT 'ready'"),
             ("chunks_count", "INTEGER DEFAULT 0"),
             ("error_message", "TEXT"),
+            ("bifurcation_stats", "TEXT"),
         ])
         _ensure_columns(conn, "admin_chat_messages", [("tenant_id", "TEXT")])
         conn.execute(
@@ -866,6 +867,29 @@ def init_db():
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_unanswered_queries_tenant ON unanswered_queries(tenant_id, resolved, created_at)"
+        )
+
+        # ── Scheduled website re-crawling ──────────────────────────────────────
+        # One row per tenant: the URL to re-scrape, how often, and the outcome of
+        # the last run. The background scheduler in main.py polls for due rows.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS tenant_crawl_schedules (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id       TEXT NOT NULL UNIQUE,
+                url             TEXT NOT NULL,
+                interval_hours  INTEGER DEFAULT 24,
+                max_pages       INTEGER DEFAULT 8,
+                auto_publish    INTEGER DEFAULT 1,
+                is_enabled      INTEGER DEFAULT 1,
+                last_crawled_at TIMESTAMP,
+                last_status     TEXT,
+                last_error      TEXT,
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_crawl_schedules_due ON tenant_crawl_schedules(is_enabled, last_crawled_at)"
         )
 
         # ── Admin-editable WhatsApp menus ────────────────────────────────────
@@ -2669,6 +2693,9 @@ def set_active_test_tenant(tenant_id: Optional[str]) -> None:
 def _resolve_tenant(tenant_id: str = None) -> str:
     if str(tenant_id or "").strip():
         return str(tenant_id).strip()
+    req = get_request_tenant()
+    if req:
+        return str(req).strip()
     active = get_active_test_tenant()
     if active:
         return active
@@ -2677,6 +2704,57 @@ def _resolve_tenant(tenant_id: str = None) -> str:
         return resolve_default_tenant()
     except Exception:
         return os.environ.get("DEFAULT_TENANT_ID", "default")
+
+
+def _resolve_tenant_ids(tenant_id: str = None) -> list:
+    """Return matching tenant identifiers (numeric id, slug, raw string) so that
+    queries match rows regardless of whether tenant_id was stored as integer or text."""
+    raw = str(tenant_id or "").strip()
+    if not raw:
+        req = get_request_tenant()
+        raw = str(req or "").strip()
+    if not raw:
+        active = get_active_test_tenant()
+        raw = str(active or "").strip()
+    if not raw:
+        try:
+            from shared.tenancy.resolver import resolve_default_tenant
+            raw = str(resolve_default_tenant() or "").strip()
+        except Exception:
+            raw = os.environ.get("DEFAULT_TENANT_ID", "default")
+
+    candidates = {raw}
+    if raw.isdigit():
+        candidates.add(int(raw))
+
+    try:
+        from shared.tenancy import store
+        rec = store.get_tenant(raw)
+        if rec:
+            if rec.get("id") is not None:
+                candidates.add(rec["id"])
+                candidates.add(str(rec["id"]))
+            if rec.get("slug"):
+                candidates.add(rec["slug"])
+                candidates.add(rec["slug"].lower())
+    except Exception:
+        try:
+            with get_db_context() as conn:
+                row = conn.execute(
+                    "SELECT id, slug FROM tenants WHERE id = ? OR slug = ? OR LOWER(slug) = LOWER(?)",
+                    (raw, raw, raw),
+                ).fetchone()
+                if row:
+                    if row["id"] is not None:
+                        candidates.add(row["id"])
+                        candidates.add(str(row["id"]))
+                    if row["slug"]:
+                        candidates.add(row["slug"])
+                        candidates.add(row["slug"].lower())
+        except Exception:
+            pass
+
+    return list(candidates)
 
 
 def save_product(name: str, slug: str, category: str = "general",
@@ -2689,19 +2767,20 @@ def save_product(name: str, slug: str, category: str = "general",
                  bulk_discount_tiers: list = None,
                  attrs_json: dict = None, short_label: str = None,
                  detail_url: str = None, tenant_id: str = None, 
+                 is_active: int = 1,
                  actor: dict = None) -> int:
     with get_db_context() as conn:
         cur = conn.execute(
             """INSERT INTO products (name, slug, category, description, short_description,
                price, mrp, unit, moq, media_url, media_type, ingredients, sort_order, variants_json,
                stock_quantity, nutritional_facts, bulk_discount_tiers, attrs_json, short_label,
-               detail_url, tenant_id, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+               detail_url, is_active, tenant_id, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
             (name, slug, category, description, short_description,
               price, mrp, unit, moq, media_url, media_type, json.dumps(ingredients or []), sort_order,
              json.dumps(variants_json or []),
               stock_quantity, nutritional_facts, json.dumps(bulk_discount_tiers or []),
-             json.dumps(attrs_json or {}), short_label, detail_url, _resolve_tenant(tenant_id)),
+             json.dumps(attrs_json or {}), short_label, detail_url, int(is_active), _resolve_tenant(tenant_id)),
         )
         product_id = cur.lastrowid
         
@@ -2735,27 +2814,33 @@ def save_product(name: str, slug: str, category: str = "general",
 
 
 def get_product(product_id: int, tenant_id: str = None) -> dict:
+    t_ids = _resolve_tenant_ids(tenant_id)
+    placeholders = ", ".join(["?"] * len(t_ids))
     with get_db_context() as conn:
         row = conn.execute(
-            "SELECT * FROM products WHERE id = ? AND tenant_id = ?",
-            (product_id, _resolve_tenant(tenant_id)),
+            f"SELECT * FROM products WHERE id = ? AND tenant_id IN ({placeholders})",
+            (product_id, *t_ids),
         ).fetchone()
     return _deserialize_product(dict(row)) if row else None
 
 
 def get_product_by_slug(slug: str, tenant_id: str = None) -> dict:
+    t_ids = _resolve_tenant_ids(tenant_id)
+    placeholders = ", ".join(["?"] * len(t_ids))
     with get_db_context() as conn:
         row = conn.execute(
-            "SELECT * FROM products WHERE slug = ? AND tenant_id = ?",
-            (slug, _resolve_tenant(tenant_id)),
+            f"SELECT * FROM products WHERE slug = ? AND tenant_id IN ({placeholders})",
+            (slug, *t_ids),
         ).fetchone()
     return _deserialize_product(dict(row)) if row else None
 
 
 def list_products(category: str = None, active_only: bool = True, limit: int = 100,
                   tenant_id: str = None) -> list:
-    query = "SELECT * FROM products WHERE tenant_id = ?"
-    params = [_resolve_tenant(tenant_id)]
+    t_ids = _resolve_tenant_ids(tenant_id)
+    placeholders = ", ".join(["?"] * len(t_ids))
+    query = f"SELECT * FROM products WHERE tenant_id IN ({placeholders})"
+    params = list(t_ids)
     if active_only:
         query += " AND is_active = 1"
     if category:
@@ -2766,6 +2851,89 @@ def list_products(category: str = None, active_only: bool = True, limit: int = 1
     with get_db_context() as conn:
         rows = conn.execute(query, params).fetchall()
     return [_deserialize_product(dict(r)) for r in rows]
+
+
+def count_products(category: str = None, active_only: bool = True, tenant_id: str = None) -> int:
+    t_ids = _resolve_tenant_ids(tenant_id)
+    placeholders = ", ".join(["?"] * len(t_ids))
+    query = f"SELECT COUNT(*) FROM products WHERE tenant_id IN ({placeholders})"
+    params = list(t_ids)
+    if active_only:
+        query += " AND is_active = 1"
+    if category:
+        query += " AND category = ?"
+        params.append(category)
+    with get_db_context() as conn:
+        row = conn.execute(query, params).fetchone()
+        return int(row[0]) if row else 0
+
+
+def list_product_categories(active_only: bool = True, tenant_id: str = None) -> list[str]:
+    t_ids = _resolve_tenant_ids(tenant_id)
+    placeholders = ", ".join(["?"] * len(t_ids))
+    query = f"SELECT DISTINCT category FROM products WHERE tenant_id IN ({placeholders}) AND category IS NOT NULL"
+    params = list(t_ids)
+    if active_only:
+        query += " AND is_active = 1"
+    query += " ORDER BY category ASC"
+    with get_db_context() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [str(r[0]).strip() for r in rows if r[0] and str(r[0]).strip()]
+
+
+
+def list_staged_products(tenant_id: str = None) -> list:
+    """List draft / unapproved products for a tenant (is_active = 0)."""
+    t_ids = _resolve_tenant_ids(tenant_id)
+    placeholders = ", ".join(["?"] * len(t_ids))
+    query = f"SELECT * FROM products WHERE tenant_id IN ({placeholders}) AND is_active = 0 ORDER BY id DESC"
+    with get_db_context() as conn:
+        rows = conn.execute(query, list(t_ids)).fetchall()
+    return [_deserialize_product(dict(r)) for r in rows]
+
+
+def approve_staged_products(tenant_id: str = None, product_ids: list[int] = None) -> int:
+    """Promote draft products to live catalog (is_active = 1)."""
+    t_ids = _resolve_tenant_ids(tenant_id)
+    t_placeholders = ", ".join(["?"] * len(t_ids))
+    with get_db_context() as conn:
+        if product_ids:
+            p_placeholders = ", ".join(["?"] * len(product_ids))
+            cur = conn.execute(
+                f"""UPDATE products 
+                   SET is_active = 1, updated_at = CURRENT_TIMESTAMP 
+                   WHERE tenant_id IN ({t_placeholders}) AND id IN ({p_placeholders})""",
+                [*list(t_ids), *product_ids],
+            )
+        else:
+            cur = conn.execute(
+                f"""UPDATE products 
+                   SET is_active = 1, updated_at = CURRENT_TIMESTAMP 
+                   WHERE tenant_id IN ({t_placeholders}) AND is_active = 0""",
+                list(t_ids),
+            )
+        return cur.rowcount
+
+
+def delete_staged_products(tenant_id: str = None, product_ids: list[int] = None) -> int:
+    """Delete draft / rejected products."""
+    t_ids = _resolve_tenant_ids(tenant_id)
+    t_placeholders = ", ".join(["?"] * len(t_ids))
+    with get_db_context() as conn:
+        if product_ids:
+            p_placeholders = ", ".join(["?"] * len(product_ids))
+            cur = conn.execute(
+                f"""DELETE FROM products 
+                   WHERE tenant_id IN ({t_placeholders}) AND id IN ({p_placeholders}) AND is_active = 0""",
+                [*list(t_ids), *product_ids],
+            )
+        else:
+            cur = conn.execute(
+                f"""DELETE FROM products 
+                   WHERE tenant_id IN ({t_placeholders}) AND is_active = 0""",
+                list(t_ids),
+            )
+        return cur.rowcount
 
 
 def _row_to_dict(row) -> dict:
@@ -3760,6 +3928,7 @@ def update_admin_file_status(
     chunks_count: int = None,
     error_message: str = None,
     tenant_id: str = None,
+    bifurcation_stats: dict = None,
 ) -> bool:
     with get_db_context() as conn:
         effective_tenant = _resolve_tenant(tenant_id) if tenant_id else (get_request_tenant() or tenant_id)
@@ -3771,6 +3940,9 @@ def update_admin_file_status(
         if error_message is not None:
             updates.append("error_message = ?")
             params.append(error_message)
+        if bifurcation_stats is not None:
+            updates.append("bifurcation_stats = ?")
+            params.append(json.dumps(bifurcation_stats))
 
         where = "name = ?"
         params.append(name)
@@ -3780,6 +3952,17 @@ def update_admin_file_status(
 
         cur = conn.execute(f"UPDATE admin_files SET {', '.join(updates)} WHERE {where}", params)
         return cur.rowcount > 0
+
+
+def _parse_admin_file_row(row) -> dict:
+    item = dict(row)
+    raw_stats = item.get("bifurcation_stats")
+    if isinstance(raw_stats, str) and raw_stats.strip():
+        try:
+            item["bifurcation_stats"] = json.loads(raw_stats)
+        except Exception:
+            pass
+    return item
 
 
 def list_admin_files(tenant_id: str = None) -> list:
@@ -3793,7 +3976,7 @@ def list_admin_files(tenant_id: str = None) -> list:
             rows = conn.execute(
                 "SELECT * FROM admin_files ORDER BY created_at DESC, id DESC"
             ).fetchall()
-    return [dict(r) for r in rows]
+    return [_parse_admin_file_row(r) for r in rows]
 
 
 def get_admin_file(name: str, tenant_id: str = None) -> dict:
@@ -3808,7 +3991,7 @@ def get_admin_file(name: str, tenant_id: str = None) -> dict:
                 "SELECT * FROM admin_files WHERE name = ? ORDER BY id DESC LIMIT 1",
                 (name,),
             ).fetchone()
-    return dict(row) if row else None
+    return _parse_admin_file_row(row) if row else None
 
 
 def delete_admin_file(name: str, tenant_id: str = None, actor: dict = None) -> bool:
@@ -4286,3 +4469,108 @@ def add_faq_from_gap(
         )
 
     return {"status": "ok", "question": q, "answer": a, "tenant_id": effective_tenant}
+
+
+# ── Scheduled website re-crawling ─────────────────────────────────────────
+
+def _crawl_schedule_row(row) -> dict:
+    return {
+        "id": row["id"],
+        "tenant_id": row["tenant_id"],
+        "url": row["url"],
+        "interval_hours": row["interval_hours"],
+        "max_pages": row["max_pages"],
+        "auto_publish": bool(row["auto_publish"]),
+        "is_enabled": bool(row["is_enabled"]),
+        "last_crawled_at": row["last_crawled_at"],
+        "last_status": row["last_status"],
+        "last_error": row["last_error"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def get_crawl_schedule(tenant_id: str) -> dict | None:
+    with get_db_context() as conn:
+        row = conn.execute(
+            "SELECT * FROM tenant_crawl_schedules WHERE tenant_id = ?",
+            (tenant_id,),
+        ).fetchone()
+    return _crawl_schedule_row(row) if row else None
+
+
+def upsert_crawl_schedule(
+    tenant_id: str,
+    url: str,
+    interval_hours: int = 24,
+    max_pages: int = 8,
+    auto_publish: bool = True,
+    is_enabled: bool = True,
+) -> dict:
+    interval_hours = max(1, int(interval_hours or 24))
+    max_pages = max(1, min(int(max_pages or 8), 25))
+    with get_db_context() as conn:
+        conn.execute(
+            """INSERT INTO tenant_crawl_schedules
+                   (tenant_id, url, interval_hours, max_pages, auto_publish, is_enabled)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(tenant_id) DO UPDATE SET
+                   url = excluded.url,
+                   interval_hours = excluded.interval_hours,
+                   max_pages = excluded.max_pages,
+                   auto_publish = excluded.auto_publish,
+                   is_enabled = excluded.is_enabled,
+                   updated_at = CURRENT_TIMESTAMP""",
+            (tenant_id, url, interval_hours, max_pages, 1 if auto_publish else 0, 1 if is_enabled else 0),
+        )
+        row = conn.execute(
+            "SELECT * FROM tenant_crawl_schedules WHERE tenant_id = ?",
+            (tenant_id,),
+        ).fetchone()
+    return _crawl_schedule_row(row)
+
+
+def delete_crawl_schedule(tenant_id: str) -> bool:
+    with get_db_context() as conn:
+        cur = conn.execute(
+            "DELETE FROM tenant_crawl_schedules WHERE tenant_id = ?",
+            (tenant_id,),
+        )
+    return cur.rowcount > 0
+
+
+def list_due_crawl_schedules() -> list:
+    """Enabled schedules whose last crawl is older than their interval (or never crawled)."""
+    with get_db_context() as conn:
+        rows = conn.execute(
+            """SELECT * FROM tenant_crawl_schedules
+               WHERE is_enabled = 1
+                 AND (last_crawled_at IS NULL
+                      OR last_crawled_at <= DATETIME('now', '-' || interval_hours || ' hours'))
+               ORDER BY COALESCE(last_crawled_at, '1970-01-01') ASC""",
+        ).fetchall()
+    return [_crawl_schedule_row(r) for r in rows]
+
+
+def mark_crawl_started(tenant_id: str) -> None:
+    """Stamp the run time up-front so a slow crawl is not picked up twice."""
+    with get_db_context() as conn:
+        conn.execute(
+            """UPDATE tenant_crawl_schedules
+               SET last_crawled_at = CURRENT_TIMESTAMP,
+                   last_status = 'running',
+                   last_error = NULL,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE tenant_id = ?""",
+            (tenant_id,),
+        )
+
+
+def mark_crawl_finished(tenant_id: str, status: str, error: str = None) -> None:
+    with get_db_context() as conn:
+        conn.execute(
+            """UPDATE tenant_crawl_schedules
+               SET last_status = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE tenant_id = ?""",
+            (status, error, tenant_id),
+        )

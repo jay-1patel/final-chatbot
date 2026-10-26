@@ -33,6 +33,8 @@ import {
   saveBlob,
   uploadsApi,
   knowledgeGapsApi,
+  aggregateBifurcationStats,
+  waitForUploadReady,
   type AdminFile,
   type BifurcationResult,
   type KnowledgeGap,
@@ -52,22 +54,21 @@ import { OnboardingKitWidget } from '@/components/onboarding/onboarding-kit-widg
  * Uploads is the tenant's own knowledge hub: FAQ documents, KB articles,
  * brochure PDFs, and new-release sheets.
  *
- * Equipped with Zero-Touch Auto-Bifurcation: Client administrators can upload all
- * PDFs and Word collateral in bulk, and the backend automatically parses, classifies,
- * and configures the tenant profile, WhatsApp menu, offerings catalog, intents,
- * and vector RAG embeddings without any manual data entry.
+ * Every upload auto-bifurcates in the background: products go live in the
+ * catalog, FAQs/KB are indexed, and brand/menu merge only when real signals
+ * are found. "Re-process library" remains for bulk re-runs.
  */
 export function UploadsPanel({ tenantId }: { tenantId: string }) {
   const { can } = useAuth()
   const toast = useToast()
   const action = useAction()
   const inputRef = useRef<HTMLInputElement>(null)
-  const autoInputRef = useRef<HTMLInputElement>(null)
 
   const [module, setModule] = useState<string>(FILE_MODULES[0].value)
   const [search, setSearch] = useState('')
   const [busyName, setBusyName] = useState<string | null>(null)
   const [bifurcating, setBifurcating] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [bifurcationResult, setBifurcationResult] = useState<BifurcationResult | null>(null)
 
   // Knowledge Gap Analytics State
@@ -93,18 +94,59 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
   const canDelete = can('delete_files')
   const files = state.data ?? []
 
-  const pickSingle = () => inputRef.current?.click()
-  const pickAutoBatch = () => autoInputRef.current?.click()
+  const pickUpload = () => inputRef.current?.click()
 
-  const onSingleFile = async (file: File | null) => {
-    if (!file) return
-    const result = await action.run(() => uploadsApi.upload(tenantId, file, module))
-    if (result) {
-      toast.push(`${file.name} uploaded — processing in background...`)
-      state.reload()
-      setTimeout(() => state.reload(), 3500)
+  const finishUploadBatch = async (filenames: string[]) => {
+    toast.push(`Extracting & publishing ${filenames.length} document${filenames.length === 1 ? '' : 's'}…`)
+    const readyFiles = await waitForUploadReady(tenantId, filenames, { module })
+    state.reload()
+    const failed = readyFiles.filter((f) => f.status === 'failed')
+    if (failed.length) {
+      toast.push(
+        `${failed.length} file(s) failed: ${failed.map((f) => f.name).join(', ')}`,
+        'error',
+      )
     }
-    if (inputRef.current) inputRef.current.value = ''
+    const aggregated = aggregateBifurcationStats(readyFiles, filenames)
+    if (aggregated) {
+      setBifurcationResult(aggregated)
+      const bits = [
+        aggregated.offerings_created ? `${aggregated.offerings_created} offerings` : null,
+        aggregated.faqs_saved ? `${aggregated.faqs_saved} FAQs` : null,
+        aggregated.kb_chunks_indexed ? `${aggregated.kb_chunks_indexed} KB chunks` : null,
+      ].filter(Boolean)
+      toast.push(
+        bits.length
+          ? `Published live: ${bits.join(', ')}`
+          : 'Upload complete — content indexed (no new catalog items detected).',
+      )
+    } else if (!failed.length) {
+      toast.push('Upload complete — processing finished.')
+    }
+  }
+
+  const onUploadFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return
+    const batch = Array.from(fileList)
+    setUploading(true)
+    setBifurcationResult(null)
+    const uploadedNames: string[] = []
+    try {
+      for (const file of batch) {
+        const result = await action.run(() => uploadsApi.upload(tenantId, file, module))
+        if (result?.filename) uploadedNames.push(result.filename)
+        else uploadedNames.push(file.name)
+      }
+      if (uploadedNames.length) {
+        await finishUploadBatch(uploadedNames)
+      }
+    } catch (err) {
+      toast.push((err as Error).message || 'Upload failed', 'error')
+      state.reload()
+    } finally {
+      setUploading(false)
+      if (inputRef.current) inputRef.current.value = ''
+    }
   }
 
   const openFaqCreator = (gap: KnowledgeGap) => {
@@ -145,40 +187,21 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
     }
   }
 
-  const onAutoBatchFiles = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) return
-    const batch = Array.from(fileList)
-    setBifurcating(true)
-    setBifurcationResult(null)
-    try {
-      toast.push(`Analyzing & bifurcating ${batch.length} documents...`)
-      const res = await uploadsApi.autoBifurcate(tenantId, batch, true)
-      setBifurcationResult(res)
-      toast.push(`Auto-bifurcation complete! All components configured & published.`)
-      state.reload()
-    } catch (err) {
-      toast.push((err as Error).message || 'Auto-bifurcation failed', 'error')
-    } finally {
-      setBifurcating(false)
-      if (autoInputRef.current) autoInputRef.current.value = ''
-    }
-  }
-
   const onBifurcateExisting = async () => {
     if (files.length === 0) {
-      toast.push('No uploaded files available to bifurcate.', 'error')
+      toast.push('No uploaded files available to re-process.', 'error')
       return
     }
     setBifurcating(true)
     setBifurcationResult(null)
     try {
-      toast.push(`Bifurcating existing files in library...`)
+      toast.push('Re-processing library files…')
       const res = await uploadsApi.bifurcateExisting(tenantId)
       setBifurcationResult(res)
-      toast.push(`Auto-bifurcation complete! System updated.`)
+      toast.push('Re-process complete — catalog & knowledge updated.')
       state.reload()
     } catch (err) {
-      toast.push((err as Error).message || 'Bifurcation failed', 'error')
+      toast.push((err as Error).message || 'Re-process failed', 'error')
     } finally {
       setBifurcating(false)
     }
@@ -221,7 +244,7 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
     <div className="min-w-0">
       <PageHeader
         title="Uploads & Auto-Configurator"
-        description="Upload client documents (PDF, Word, Excel). The backend automatically bifurcates data and configures the Profile, Menu, Intents, Catalog, and Vector RAG."
+        description="Upload documents once — products, FAQs, and knowledge are extracted and published live automatically."
         meta={state.data && <Badge tone="accent">{files.length} files</Badge>}
         actions={
           <div className="flex flex-wrap items-center gap-2">
@@ -234,66 +257,60 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
             </Button>
             {files.length > 0 && (
               <Button
-                variant="secondary"
+                variant="ghost"
                 icon={<Sparkles className="h-4 w-4 text-accent-400" />}
                 onClick={() => void onBifurcateExisting()}
                 loading={bifurcating}
+                title="Re-run full bifurcation on files already in this library"
               >
-                Bifurcate Existing
+                Re-process library
               </Button>
             )}
             {canUpload && (
               <Button
                 variant="primary"
-                icon={<Sparkles className="h-4 w-4" />}
-                onClick={pickAutoBatch}
-                loading={bifurcating}
+                icon={<Upload className="h-4 w-4" />}
+                onClick={pickUpload}
+                loading={uploading || bifurcating}
               >
-                Auto-Configure From Files
+                Upload documents
               </Button>
             )}
           </div>
         }
       />
 
-      {/* Hidden file inputs */}
       <input
         ref={inputRef}
         type="file"
         accept={UPLOAD_ACCEPT}
-        className="hidden"
-        onChange={(e) => void onSingleFile(e.target.files?.[0] ?? null)}
-      />
-      <input
-        ref={autoInputRef}
-        type="file"
-        accept={UPLOAD_ACCEPT}
         multiple
         className="hidden"
-        onChange={(e) => void onAutoBatchFiles(e.target.files)}
+        onChange={(e) => void onUploadFiles(e.target.files)}
       />
 
-      {/* Zero-Touch Document Intake Card */}
       <Card className="mb-6 border-accent-500/30 bg-accent-950/20">
         <CardHeader
-          title="Zero-Touch Document Ingestion & Auto-Bifurcation"
+          title="Automatic document bifurcation"
           icon={<Sparkles className="h-4 w-4 text-accent-400" />}
           actions={
-            <Button
-              variant="primary"
-              size="sm"
-              icon={<Upload className="h-4 w-4" />}
-              loading={bifurcating}
-              onClick={pickAutoBatch}
-            >
-              Upload All PDF & Word Files
-            </Button>
+            canUpload ? (
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<Upload className="h-4 w-4" />}
+                loading={uploading || bifurcating}
+                onClick={pickUpload}
+              >
+                Upload PDF, Word & more
+              </Button>
+            ) : undefined
           }
         />
         <CardBody className="space-y-3">
           <p className="text-xs text-slate-300">
-            Upload your company profile, brochures, product sheets, FAQs, and policy documents in bulk.
-            The backend engine extracts text, understands the context, and automatically puts everything into its place:
+            Drop company profiles, brochures, product sheets, FAQs, and policies here.
+            The backend extracts content and publishes it live into the right place — no extra Configure step:
           </p>
 
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
@@ -353,10 +370,12 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
             }
           />
           <CardBody className="space-y-4">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
               <div className="rounded-md border border-emerald-500/20 bg-surface-base/80 p-3">
                 <p className="text-2xs text-slate-400">Brand Configured</p>
-                <p className="font-semibold text-sm text-slate-100">{bifurcationResult.brand?.name}</p>
+                <p className="font-semibold text-sm text-slate-100">
+                  {bifurcationResult.brand?.name || 'Unchanged'}
+                </p>
                 <p className="text-2xs text-slate-400">{bifurcationResult.brand?.bot_name}</p>
                 <p className="mt-1 text-2xs text-emerald-400">Vertical: {bifurcationResult.vertical}</p>
               </div>
@@ -367,6 +386,12 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
                 <p className="truncate text-2xs text-slate-300">
                   {bifurcationResult.offerings_sample?.join(', ') || 'Populated into catalog'}
                 </p>
+              </div>
+
+              <div className="rounded-md border border-emerald-500/20 bg-surface-base/80 p-3">
+                <p className="text-2xs text-slate-400">FAQs Saved</p>
+                <p className="font-semibold text-lg text-emerald-400">{bifurcationResult.faqs_saved ?? 0}</p>
+                <p className="text-2xs text-slate-300">Live in FAQ index</p>
               </div>
 
               <div className="rounded-md border border-emerald-500/20 bg-surface-base/80 p-3">
@@ -382,15 +407,21 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
               </div>
             </div>
 
-            {/* Quick jump navigation links */}
             <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-surface-line">
               <span className="text-2xs text-slate-400">Inspect configured sections:</span>
+              <a
+                href={`#/tenants/${tenantId}/records`}
+                className="inline-flex items-center gap-1 rounded px-2.5 py-1 text-2xs font-medium bg-surface-panel hover:bg-surface-line text-slate-200 transition"
+              >
+                <Package className="h-3 w-3 text-amber-400" />
+                View Records / Catalog
+              </a>
               <a
                 href={`#/tenants/${tenantId}/offerings`}
                 className="inline-flex items-center gap-1 rounded px-2.5 py-1 text-2xs font-medium bg-surface-panel hover:bg-surface-line text-slate-200 transition"
               >
                 <Package className="h-3 w-3 text-amber-400" />
-                View Offerings Catalog
+                View Offerings
               </a>
               <a
                 href={`#/tenants/${tenantId}/menu`}
@@ -450,8 +481,14 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
             className="w-full sm:w-56"
           />
           {canUpload && (
-            <Button variant="secondary" size="sm" icon={<Upload className="h-3.5 w-3.5" />} onClick={pickSingle}>
-              Upload Single
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Upload className="h-3.5 w-3.5" />}
+              onClick={pickUpload}
+              loading={uploading}
+            >
+              Upload
             </Button>
           )}
         </div>
@@ -489,7 +526,7 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
             title={`No ${activeModule.label.toLowerCase()} files`}
             description={
               canUpload
-                ? 'Upload your PDF or Word documents to auto-configure the bot or index knowledge.'
+                ? 'Upload PDF or Word documents — products, FAQs, and knowledge are extracted and published automatically.'
                 : 'Nothing has been uploaded for this module yet.'
             }
             icon={<FileText className="h-6 w-6" />}
@@ -530,6 +567,37 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
                       {(item.ext || 'file').toUpperCase()} · {formatBytes(item.size)} · {formatDate(item.created_at)}
                       {item.error_message ? ` · Error: ${item.error_message}` : ''}
                     </p>
+                    {(() => {
+                      let stats = item.bifurcation_stats
+                      if (typeof stats === 'string') {
+                        try {
+                          stats = JSON.parse(stats)
+                        } catch {
+                          return null
+                        }
+                      }
+                      if (!stats || typeof stats !== 'object') return null
+                      const s = stats as {
+                        offerings_created?: number
+                        faqs_saved?: number
+                        kb_chunks_indexed?: number
+                        status?: string
+                      }
+                      if (s.status === 'skipped' || s.status === 'disabled' || s.status === 'no_tenant') return null
+                      const parts = [
+                        s.offerings_created ? `${s.offerings_created} offerings` : null,
+                        s.faqs_saved ? `${s.faqs_saved} FAQs` : null,
+                        s.kb_chunks_indexed ? `${s.kb_chunks_indexed} KB` : null,
+                      ].filter(Boolean)
+                      if (!parts.length && s.status !== 'error') return null
+                      return (
+                        <p className="mt-0.5 text-2xs text-emerald-400/90">
+                          {s.status === 'error'
+                            ? 'Auto-bifurcation error'
+                            : `Extracted: ${parts.join(' · ')}`}
+                        </p>
+                      )
+                    })()}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1 pl-7 sm:pl-0">
