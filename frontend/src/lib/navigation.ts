@@ -52,10 +52,11 @@ export interface NavItem {
 }
 
 /**
- * Info pages for the software & IT vertical. Advertised in the navigation —
- * the panel behind each is `InfoPagePanel` (info-page-panel.tsx).
+ * Company info pages available for every tenant. Advertised in the navigation —
+ * the panel behind each is `InfoPagePanel` (info-page-panel.tsx). Kit upload /
+ * publish fills the matching intents (projects, technologies, careers, benefits).
  */
-const IT_INFO_ITEMS: NavItem[] = [
+const COMPANY_INFO_ITEMS: NavItem[] = [
   { id: 'projects', label: 'Projects', icon: FolderOpen, permissions: ['manage_projects'] },
   { id: 'technologies', label: 'Technologies', icon: Cpu, permissions: ['manage_technologies'] },
   { id: 'careers', label: 'Careers', icon: Briefcase, permissions: ['manage_careers'] },
@@ -89,7 +90,7 @@ export function buildTenantNav(opts: {
       feature: 'offerings',
       showsCount: true,
     },
-    ...(opts.vertical === 'it_software' ? IT_INFO_ITEMS : []),
+    ...COMPANY_INFO_ITEMS,
     {
       id: 'orders',
       label: 'Orders',

@@ -720,6 +720,42 @@ def generate_docx_kit(vertical_key: str, config: Dict[str, Any], output_path: Pa
     doc.add_paragraph().paragraph_format.space_after = Pt(10)
 
     # ──────────────────────────────────────────────────────────────────────────
+    # SECTION: INFO PAGES (IT/software — Technologies, Projects, Careers, Benefits)
+    # ──────────────────────────────────────────────────────────────────────────
+    info_pages = config.get("info_pages") or []
+    if info_pages:
+        h_info = doc.add_heading("[SECTION: INFO PAGES]", level=1)
+        h_info.paragraph_format.space_before = Pt(14)
+        h_info.paragraph_format.space_after = Pt(4)
+        info_note = doc.add_paragraph()
+        info_note_run = info_note.add_run(
+            "These answers populate the Technologies / Projects / Careers / Benefits console pages "
+            "(and matching WhatsApp intents). Keep Page Name exactly as shown."
+        )
+        info_note_run.font.size = Pt(8.5)
+        info_note_run.font.italic = True
+
+        info_table = doc.add_table(rows=len(info_pages) + 1, cols=2)
+        info_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        _set_table_borders(info_table)
+        for i, h in enumerate(["Page Name (intent)", "Bot Answer Content"]):
+            c = info_table.cell(0, i)
+            _set_cell_background(c, "6D28D9")
+            cp = c.paragraphs[0].add_run(h)
+            cp.font.bold = True
+            cp.font.size = Pt(9)
+            cp.font.color.rgb = RGBColor(255, 255, 255)
+        for r_idx, (page, answer) in enumerate(info_pages, start=1):
+            for c_idx, val in enumerate([page, answer]):
+                cell = info_table.cell(r_idx, c_idx)
+                _set_cell_background(cell, "F5F3FF" if r_idx % 2 == 0 else "FFFFFF")
+                prun = cell.paragraphs[0].add_run(str(val))
+                prun.font.size = Pt(8)
+                if c_idx == 0:
+                    prun.font.bold = True
+        doc.add_paragraph().paragraph_format.space_after = Pt(10)
+
+    # ──────────────────────────────────────────────────────────────────────────
     # SECTION 5: BOT PERSONA & GUARDRAILS
     # ──────────────────────────────────────────────────────────────────────────
     h5 = doc.add_heading("[SECTION: BOT PERSONA & GUARDRAILS]", level=1)
@@ -1103,6 +1139,26 @@ class PDFKitWriter:
                 rows=kb_rows,
                 col_widths=[120.0, 70.0, 325.0],
                 header_bg=(0.19, 0.18, 0.51),
+                font_size=6.5,
+            )
+
+        info_pages = self.config.get("info_pages") or []
+        if info_pages:
+            self.draw_section_header("[SECTION: INFO PAGES]", color=(0.43, 0.16, 0.85))
+            self.page.insert_text(
+                (self.margin, self.y + 9),
+                "Populates Technologies / Projects / Careers / Benefits console pages + WhatsApp intents.",
+                fontsize=7.5,
+                fontname="helv",
+                color=(0.35, 0.4, 0.45),
+            )
+            self.y += 14
+            info_rows = [[page, answer] for (page, answer) in info_pages]
+            self.draw_table(
+                headers=["Page Name (intent)", "Bot Answer Content"],
+                rows=info_rows,
+                col_widths=[100.0, 415.0],
+                header_bg=(0.43, 0.16, 0.85),
                 font_size=6.5,
             )
 

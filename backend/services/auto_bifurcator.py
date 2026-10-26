@@ -363,17 +363,39 @@ You must output a strictly valid JSON object adhering to this structure:
     }}
   ],
   "intents": [
-    // 5 to 10 top customer conversational intents
+    // Include informational pages when present (IT/software especially):
+    // technologies, projects, careers, benefits — each MUST include a full "answer" the bot will speak.
     {{
-      "name": "intent_slug_name",
-      "description": "Brief description of customer purpose",
-      "keywords": ["keyword1", "keyword2", "keyword3"],
-      "examples": [
-        "Example user question 1",
-        "Example user question 2",
-        "Example user question 3"
-      ],
-      "flow": "book_callback" | "get_quote" | "raise_ticket" | null
+      "name": "technologies",
+      "description": "Tech stack and tools",
+      "keywords": ["tech stack", "technologies", "framework"],
+      "examples": ["what technologies do you use", "what is your tech stack"],
+      "answer": "• Bullet list of frontend/backend/mobile/cloud technologies…",
+      "flow": null
+    }},
+    {{
+      "name": "projects",
+      "description": "Portfolio and case studies",
+      "keywords": ["projects", "portfolio", "case study"],
+      "examples": ["show me your projects", "who have you built for"],
+      "answer": "• Snapshot of delivered work…",
+      "flow": null
+    }},
+    {{
+      "name": "careers",
+      "description": "Hiring and openings",
+      "keywords": ["careers", "hiring", "jobs"],
+      "examples": ["are you hiring", "job openings"],
+      "answer": "• Open roles and how to apply…",
+      "flow": null
+    }},
+    {{
+      "name": "benefits",
+      "description": "Why clients / candidates choose you",
+      "keywords": ["benefits", "why choose you"],
+      "examples": ["why work with you", "what are the benefits"],
+      "answer": "• Key differentiators…",
+      "flow": null
     }}
   ],
   "offerings": [
@@ -419,9 +441,10 @@ You must output a strictly valid JSON object adhering to this structure:
 CRITICAL INSTRUCTIONS:
 1. Extract ALL tangible products/services/properties you find into the 'offerings' array.
 2. Extract every clear question/answer pair into the 'faqs' array (do not leave FAQs only inside markdown articles).
-3. Ensure 'menu_items' titles are UNDER 24 CHARACTERS (strictly enforced by WhatsApp API).
-4. If phone or email is genuinely missing in the text, omit those brand fields or leave them empty — do NOT invent placeholder contacts.
-5. Respond ONLY with the JSON object. Do not enclose in backticks or markdown if possible.
+3. For IT/software collateral, ALWAYS fill intents technologies, projects, careers, and benefits with real 'answer' text when those topics appear (tech stack lists, portfolio, hiring, why-us).
+4. Ensure 'menu_items' titles are UNDER 24 CHARACTERS (strictly enforced by WhatsApp API). Map Technologies/Projects/Careers/Benefits buttons to action values of the same name.
+5. If phone or email is genuinely missing in the text, omit those brand fields or leave them empty — do NOT invent placeholder contacts.
+6. Respond ONLY with the JSON object. Do not enclose in backticks or markdown if possible.
 """
 
         user_prompt = f"Please bifurcate and configure the chatbot system based on the following uploaded client collateral:\n\n{full_corpus}"
@@ -635,6 +658,8 @@ CRITICAL INSTRUCTIONS:
 
             "faqs": r"\[SECTION:\s*FAQS(?:\s*&\s*POLICIES)?\]",
 
+            "info_pages": r"\[SECTION:\s*INFO\s*PAGES(?:\s*&\s*INTENTS)?\]",
+
             "guardrails": r"\[SECTION:\s*BOT\s*PERSONA(?:\s*&\s*GUARDRAILS)?\]",
 
         }
@@ -656,6 +681,8 @@ CRITICAL INSTRUCTIONS:
             "catalog": {"text": "", "tables": []},
 
             "faqs": {"text": "", "tables": []},
+
+            "info_pages": {"text": "", "tables": []},
 
             "guardrails": {"text": "", "tables": []},
 
@@ -709,6 +736,11 @@ CRITICAL INSTRUCTIONS:
 
                         current_sec = "faqs"
 
+                    elif "INFO PAGE" in tag or "INFO PAGES" in tag or tag.strip() in (
+                        "TECHNOLOGIES", "PROJECTS", "CAREERS", "BENEFITS",
+                    ):
+                        current_sec = "info_pages"
+
                     elif "PERSONA" in tag or "GUARD" in tag:
 
                         current_sec = "guardrails"
@@ -751,6 +783,24 @@ CRITICAL INSTRUCTIONS:
                     )
                 ):
                     sections["faqs"]["tables"].append(tbl)
+
+                elif any(
+                    k in first_row_str
+                    for k in (
+                        "info page",
+                        "page name",
+                        "intent name",
+                        "technologies",
+                        "projects",
+                        "careers",
+                        "benefits",
+                        "bot answer",
+                    )
+                ) and any(
+                    k in first_row_str
+                    for k in ("page", "intent", "answer", "content", "technologies", "projects", "careers", "benefits")
+                ):
+                    sections["info_pages"]["tables"].append(tbl)
 
                 elif (
 
@@ -866,39 +916,40 @@ CRITICAL INSTRUCTIONS:
 
 
 
-        # Step 2: Detect vertical
-
+        # Step 2: Detect vertical (prefer explicit slug / title, then keyword scores)
         full_sample = (text + " " + json.dumps(parsed_fields)).lower()
-
         vertical = default_vertical
-
-        if any(w in full_sample for w in ("property", "residence", "bhk", "villa", "penthouse", "real estate", "rera")):
-
-            vertical = "real_estate"
-
-        elif any(w in full_sample for w in ("flight", "tour", "travel", "vacation", "itinerary", "package")):
-
-            vertical = "tours_travel"
-
-        elif any(w in full_sample for w in ("software", "cloud", "devops", "tech stack", "fastapi", "react", "kubernetes")):
-
-            vertical = "it_software"
-
-        elif any(w in full_sample for w in ("product", "sku", "delivery", "cart", "warranty", "ecommerce", "retail")):
-
-            vertical = "ecommerce"
-
-        elif any(w in full_sample for w in ("clinic", "doctor", "specialty", "consultation fee", "hospital", "patient")):
-
-            vertical = "healthcare"
-
-        elif any(w in full_sample for w in ("account", "deposit", "credit card", "bank", "atm", "branch")):
-
-            vertical = "banking"
-
-        elif any(w in full_sample for w in ("tax", "audit", "gst", "itr", "wealth", "advisory", "accounting")):
-
-            vertical = "finance"
+        slug_hints = (
+            ("it_software", "it_software"),
+            ("software & it", "it_software"),
+            ("real_estate", "real_estate"),
+            ("real estate", "real_estate"),
+            ("tours_travel", "tours_travel"),
+            ("tours & travel", "tours_travel"),
+            ("ecommerce", "ecommerce"),
+            ("e-commerce", "ecommerce"),
+            ("healthcare", "healthcare"),
+            ("banking", "banking"),
+            ("finance", "finance"),
+            ("generic", "generic"),
+        )
+        for needle, slug in slug_hints:
+            if needle in full_sample:
+                vertical = slug
+                break
+        else:
+            scores = {
+                "real_estate": sum(1 for w in ("property", "bhk", "villa", "penthouse", "rera", "carpet area") if w in full_sample),
+                "tours_travel": sum(1 for w in ("flight", "tour", "itinerary", "visa", "holiday") if w in full_sample),
+                "it_software": sum(1 for w in ("software", "devops", "tech stack", "fastapi", "react", "kubernetes", "flutter") if w in full_sample),
+                "ecommerce": sum(1 for w in ("sku", "cart", "warranty", "cod", "chikki") if w in full_sample),
+                "healthcare": sum(1 for w in ("clinic", "doctor", "hospital", "patient", "consultation fee") if w in full_sample),
+                "banking": sum(1 for w in ("credit card", "atm", "ifsc", "savings account") if w in full_sample),
+                "finance": sum(1 for w in ("gst", "itr", "gold loan", "two-wheeler loan", "nbfc") if w in full_sample),
+            }
+            best = max(scores.items(), key=lambda kv: kv[1])
+            if best[1] > 0:
+                vertical = best[0]
 
 
 
@@ -997,33 +1048,45 @@ CRITICAL INSTRUCTIONS:
                     sec = (row[2].strip() if len(row) > 2 else "Explore")[:24]
 
                     action = (row[3].strip() if len(row) > 3 else "offerings").lower()
+                    action = action.replace(" ", "_").replace("-", "_")
 
-
-
-                    # Sanitize action
-
-                    if "quote" in action or "price" in action:
-
+                    # Preserve IT info-page intents and known flows; don't collapse them to offerings
+                    info_page_actions = {
+                        "technologies", "technology", "tech_stack", "projects", "project",
+                        "careers", "career", "benefits", "benefit", "services", "service_enquiry",
+                    }
+                    if action in info_page_actions or action in (
+                        "technologies", "projects", "careers", "benefits", "offerings",
+                        "offering_details", "faq", "quote", "get_quote", "book_callback",
+                        "raise_ticket", "track_order", "returns",
+                    ):
+                        if action in ("technology", "tech_stack"):
+                            action = "technologies"
+                        elif action == "project":
+                            action = "projects"
+                        elif action == "career":
+                            action = "careers"
+                        elif action == "benefit":
+                            action = "benefits"
+                    elif "quote" in action or "price" in action:
                         action = "quote"
-
                     elif "call" in action or "visit" in action or "appoint" in action:
-
                         action = "book_callback"
-
                     elif "ticket" in action or "support" in action or "help" in action:
-
                         action = "raise_ticket"
-
-                    elif "faq" in action or "info" in action:
-
+                    elif "faq" in action:
                         action = "faq"
-
+                    elif "technolog" in action or "stack" in action:
+                        action = "technologies"
+                    elif "project" in action or "portfolio" in action or "case" in action:
+                        action = "projects"
+                    elif "career" in action or "hiring" in action or "job" in action:
+                        action = "careers"
+                    elif "benefit" in action or "why" in action:
+                        action = "benefits"
                     elif "detail" in action:
-
                         action = "offering_details"
-
                     else:
-
                         action = "offerings"
 
 
@@ -1488,94 +1551,162 @@ CRITICAL INSTRUCTIONS:
 
 
 
-    # ──────────────────────────────────────────────────────────────────────────
+    def extract_info_pages_section(self, sec_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract Technologies / Projects / Careers / Benefits intent answers."""
+        INFO_DEFAULTS = {
+            "technologies": {
+                "keywords": ["technologies", "technology", "tech stack", "stack", "framework", "tools"],
+                "examples": ["what technologies do you work with", "what is your tech stack"],
+            },
+            "projects": {
+                "keywords": ["projects", "project", "portfolio", "case study", "case studies", "clients"],
+                "examples": ["show me your work", "who have you built for"],
+            },
+            "careers": {
+                "keywords": ["career", "careers", "job", "hiring", "vacancy", "internship", "open role"],
+                "examples": ["are you hiring", "job openings at your company"],
+            },
+            "benefits": {
+                "keywords": ["benefits", "why choose you", "why work with you", "advantages", "perks"],
+                "examples": ["why should we work with you", "what are the benefits"],
+            },
+        }
+        alias = {
+            "technology": "technologies",
+            "tech stack": "technologies",
+            "tech_stack": "technologies",
+            "stack": "technologies",
+            "project": "projects",
+            "portfolio": "projects",
+            "case studies": "projects",
+            "career": "careers",
+            "hiring": "careers",
+            "jobs": "careers",
+            "benefit": "benefits",
+            "why us": "benefits",
+            "why choose us": "benefits",
+        }
+        found: Dict[str, Dict[str, Any]] = {}
+        tables = sec_data.get("tables", []) or []
+        text = sec_data.get("text", "") or ""
 
+        for tbl in tables:
+            if not tbl or len(tbl[0]) < 2:
+                continue
+            header = " ".join(str(c or "").lower() for c in tbl[0])
+            start = 1
+            # Single-page tables whose first header cell is the page name
+            first_h = str(tbl[0][0]).strip().lower()
+            if first_h in INFO_DEFAULTS or alias.get(first_h) in INFO_DEFAULTS:
+                page = alias.get(first_h, first_h)
+                body_parts = []
+                for row in tbl[1:]:
+                    cells = [str(c).strip() for c in row if str(c).strip()]
+                    if cells:
+                        body_parts.append(" • ".join(cells) if len(cells) > 1 else cells[0])
+                answer = "\n".join(f"• {p}" if not p.startswith("•") else p for p in body_parts if p)
+                if answer:
+                    meta = INFO_DEFAULTS[page]
+                    found[page] = {
+                        "name": page,
+                        "answer": answer,
+                        "keywords": list(meta["keywords"]),
+                        "examples": list(meta["examples"]),
+                        "enabled": True,
+                        "flow": None,
+                    }
+                continue
+
+            if "page" in header or "intent" in header or "answer" in header or "content" in header:
+                for row in tbl[start:]:
+                    if not row or not str(row[0]).strip():
+                        continue
+                    raw_name = str(row[0]).strip().lower()
+                    page = alias.get(raw_name, raw_name.replace(" ", "_"))
+                    if page not in INFO_DEFAULTS:
+                        continue
+                    answer = str(row[1]).strip() if len(row) > 1 else ""
+                    if len(row) > 2 and str(row[2]).strip():
+                        answer = (answer + "\n" + str(row[2]).strip()).strip()
+                    if not answer or answer.startswith("["):
+                        continue
+                    meta = INFO_DEFAULTS[page]
+                    found[page] = {
+                        "name": page,
+                        "answer": answer,
+                        "keywords": list(meta["keywords"]),
+                        "examples": list(meta["examples"]),
+                        "enabled": True,
+                        "flow": None,
+                    }
+
+        # Text blocks like ### Technologies\n...
+        if text and len(found) < 4:
+            for page in INFO_DEFAULTS:
+                if page in found:
+                    continue
+                m = re.search(
+                    rf"(?:^|\n)\s*(?:#+?\s*)?{page}\s*[:\n]+(.+?)(?=\n\s*(?:#+?\s*)?(?:technologies|projects|careers|benefits)\b|\Z)",
+                    text,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+                if m and m.group(1).strip():
+                    meta = INFO_DEFAULTS[page]
+                    found[page] = {
+                        "name": page,
+                        "answer": m.group(1).strip()[:4000],
+                        "keywords": list(meta["keywords"]),
+                        "examples": list(meta["examples"]),
+                        "enabled": True,
+                        "flow": None,
+                    }
+
+        return list(found.values())
+
+    # ──────────────────────────────────────────────────────────────────────────
     # 5. Staging Pipeline (Review & Edit Before Publish)
-
     # ──────────────────────────────────────────────────────────────────────────
-
-
 
     def stage_files(self, files_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-
         """Parse files section-by-section and return a reviewable staging draft without committing."""
-
         extracted_docs = []
-
         for f in files_data:
-
             fname = f.get("filename") or "onboarding_doc.docx"
-
             content = f.get("content") or b""
-
             if isinstance(content, str):
-
                 import base64
-
                 content = base64.b64decode(content)
-
             extracted_docs.append(self.extract_file_content(fname, content))
 
-
-
-        # Partition sections
-
         sections = self.partition_sections(extracted_docs)
-
-
-
-        # Extract components
-
         brand, business_hours, vertical = self.extract_brand_section(sections["brand"])
-
         menu_items = self.extract_menu_section(sections["menu"], vertical=vertical)
-
         offerings = self.extract_catalog_section(sections["catalog"], vertical=vertical)
-
         faqs, articles = self.extract_faq_section(sections["faqs"], brand_name=brand["name"], vertical=vertical)
-
+        intents = self.extract_info_pages_section(sections.get("info_pages") or {"text": "", "tables": []})
         guardrails = self.extract_guardrails_section(sections["guardrails"])
 
-
-
         staged_draft = {
-
             "status": "staged",
-
             "tenant_id": self.tenant_id,
-
             "vertical": vertical,
-
             "brand": brand,
-
             "business_hours": business_hours,
-
             "menu_items": menu_items,
-
             "offerings": offerings,
-
             "faqs": faqs,
-
             "knowledge_articles": articles,
-
+            "intents": intents,
             "guardrails": guardrails,
-
             "source_files": [d["filename"] for d in extracted_docs],
-
             "stats": {
-
                 "offerings_count": len(offerings),
-
                 "menu_items_count": len(menu_items),
-
                 "faqs_count": len(faqs),
-
                 "articles_count": len(articles),
-
+                "intents_count": len(intents),
             },
-
         }
-
         return staged_draft
 
 
@@ -1664,8 +1795,10 @@ CRITICAL INSTRUCTIONS:
                 "enabled": True if item.get("enabled", True) else False,
             }
             # Map kit "action" labels onto schema fields (MenuButton forbids "action")
-            if action in ("offerings", "catalog", "offering_details", "products"):
-                button_dict["intent"] = "offerings"
+            if action in ("offerings", "catalog", "offering_details", "products", "services"):
+                button_dict["intent"] = "offerings" if action != "services" else "services"
+            elif action in ("technologies", "projects", "careers", "benefits"):
+                button_dict["intent"] = action
             elif action in ("quote", "get_quote", "pricing"):
                 button_dict["flow"] = "get_quote"
             elif action in ("book_callback", "callback", "enquire", "inquire", "appointment"):
@@ -1692,21 +1825,37 @@ CRITICAL INSTRUCTIONS:
             ]
         summary["menu_buttons_count"] = len(menu_buttons)
 
-        # 3.4 Sanitize Intents
+        # 3.4 Sanitize Intents (preserve answer text for Technologies/Projects/Careers/Benefits)
         intents_raw = bifurcation.get("intents", []) or []
         clean_intents = []
         for intent in intents_raw:
             i_name = _slugify(intent.get("name") or "custom_intent")
+            if i_name in ("technology", "tech_stack"):
+                i_name = "technologies"
+            elif i_name == "project":
+                i_name = "projects"
+            elif i_name == "career":
+                i_name = "careers"
+            elif i_name == "benefit":
+                i_name = "benefits"
             examples = [ex.strip() for ex in intent.get("examples", []) if ex.strip()][:5]
             keywords = [kw.strip() for kw in intent.get("keywords", []) if kw.strip()][:10]
-            clean_intents.append({
+            answer = (intent.get("answer") or "").strip()
+            entry = {
                 "name": i_name,
                 "examples": examples,
                 "keywords": keywords,
                 "flow": intent.get("flow") or None,
-                "enabled": True,
-            })
+                "enabled": True if intent.get("enabled", True) else False,
+            }
+            if answer:
+                entry["answer"] = answer
+            clean_intents.append(entry)
         summary["intents_count"] = len(clean_intents)
+        summary["info_pages_updated"] = [
+            i["name"] for i in clean_intents
+            if i["name"] in ("technologies", "projects", "careers", "benefits") and i.get("answer")
+        ]
 
         # 3.5 Update Tenant Profile Draft (careful mode skips placeholder overwrites)
         draft = tenancy_store.get_draft(tenant_id) or {}
@@ -1751,11 +1900,40 @@ CRITICAL INSTRUCTIONS:
                     "buttons": menu_buttons,
                 }
 
+            # Always keep company info-page intents present for every tenant
+            existing_intents = {
+                i["name"]: dict(i)
+                for i in draft.get("intents", [])
+                if isinstance(i, dict) and i.get("name")
+            }
+            try:
+                from shared.tenancy.defaults import ensure_company_info_page_intents, get_vertical_defaults
+                for di in (get_vertical_defaults(vertical).get("intents") or []):
+                    name = di.get("name")
+                    if name in ("technologies", "projects", "careers", "benefits") and name not in existing_intents:
+                        existing_intents[name] = dict(di)
+            except Exception:
+                pass
+
             if clean_intents:
-                existing_intents = {i["name"]: i for i in draft.get("intents", []) if isinstance(i, dict) and i.get("name")}
                 for ci in clean_intents:
-                    existing_intents[ci["name"]] = ci
-                draft["intents"] = list(existing_intents.values())
+                    prev = existing_intents.get(ci["name"], {})
+                    merged = {**prev, **{k: v for k, v in ci.items() if v not in (None, "", [], {})}}
+                    # Never wipe a prior answer with an empty one
+                    if not ci.get("answer") and prev.get("answer"):
+                        merged["answer"] = prev["answer"]
+                    if not ci.get("examples") and prev.get("examples"):
+                        merged["examples"] = prev["examples"]
+                    if not ci.get("keywords") and prev.get("keywords"):
+                        merged["keywords"] = prev["keywords"]
+                    existing_intents[ci["name"]] = merged
+
+            if clean_intents or existing_intents:
+                try:
+                    from shared.tenancy.defaults import ensure_company_info_page_intents
+                    draft["intents"] = ensure_company_info_page_intents(list(existing_intents.values()))
+                except Exception:
+                    draft["intents"] = list(existing_intents.values())
 
             if "business_hours" in bifurcation and bifurcation.get("business_hours"):
                 draft["business_hours"] = _sanitize_business_hours(bifurcation["business_hours"])

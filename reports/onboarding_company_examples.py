@@ -110,6 +110,14 @@ COMPANY_EXAMPLES: Dict[str, Dict[str, Any]] = {
         "support_email": "sales@leewaysoftech.com",
         "support_phone": "+91 8690783030",
         "website": "https://leewaysoftech.com",
+        "menu_items": [
+            ("Our Services", "Web, mobile, AI & enterprise engineering", "💻 Services", "offerings"),
+            ("Technologies", "React, Python, Flutter, AWS & AI stack", "💻 Services", "technologies"),
+            ("Projects", "Portfolio, case studies & industries", "🏢 Company", "projects"),
+            ("Get a Quote", "Share requirements for a written estimate", "📋 Sales", "quote"),
+            ("Careers", "Open roles, internships & how to apply", "🏢 Company", "careers"),
+            ("Benefits", "Why teams choose Leeway Softech", "🏢 Company", "benefits"),
+        ],
         "catalog_columns": [
             "Service / Offering", "Category", "Starting Price / Model",
             "Tech Stack & Tools", "Typical Timeline", "Scope & Deliverables", "Image URL",
@@ -143,6 +151,43 @@ COMPANY_EXAMPLES: Dict[str, Dict[str, Any]] = {
                 f"{U}/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=800&q=80",
                 "leeway_cloud.jpg",
             ],
+        ],
+        "info_pages": [
+            (
+                "technologies",
+                "• Here's the stack we build with:\n"
+                "• *Frontend:* React.js, Next.js, Vue.js, Angular, TypeScript, Tailwind CSS\n"
+                "• *Backend:* Node.js, Python (FastAPI/Django), Golang, Laravel, .NET Core\n"
+                "• *AI & ML:* OpenAI, LangChain, PyTorch, TensorFlow, Hugging Face, Vertex AI, Azure OpenAI\n"
+                "• *Mobile:* iOS (Swift), Android (Kotlin), React Native, Flutter\n"
+                "• *Data & Cloud:* PostgreSQL, MySQL, MongoDB, Redis, AWS, Azure, GCP, Docker, CI/CD\n"
+                "• Tell us what you're building and we'll match the right stack.",
+            ),
+            (
+                "projects",
+                "• A snapshot of the work we deliver:\n"
+                "• *Web platforms:* e-commerce stores, customer portals and internal systems\n"
+                "• *Mobile apps:* customer and field-force apps for iOS and Android\n"
+                "• *Enterprise:* CRM/ERP integrations, workflow automation and analytics dashboards\n"
+                "• *Industries:* retail, healthcare, finance, logistics and education\n"
+                "• Client names and detailed case studies are shared only with written permission — ask for a walkthrough on a call.",
+            ),
+            (
+                "careers",
+                "💼 *Open roles at Leeway Softech:*\n\n"
+                "*Development*\n• Python Developer — 1–3 yrs · Ahmedabad\n• UI/UX Developer — 0–1 yrs\n\n"
+                "*Sales*\n• Sales Executive — 2–4 yrs\n\n"
+                "Forward your CV to hr@leewaysoftech.com with the role in the subject. Shortlisted candidates hear from us shortly.",
+            ),
+            (
+                "benefits",
+                "• Why teams choose Leeway Softech:\n"
+                "• *Dedicated point of contact* for every engagement\n"
+                "• *Agile delivery* with transparent sprints and demos\n"
+                "• *Learning culture* — mentorship and exposure across web, mobile, AI and cloud\n"
+                "• *Your IP stays yours* — code and assets handed over\n"
+                "• Post-launch support / AMC options and clear contracts + NDA on request",
+            ),
         ],
     },
     "tours_travel": {
@@ -351,6 +396,52 @@ COMPANY_EXAMPLES: Dict[str, Dict[str, Any]] = {
     },
 }
 
+# Fallback INFO PAGES for every vertical (used when company block has no info_pages yet).
+DEFAULT_INFO_PAGES: Dict[str, List[Tuple[str, str]]] = {
+    "real_estate": [
+        ("technologies", "• Construction & living tech we highlight:\n• Smart-home ready wiring, biometric locks, solar options\n• Digital site-visit booking and e-brochures\n• RERA-verified project data shared in chat\n• Ask for the tech sheet of any tower or villa."),
+        ("projects", "• Featured developments:\n• Skyline Elegance — 2 & 3 BHK residences\n• Skyline Grandeur — 4 BHK sky residences & penthouses\n• Skyline Horizon — Grade-A commercial\n• Skyline Orchard Green — gated villas\n• Schedule a site visit for a guided walkthrough."),
+        ("careers", "• Hiring across sales, CRM, site ops and documentation.\n• Share your CV with HR via support email.\n• Mention the role in the subject line."),
+        ("benefits", "• Why buyers choose us:\n• RERA-registered inventory and clear cost sheets\n• Complimentary site-visit cab in city limits\n• Bank tie-ups for home loans\n• Dedicated post-sales desk through possession."),
+    ],
+    "ecommerce": [
+        ("technologies", "• How we make & ship TrooGood:\n• Homemade-style recipes with jaggery and natural ingredients\n• Hygienic production and sealed packaging\n• Online ordering with live courier tracking\n• Ask about ingredients or shelf life for any SKU."),
+        ("projects", "• Product highlights:\n• Classic Peanut, Sesame, Dry Fruit and Millet chikkis\n• Seasonal limited packs and gift hampers\n• Distributor / bulk programs for retailers\n• Browse the catalog for live prices and pack sizes."),
+        ("careers", "• Openings in production, packing, sales and support.\n• Send your CV to support@troogood.com with the role in the subject."),
+        ("benefits", "• Why customers choose TrooGood:\n• Clean, homemade-style recipes\n• Transparent ingredients and pack sizes\n• Easy returns on eligible SKUs\n• Fast dispatch across India."),
+    ],
+    "tours_travel": [
+        ("technologies", "• How we plan your trip:\n• Curated itineraries with live hotel/flight inventory partners\n• Visa document checklists and appointment guidance\n• 24x7 duty phone while you travel\n• Ask for the tech/tools behind a specific package."),
+        ("projects", "• Signature experiences:\n• Best of Gujarat, Rann Utsav, Gir safari, Statue of Unity\n• Custom honeymoon, family and group itineraries\n• Domestic and international circuits on request\n• Ask for a sample day-wise plan."),
+        ("careers", "• We hire destination experts, operations and sales consultants.\n• Share your CV with info@99destinations.in."),
+        ("benefits", "• Why travellers choose us:\n• Gujarat Tourism–recognized operator\n• Customizable packages and visa assistance\n• Transparent inclusions and on-trip support\n• 20,000+ happy guests."),
+    ],
+    "healthcare": [
+        ("technologies", "• Clinical & digital tools:\n• Diagnostics (ECG, Echo, lab panels) with WhatsApp report delivery\n• Video consults for eligible specialties\n• Appointment scheduling in chat\n• Ask which wing or equipment supports your treatment."),
+        ("projects", "• Care programs we run:\n• Cardiology, Orthopedics, Pediatrics, Dermatology OPD\n• Executive and senior health checkup packages\n• Emergency triage with 24x7 hotline\n• Book a slot under the specialty you need."),
+        ("careers", "• Hiring doctors, nurses, lab techs and front-desk staff.\n• Share your CV with the careers / support desk."),
+        ("benefits", "• Why patients choose CareWell:\n• Multi-specialty cover under one roof\n• Insurance / TPA cashless where listed\n• Digital reports and easy reschedule\n• Emergency response when it matters."),
+    ],
+    "banking": [
+        ("technologies", "• Digital banking channels:\n• Mobile app & net banking (never share OTP/PIN in chat)\n• Instant card block and service requests\n• Secure KYC / video-KYC journeys\n• Ask how to activate a product — we guide steps, not passwords."),
+        ("projects", "• Flagship products:\n• Savings & FD schemes\n• Cashback / travel cards\n• Home, personal and vehicle loans\n• Browse offerings or ask eligibility questions."),
+        ("careers", "• Careers across branches, credit and digital teams.\n• Apply via the official careers channel or support email."),
+        ("benefits", "• Why customers bank with Meridian:\n• Clear product guides without phishing asks\n• Fast card-block and fraud escalation\n• Branch/ATM locator help\n• Published grievance timelines."),
+    ],
+    "finance": [
+        ("technologies", "• How we process loans digitally:\n• PLANET app / web journeys with e-KYC\n• Dealer-point two-wheeler financing\n• Secure document vaulting for gold loans\n• We never ask for OTP or MPIN on WhatsApp."),
+        ("projects", "• Lending programs:\n• Two-wheeler, personal, gold, home/LAP and SME finance\n• Balance transfer and top-up options where eligible\n• Ask which product fits your need."),
+        ("careers", "• Hiring credit, sales and customer-care roles.\n• Share your CV via customercare@ltfs.com with the role named."),
+        ("benefits", "• Why borrowers choose L&T Finance:\n• Wide product suite and partner network\n• Fast in-principle decisions on eligible profiles\n• Transparent grievance redressal\n• Chat for guidance — never for passwords."),
+    ],
+    "generic": [
+        ("technologies", "• Platforms & tools we operate with:\n• Tracking systems, EDI/API partner links, warehouse WMS\n• Ask which stack supports your lane or fulfilment need."),
+        ("projects", "• Delivery programs:\n• Domestic express, air cargo, ocean FCL/LCL, 3PL warehousing\n• Ask for a lane quote or SLA summary."),
+        ("careers", "• Hiring ops, warehouse and sales talent.\n• Send your CV to care@apexlogistics.com."),
+        ("benefits", "• Why shippers choose Apex:\n• End-to-end visibility\n• Customs and documentation support\n• Flexible domestic and international lanes\n• Dedicated account coordination."),
+    ],
+}
+
 
 def apply_company_examples(configs: Dict[str, Dict[str, Any]]) -> None:
     """Overlay real-company brand + catalog (with image URL + local filename)."""
@@ -366,6 +457,9 @@ def apply_company_examples(configs: Dict[str, Dict[str, Any]]) -> None:
         cfg["support_email"] = ex.get("support_email")
         cfg["support_phone"] = ex.get("support_phone")
         cfg["website"] = ex.get("website")
+        if ex.get("menu_items"):
+            cfg["menu_items"] = list(ex["menu_items"])
+        cfg["info_pages"] = list(ex.get("info_pages") or DEFAULT_INFO_PAGES.get(key) or [])
         cfg["catalog_columns"] = list(ex["catalog_columns"])
         # Store rows with trailing local filename stripped from table cells
         table_rows: List[List[str]] = []

@@ -71,6 +71,58 @@ _SUPPORT = {
                  "wrong with", "not right", "broken"],
 }
 
+# Shared company info-page intents (sidebar: Projects / Technologies / Careers / Benefits).
+# Every vertical gets these so kit upload and the console panels work for all tenants.
+_INFO_TECHNOLOGIES = {
+    "name": "technologies",
+    "examples": ["what technologies do you use", "what is your tech stack", "tools you work with"],
+    "keywords": ["technologies", "technology", "tech stack", "stack", "framework", "tools",
+                 "systems", "platform"],
+    "answer": (
+        "• Here's how we work with technology:\n"
+        "• We use modern tools and platforms suited to each engagement.\n"
+        "• Ask about a specific product, project, or service and we'll share the relevant stack.\n"
+        "• Tap *Request a Callback* if you'd like a detailed walkthrough."
+    ),
+}
+_INFO_PROJECTS = {
+    "name": "projects",
+    "examples": ["show me your projects", "what have you delivered", "case studies", "portfolio"],
+    "keywords": ["projects", "project", "portfolio", "case study", "case studies", "our work",
+                 "clients", "experience"],
+    "answer": (
+        "• A snapshot of the work we deliver:\n"
+        "• Browse our catalog for live offerings, or ask for examples in your industry.\n"
+        "• Detailed case studies are shared on request with client permission.\n"
+        "• Tap *Get a Quote* or *Request a Callback* to discuss a similar engagement."
+    ),
+}
+_INFO_CAREERS = {
+    "name": "careers",
+    "examples": ["are you hiring", "job openings", "careers", "internship"],
+    "keywords": ["career", "careers", "job", "hiring", "vacancy", "internship", "open role"],
+    "answer": (
+        "• We're glad you're interested in joining us:\n"
+        "• Share your CV and the role you're targeting with our team.\n"
+        "• Internships and full-time openings are posted as they open.\n"
+        "• Tap *Customer Support* or ask for HR contact details to apply."
+    ),
+}
+_INFO_BENEFITS = {
+    "name": "benefits",
+    "examples": ["why should we work with you", "what are the benefits", "why choose you"],
+    "keywords": ["benefits", "why choose you", "why work with you", "advantages", "perks",
+                 "what makes you different"],
+    "answer": (
+        "• Why teams choose us:\n"
+        "• Clear communication and a dedicated point of contact\n"
+        "• Transparent delivery and documented outcomes\n"
+        "• Support after go-live / purchase as scoped in your agreement\n"
+        "• Ask us what matters most for your use case — we'll tailor the answer."
+    ),
+}
+_COMPANY_INFO_PAGES = (_INFO_TECHNOLOGIES, _INFO_PROJECTS, _INFO_CAREERS, _INFO_BENEFITS)
+
 
 # ── ecommerce (TrooGood) ───────────────────────────────────────────────────
 
@@ -1096,6 +1148,39 @@ VERTICAL_DEFAULTS: Dict[str, Dict[str, Any]] = {
 }
 
 
+def ensure_company_info_page_intents(intents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Guarantee projects/technologies/careers/benefits exist (for every tenant)."""
+    by_name = {i.get("name"): dict(i) for i in intents if isinstance(i, dict) and i.get("name")}
+    for page in _COMPANY_INFO_PAGES:
+        name = page["name"]
+        if name not in by_name:
+            by_name[name] = dict(page)
+            continue
+        existing = by_name[name]
+        # Fill missing answer / keywords / examples without wiping richer vertical copy
+        for key in ("answer", "keywords", "examples"):
+            if not existing.get(key) and page.get(key):
+                existing[key] = deepcopy(page[key])
+        existing.setdefault("enabled", True)
+        by_name[name] = existing
+    # Keep original order, append any newly added info pages at the end
+    ordered: List[Dict[str, Any]] = []
+    seen = set()
+    for i in intents:
+        n = i.get("name") if isinstance(i, dict) else None
+        if n and n in by_name and n not in seen:
+            ordered.append(by_name[n])
+            seen.add(n)
+    for page in _COMPANY_INFO_PAGES:
+        if page["name"] not in seen:
+            ordered.append(by_name[page["name"]])
+            seen.add(page["name"])
+    for n, i in by_name.items():
+        if n not in seen:
+            ordered.append(i)
+    return ordered
+
+
 def get_vertical_defaults(vertical: str) -> Dict[str, Any]:
     """Deep copy of the default layer for a vertical (safe to mutate)."""
     layer = deepcopy(VERTICAL_DEFAULTS.get(vertical, VERTICAL_DEFAULTS["generic"]))
@@ -1105,6 +1190,7 @@ def get_vertical_defaults(vertical: str) -> Dict[str, Any]:
     if layer.get("vertical") == "tours_travel":
         flows.extend(deepcopy(TOURS_FLOWS))
     layer["flows"] = flows
+    layer["intents"] = ensure_company_info_page_intents(list(layer.get("intents") or []))
     return layer
 
 

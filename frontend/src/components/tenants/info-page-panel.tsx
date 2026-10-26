@@ -16,12 +16,11 @@ import { useToast } from '@/components/ui/toast'
 import { useResolved } from '@/components/tenants/hooks'
 
 /**
- * The informational pages of the software & IT vertical — projects,
- * technologies, careers, benefits. Each is one intent with answer text: no
- * flow, no backend service, the text is the whole page. The panel reads what
- * the bot answers today (the resolved profile), edits it into the working
- * draft and publishes, the same save-draft/publish contract as the profile
- * editor.
+ * Company info pages for every tenant — projects, technologies, careers,
+ * benefits. Each is one intent with answer text: no flow, no backend service,
+ * the text is the whole page. Filled from vertical defaults, kit upload
+ * ([SECTION: INFO PAGES]), or manual edit. Same save-draft/publish contract
+ * as the profile editor.
  */
 
 export type InfoPageId = 'projects' | 'technologies' | 'careers' | 'benefits'
