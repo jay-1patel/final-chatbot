@@ -125,6 +125,8 @@ _PHONE_COUNTRY_CODES = frozenset((
     '91', '92', '93', '94', '95', '98', '1', '7',
 ))
 _URL_RE = re.compile(r"^(https?://)?([\w-]+\.)+[A-Za-z]{2,}(:\d+)?(/\S*)?$")
+# First URL-shaped token inside noisy text, e.g. "https://x.co (rates: https://y.co)".
+_URL_TOKEN_RE = re.compile(r"https?://[^\s()<>\",;]+|(?<![\w/.-])[\w-]+\.[A-Za-z]{2,}(?:/\S*)?", re.I)
 
 
 def _require_email(value: str, field: str) -> str:
@@ -144,7 +146,23 @@ def _phone_ok(compact: str) -> bool:
     )
 
 
-def _extract_first_valid_phone(value: str) -> str:
+def extract_first_url(value: str) -> str:
+    """Pick the first valid URL from kit/LLM text that wraps it in notes."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    candidates = [raw]
+    candidates.extend(m.group(0) for m in _URL_TOKEN_RE.finditer(raw))
+    for candidate in candidates:
+        cand = candidate.strip().rstrip(").,;:]")
+        if _URL_RE.fullmatch(cand):
+            if not cand.lower().startswith(("http://", "https://")):
+                cand = "https://" + cand
+            return cand
+    return ""
+
+
+def extract_first_valid_phone(value: str) -> str:
     """Pick the first +CC 10-digit number from kits that paste multi-line contacts."""
     raw = (value or "").strip()
     if not raw:
@@ -173,7 +191,7 @@ def _require_phone(value: str, field: str) -> str:
     if _phone_ok(compact):
         return value
     # Kits often ship "toll-free / landline / WhatsApp +91 …" — keep the first valid mobile.
-    extracted = _extract_first_valid_phone(raw)
+    extracted = extract_first_valid_phone(raw)
     if extracted:
         return extracted
     raise ValueError(
@@ -183,9 +201,14 @@ def _require_phone(value: str, field: str) -> str:
 
 def _require_url(value: str, field: str) -> str:
     v = (value or "").strip()
-    if v and not _URL_RE.fullmatch(v):
-        raise ValueError(f"{field} '{v}' is not a valid website URL")
-    return value
+    if not v or _URL_RE.fullmatch(v):
+        return value
+    # Kits/LLM extracts paste "https://x.co (rates & pages: https://y.co)" —
+    # keep the first URL instead of failing the whole profile publish.
+    extracted = extract_first_url(v)
+    if extracted:
+        return extracted
+    raise ValueError(f"{field} '{v}' is not a valid website URL")
 
 
 def missing_contact_fields(brand) -> List[str]:

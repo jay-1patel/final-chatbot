@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import string
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -31,6 +32,7 @@ import openpyxl
 from database import (
     get_db_context,
     list_products,
+    product_slug_taken,
     record_admin_audit_event,
     save_admin_file,
     save_chunks,
@@ -50,6 +52,12 @@ from services.kit_profile_extract import (
     parse_brand_kit_tables,
     parse_guardrails_kit_tables,
     parse_operations_domain_tables,
+)
+from services.bifurcation_guards import (
+    filter_offerings_for_tenant,
+    is_placeholder_brand_value,
+    merge_brand_fill_empty,
+    resolve_locked_vertical,
 )
 
 logger = logging.getLogger("auto_bifurcator")
@@ -132,6 +140,23 @@ def _slugify(text: str) -> str:
     text = re.sub(r"[^\w\s-]", "", text)
     text = re.sub(r"[\s_-]+", "-", text)
     return text.strip("-") or "item"
+
+
+def _ensure_free_slug(base: str, used_slugs: set) -> str:
+    """Find a product slug that is not taken.
+
+    products.slug is UNIQUE across ALL tenants while the catalog here is
+    per-tenant, so a second tenant uploading "Personal Loan" would hit the
+    first tenant's row. Suffix (-2, -3…) until the slug is free everywhere
+    and mark it used for the rest of this batch.
+    """
+    candidate = (base or "item").strip("-") or "item"
+    n = 2
+    while candidate in used_slugs or product_slug_taken(candidate):
+        candidate = f"{base}-{n}"
+        n += 1
+    used_slugs.add(candidate)
+    return candidate
 
 
 def _menu_button_id(text: str) -> str:
@@ -296,34 +321,8 @@ def _sanitize_business_hours(raw_hours: Any) -> Dict[str, Any]:
 
 
 def _is_placeholder_brand_value(key: str, value: Any, tenant_id: str) -> bool:
-    """True when a brand field looks invented rather than extracted from docs."""
-    if value is None:
-        return True
-    text = str(value).strip()
-    if not text:
-        return True
-    lowered = text.lower()
-    tid = (tenant_id or "").strip().lower()
-    title_tid = tid.replace("-", " ").title()
-    placeholders = {
-        "name": {tid, tid.replace("-", " "), title_tid.lower()},
-        "bot_name": {f"{tid} assistant", f"{title_tid.lower()} assistant"},
-        "website": {
-            f"https://www.{tid}.com",
-            f"http://www.{tid}.com",
-            f"www.{tid}.com",
-            f"https://{tid}.com",
-        },
-        "support_email": {f"support@{tid}.com"},
-        "support_phone": {"+91 9800000000", "+919800000000", "9800000000"},
-        "signature": {
-            f"{title_tid} — at your service.".lower(),
-            f"{title_tid} - at your service.".lower(),
-        },
-        "tagline": set(),
-    }
-    known = placeholders.get(key, set())
-    return lowered in known
+    # Compatibility wrapper — real logic lives in bifurcation_guards.
+    return is_placeholder_brand_value(key, value, tenant_id)
 
 
 # ── Full-corpus helpers (kit-agnostic uploads) ──────────────────────────────
@@ -1007,9 +1006,9 @@ Output a strictly valid JSON object:
     "name": "Official Company / Entity Name",
     "bot_name": "Friendly AI Assistant Name",
     "tagline": "1-2 sentence value proposition",
-    "website": "Valid URL",
+    "website": "ONE bare URL only, e.g. https://example.com (no notes, no second URL)",
     "support_email": "Official support email",
-    "support_phone": "Phone with country code",
+    "support_phone": "ONE phone with country code, e.g. +91 9876543210 (no toll-free lists, no labels)",
     "signature": "Brand sign-off"
   }},
   "business_hours": {{
@@ -2585,15 +2584,17 @@ RULES:
         self,
         bifurcation: Dict[str, Any],
         raw_files: List[Dict[str, Any]],
-        auto_publish: bool = True,
-        careful_brand_merge: bool = False,
+        auto_publish: bool = False,
+        careful_brand_merge: bool = True,
         source_file: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Apply extracted data across database tables, profile draft, and knowledge base.
 
-        When ``careful_brand_merge`` is True (per-upload auto-route), brand / menu /
-        intents are only written when the LLM returned real non-placeholder values,
-        so a FAQ PDF cannot wipe an existing tenant profile with invented defaults.
+        Safety defaults (prevent cross-tenant / cross-vertical contamination):
+          * ``auto_publish=False`` — offerings stage as ``is_active=0`` until review
+          * ``careful_brand_merge=True`` — only fill empty/placeholder brand fields
+          * Tenant vertical is locked; PDF-guessed vertical cannot flip it
+          * Off-vertical and junk offering names are rejected
         """
         tenant_id = self.tenant_id
         kb_source = source_file or "auto_bifurcated_docs.md"
@@ -2605,17 +2606,24 @@ RULES:
             "intents_count": 0,
             "offerings_created": 0,
             "offerings_sample": [],
+            "offerings_rejected": 0,
+            "offerings_rejected_sample": [],
             "faqs_saved": 0,
             "kb_chunks_indexed": 0,
             "brand_updated": False,
             "version": 0,
             "status": "configured",
+            "staged": not bool(auto_publish),
         }
 
-        # 3.1 Sanitize vertical
-        vertical = bifurcation.get("vertical", "generic")
-        if vertical not in VALID_VERTICALS:
-            vertical = "generic"
+        # 3.1 Sanitize + LOCK vertical to the tenant's registered vertical
+        extracted_vertical = bifurcation.get("vertical", "generic")
+        if extracted_vertical not in VALID_VERTICALS:
+            extracted_vertical = "generic"
+        vertical = resolve_locked_vertical(tenant_id, extracted_vertical)
+        summary["vertical"] = vertical
+        summary["vertical_extracted"] = extracted_vertical
+        summary["vertical_locked"] = vertical != extracted_vertical and vertical != "generic"
 
         # 3.2 Sanitize Brand — keep raw signals separate from filled defaults
         brand_raw = bifurcation.get("brand", {}) or {}
@@ -2623,7 +2631,15 @@ RULES:
         for key in ("name", "bot_name", "tagline", "website", "support_email", "support_phone", "signature", "logo_url"):
             raw_val = brand_raw.get(key)
             if raw_val and not _is_placeholder_brand_value(key, raw_val, tenant_id):
-                real_brand[key] = str(raw_val).strip()
+                val = str(raw_val).strip()
+                # PDF/LLM extracts paste notes around contacts
+                # ("https://x.co (rates: https://y)", "1800 … · +91 … (overseas)").
+                # Keep one clean value so the published profile stays loadable.
+                if key == "website":
+                    val = tenancy_schemas.extract_first_url(val) or val
+                elif key == "support_phone":
+                    val = tenancy_schemas.extract_first_valid_phone(val) or val
+                real_brand[key] = val
 
         clean_brand = {
             "name": real_brand.get("name") or tenant_id.replace("-", " ").title(),
@@ -2699,7 +2715,7 @@ RULES:
             if i["name"] in ("technologies", "projects", "careers", "benefits") and i.get("answer")
         ]
 
-        # 3.5 Update Tenant Profile Draft (careful mode skips placeholder overwrites)
+        # 3.5 Update Tenant Profile Draft (fill-empty brand; never wipe real profile)
         draft = tenancy_store.get_draft(tenant_id) or {}
         existing_brand = dict(draft.get("brand") or {})
         should_touch_profile = (
@@ -2712,26 +2728,41 @@ RULES:
 
         if should_touch_profile:
             draft["tenant_id"] = tenant_id
-            if not careful_brand_merge or vertical != "generic" or not draft.get("vertical"):
+            # Never let a random PDF flip an already-set tenant vertical.
+            existing_vertical = str(draft.get("vertical") or "").strip().lower()
+            if existing_vertical not in VALID_VERTICALS or existing_vertical == "generic":
                 draft["vertical"] = vertical
+            else:
+                draft["vertical"] = existing_vertical
+                vertical = existing_vertical
 
             if careful_brand_merge:
-                merged_brand = {**existing_brand}
-                for k, v in real_brand.items():
-                    merged_brand[k] = v
+                merged_brand = merge_brand_fill_empty(existing_brand, real_brand, tenant_id)
                 if merged_brand.get("website") and not str(merged_brand["website"]).startswith("http"):
                     merged_brand["website"] = "https://" + str(merged_brand["website"]).lstrip("/")
                 draft["brand"] = merged_brand or existing_brand
-                if real_brand.get("name"):
-                    draft["display_name"] = real_brand["name"]
+                # Only replace display_name when the tenant has none / placeholder
+                incoming_name = real_brand.get("name")
+                if incoming_name and (
+                    not draft.get("display_name")
+                    or is_placeholder_brand_value("name", draft.get("display_name"), tenant_id)
+                ):
+                    draft["display_name"] = incoming_name
                 summary["brand"] = draft.get("brand") or {}
-                summary["brand_updated"] = bool(real_brand)
+                summary["brand_updated"] = bool(
+                    any(
+                        (draft.get("brand") or {}).get(k) != existing_brand.get(k)
+                        for k in ("name", "bot_name", "tagline", "website", "support_email", "support_phone", "signature", "logo_url")
+                    )
+                )
             else:
                 draft["display_name"] = clean_brand["name"]
                 draft["brand"] = clean_brand
                 summary["brand_updated"] = True
 
-            if has_real_menu or not careful_brand_merge:
+            # Keep an existing menu unless this extract truly brought buttons
+            # (or caller opted into a full non-careful reconfigure).
+            if has_real_menu or (not careful_brand_merge and not draft.get("menu")):
                 brand_for_menu = draft.get("brand") or clean_brand
                 draft["menu"] = {
                     "key": "kb_main",
@@ -2860,27 +2891,60 @@ RULES:
             with get_db_context() as conn:
                 tenancy_store.save_draft(tenant_id, draft, updated_by=self.actor.get("username", "admin"), conn=conn)
                 if auto_publish:
+                    # store.publish_version documents "the caller is
+                    # responsible for validating the merged profile before
+                    # this" — without the gate a junk website/phone from the
+                    # PDF used to publish a version the loader then rejected
+                    # (PROFILE_INVALID), degrading the live tenant.
                     try:
-                        version = tenancy_store.publish_version(
-                            tenant_id, draft, published_by=self.actor.get("username", "admin"), conn=conn
+                        tenancy_loader.validate_merged_profile(tenant_id, draft)
+                    except Exception as val_exc:
+                        summary["publish_blocked"] = str(val_exc)[:400]
+                        logger.error(
+                            "AUTO_BIFURCATION_PUBLISH_BLOCKED | tenant=%s | draft kept unpublished: %s",
+                            tenant_id, val_exc,
                         )
-                        summary["version"] = version
-                        tenancy_cache.purge(tenant_id)
-                        logger.info("AUTO_BIFURCATION_PUBLISHED | tenant=%s | v=%s", tenant_id, version)
-                    except Exception as pub_exc:
-                        logger.warning("Could not auto-publish version directly: %s", pub_exc)
+                    else:
+                        try:
+                            version = tenancy_store.publish_version(
+                                tenant_id, draft, published_by=self.actor.get("username", "admin"), conn=conn
+                            )
+                            summary["version"] = version
+                            tenancy_cache.purge(tenant_id)
+                            logger.info("AUTO_BIFURCATION_PUBLISHED | tenant=%s | v=%s", tenant_id, version)
+                        except Exception as pub_exc:
+                            logger.warning("Could not auto-publish version directly: %s", pub_exc)
 
             try:
                 tenancy_loader.write_client_config_file(tenant_id, draft)
             except Exception as file_exc:
                 logger.warning("Could not sync client config file: %s", file_exc)
 
-        # 3.6 Insert Offerings into Catalog (products table) — always live (is_active=1)
+        # 3.6 Insert Offerings into Catalog — staged unless auto_publish
         offerings_raw = bifurcation.get("offerings", []) or []
-        existing_products = {p.get("name", "").lower(): p for p in list_products(tenant_id=tenant_id, active_only=False)}
-        inserted_count = 0
+        accepted_offerings, rejected_offerings = filter_offerings_for_tenant(
+            offerings_raw, locked_vertical=vertical
+        )
+        summary["offerings_rejected"] = len(rejected_offerings)
+        summary["offerings_rejected_sample"] = [
+            f"{r.get('name')} ({r.get('reason')})" for r in rejected_offerings[:8]
+        ]
+        if rejected_offerings:
+            logger.info(
+                "BIFURCATION_OFFERINGS_REJECTED | tenant=%s | vertical=%s | count=%s | sample=%s",
+                tenant_id, vertical, len(rejected_offerings), summary["offerings_rejected_sample"],
+            )
 
-        for off in offerings_raw:
+        existing_products = {p.get("name", "").lower(): p for p in list_products(tenant_id=tenant_id, active_only=False)}
+        # Slugs already held by this tenant's rows; other tenants are checked
+        # live in _ensure_free_slug because products.slug is UNIQUE globally.
+        used_slugs = {
+            (p.get("slug") or "").lower() for p in existing_products.values() if p.get("slug")
+        }
+        inserted_count = 0
+        active_flag = 1 if auto_publish else 0
+
+        for off in accepted_offerings:
             name = (off.get("name") or "").strip()
             if not name:
                 continue
@@ -2901,7 +2965,7 @@ RULES:
             if media_url and media_url.lower().endswith(".pdf"):
                 media_type = "pdf"
 
-            if name.lower() in existing_products:
+            if name.lower() in existing_products and existing_products[name.lower()].get("id"):
                 prod_id = existing_products[name.lower()]["id"]
                 update_kwargs = dict(
                     tenant_id=tenant_id,
@@ -2910,27 +2974,38 @@ RULES:
                     short_description=short_desc,
                     category=cat,
                     attrs_json=attrs,
-                    is_active=1,
+                    is_active=active_flag,
                 )
                 if media_url:
                     update_kwargs["media_url"] = media_url
                     update_kwargs["media_type"] = media_type
                 update_product(prod_id, **update_kwargs)
             else:
-                save_product(
-                    name=name,
-                    slug=slug,
-                    category=cat,
-                    price=price,
-                    short_description=short_desc,
-                    description=desc,
-                    attrs_json=attrs,
-                    media_url=media_url,
-                    media_type=media_type,
-                    tenant_id=tenant_id,
-                    actor=self.actor,
-                    is_active=1,
-                )
+                slug = _ensure_free_slug(slug, used_slugs)
+                try:
+                    prod_id = save_product(
+                        name=name,
+                        slug=slug,
+                        category=cat,
+                        price=price,
+                        short_description=short_desc,
+                        description=desc,
+                        attrs_json=attrs,
+                        media_url=media_url,
+                        media_type=media_type,
+                        tenant_id=tenant_id,
+                        actor=self.actor,
+                        is_active=active_flag,
+                    )
+                except sqlite3.IntegrityError as slug_exc:
+                    # Same-name/same-slug races must not abort the whole
+                    # publish after the profile version is already out.
+                    logger.warning(
+                        "OFFERING_INSERT_SKIPPED | tenant=%s | name=%s | slug=%s | %s",
+                        tenant_id, name, slug, slug_exc,
+                    )
+                    continue
+                existing_products[name.lower()] = {"id": prod_id, "slug": slug}
                 inserted_count += 1
                 if len(summary["offerings_sample"]) < 5:
                     summary["offerings_sample"].append(name)
@@ -3095,17 +3170,21 @@ RULES:
         self,
         filename: str,
         content: bytes,
-        auto_publish: bool = True,
+        auto_publish: bool = False,
         careful_brand_merge: bool = True,
     ) -> Dict[str, Any]:
         """Extract + bifurcate a single already-saved upload for this tenant."""
         doc_data = self.extract_file_content(filename, content)
         bifurcation = self.bifurcate_with_llm([doc_data])
+        locked_vertical = resolve_locked_vertical(
+            self.tenant_id, bifurcation.get("vertical") or "generic"
+        )
+        bifurcation["vertical"] = locked_vertical
         # Guarantee vertical-aware menu when LLM/heuristics left it thin
         if len(bifurcation.get("menu_items") or []) < 3:
             bifurcation["menu_items"] = self.extract_menu_section(
                 {"text": "", "tables": []},
-                vertical=bifurcation.get("vertical") or "generic",
+                vertical=locked_vertical,
             )
         result = self.apply_bifurcation(
             bifurcation=bifurcation,
@@ -3125,9 +3204,14 @@ RULES:
     def process_files(
         self,
         files_data: List[Dict[str, Any]],
-        auto_publish: bool = True,
+        auto_publish: bool = False,
+        careful_brand_merge: bool = True,
     ) -> Dict[str, Any]:
-        """End-to-end extraction, bifurcation, and system configuration."""
+        """End-to-end extraction, bifurcation, and system configuration.
+
+        Defaults to staged offerings + careful brand merge so a wrong PDF cannot
+        go live or overwrite an existing tenant profile.
+        """
         extracted_docs = []
 
         # Ensure upload directory exists
@@ -3165,14 +3249,17 @@ RULES:
 
         # Run LLM semantic bifurcation
         bifurcation = self.bifurcate_with_llm(extracted_docs)
+        locked_vertical = resolve_locked_vertical(
+            self.tenant_id, bifurcation.get("vertical") or "generic"
+        )
+        bifurcation["vertical"] = locked_vertical
 
-        # Apply bifurcation across all components (full reconfigure — not careful merge)
         primary_source = extracted_docs[0]["filename"] if extracted_docs else "auto_bifurcated_docs.md"
         result_summary = self.apply_bifurcation(
             bifurcation=bifurcation,
             raw_files=extracted_docs,
             auto_publish=auto_publish,
-            careful_brand_merge=False,
+            careful_brand_merge=careful_brand_merge,
             source_file=primary_source,
         )
 

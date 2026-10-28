@@ -26,6 +26,21 @@ from PIL import Image
 
 import database as db
 
+try:
+    from services.bifurcation_guards import (
+        filter_offerings_for_tenant,
+        is_junk_offering_name,
+        offering_matches_vertical,
+        resolve_locked_vertical,
+    )
+except ImportError:  # pragma: no cover
+    from backend.services.bifurcation_guards import (
+        filter_offerings_for_tenant,
+        is_junk_offering_name,
+        offering_matches_vertical,
+        resolve_locked_vertical,
+    )
+
 logger = logging.getLogger("pdf_bifurcator")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -456,7 +471,7 @@ async def bifurcate_and_ingest_pdf(
     """Universal pipeline: extracts, classifies, and routes all content in the PDF
     into Products, FAQs, Knowledge Base, Menu Suggestions, and Business Profile.
     """
-    vertical = _get_tenant_vertical(tenant_id)
+    vertical = resolve_locked_vertical(tenant_id, _get_tenant_vertical(tenant_id))
     safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", filename)
     doc_id = uuid.uuid4().hex[:8]
     brochure_filename = f"{tenant_id}_{doc_id}_{safe_name}"
@@ -479,6 +494,7 @@ async def bifurcate_and_ingest_pdf(
 
     total_pages = len(doc)
     all_staged_products = []
+    rejected_products = []
     all_faqs = []
     all_kb_chunks = []
     all_menu_suggestions = []
@@ -508,11 +524,22 @@ async def bifurcate_and_ingest_pdf(
         sys_prompt, usr_prompt = build_bifurcation_prompt(vertical, text, default_category)
         parsed = await call_bifurcation_llm(sys_prompt, usr_prompt)
 
-        # 1. Process Products
+        # 1. Process Products — junk + off-vertical rows are rejected
         prods = parsed.get("products") or []
-        for idx, prod in enumerate(prods):
+        accepted_prods, rejected_prods = filter_offerings_for_tenant(prods, locked_vertical=vertical)
+        rejected_products.extend(rejected_prods)
+        for idx, prod in enumerate(accepted_prods):
             name = (prod.get("name") or "").strip()
-            if not name or len(name) < 2 or name.lower() in seen_products:
+            if not name or is_junk_offering_name(name) or name.lower() in seen_products:
+                continue
+            if not offering_matches_vertical(
+                name,
+                prod.get("category") or "",
+                prod.get("description") or prod.get("short_description") or "",
+                prod.get("attrs"),
+                locked_vertical=vertical,
+            ):
+                rejected_products.append({"name": name, "reason": "off_vertical", "page": page_num})
                 continue
             seen_products.add(name.lower())
 
@@ -627,19 +654,31 @@ async def bifurcate_and_ingest_pdf(
         except Exception as e:
             logger.debug("Could not trigger FAQ index rebuild: %s", e)
 
+    if rejected_products:
+        logger.info(
+            "PDF_BIFURCATION_REJECTED | tenant=%s | vertical=%s | count=%s | sample=%s",
+            tenant_id,
+            vertical,
+            len(rejected_products),
+            [r.get("name") for r in rejected_products[:8]],
+        )
+
     return {
         "success": True,
         "filename": filename,
         "brochure_url": brochure_url,
         "total_pages": total_pages,
+        "vertical": vertical,
         "summary": {
             "products_staged": len(all_staged_products),
+            "products_rejected": len(rejected_products),
             "faqs_ingested": len(all_faqs),
             "kb_chunks_ingested": len(all_kb_chunks),
             "menu_suggestions_count": len(all_menu_suggestions),
             "business_info_detected": merged_business_info,
         },
         "staged_products": all_staged_products,
+        "rejected_products": rejected_products[:50],
         "faqs": all_faqs,
         "kb_chunks": all_kb_chunks,
         "menu_suggestions": all_menu_suggestions,

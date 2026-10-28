@@ -2863,6 +2863,19 @@ def get_product_by_slug(slug: str, tenant_id: str = None) -> dict:
     return _deserialize_product(dict(row)) if row else None
 
 
+def product_slug_taken(slug: str) -> bool:
+    """True when ANY row holds this slug.
+
+    products.slug is UNIQUE across the whole table (not per tenant), so a
+    per-tenant lookup is not enough before an INSERT from another tenant's PDF.
+    """
+    with get_db_context() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM products WHERE slug = ? LIMIT 1", (slug,)
+        ).fetchone()
+    return row is not None
+
+
 def list_products(category: str = None, active_only: bool = True, limit: int = 100,
                   tenant_id: str = None) -> list:
     t_ids = _resolve_tenant_ids(tenant_id)

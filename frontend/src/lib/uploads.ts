@@ -384,7 +384,7 @@ export const uploadsApi = {
       `${base(tenantId)}/files/${encodeURIComponent(filename)}`,
     ),
 
-  autoBifurcate: async (tenantId: string, files: File[], autoPublish = true) => {
+  autoBifurcate: async (tenantId: string, files: File[], autoPublish = false) => {
     const payload = await Promise.all(
       files.map(async (file) => ({
         filename: file.name,
@@ -401,7 +401,8 @@ export const uploadsApi = {
   bifurcateExisting: (tenantId: string, filenames?: string[]) =>
     api.post<BifurcationResult>(`${base(tenantId)}/files/bifurcate-existing`, {
       filenames,
-      auto_publish: true,
+      // Stage offerings for review — wrong PDFs must not go live automatically.
+      auto_publish: false,
     }),
 
   /** Fetch the raw file with the bearer token; caller revokes the object URL. */

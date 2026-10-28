@@ -157,7 +157,7 @@ async def upload_tenant_file(
 async def auto_bifurcate_tenant_files(
     request: Request,
     tenant_id: str,
-    auto_publish: bool = Query(True),
+    auto_publish: bool = Query(False),
     principal: dict = Depends(require_tenant_access()),
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ):
@@ -169,8 +169,10 @@ async def auto_bifurcate_tenant_files(
       1. Brand Profile & Hours -> clients/{tenant_id}/config.json & TenantProfile
       2. WhatsApp Interactive Menu -> MenuButtons (<=24 title, <=72 desc)
       3. Conversational Intents & Flows -> IntentSpec
-      4. Products & Catalog -> SQLite products table
+      4. Products & Catalog -> SQLite products table (staged unless auto_publish)
       5. Knowledge Base & FAQs -> Markdown files, Chunks, Vector RAG Index
+
+    Defaults to ``auto_publish=False`` so offerings stay inactive until reviewed.
     """
     import base64
     uploader = _resolve_uploader(request, principal, credentials)
@@ -228,7 +230,7 @@ async def auto_bifurcate_existing_files(
     uploader = _resolve_uploader(request, principal, credentials)
     body = await request.json() if "application/json" in request.headers.get("content-type", "") else {}
     target_filenames = body.get("filenames")  # None means all files for tenant
-    auto_publish = body.get("auto_publish", True)
+    auto_publish = body.get("auto_publish", False)
 
     # Resolve slug → numeric DB id so list_admin_files can find the rows
     db_tenant_id = _resolve_tenant_db_id(tenant_id)

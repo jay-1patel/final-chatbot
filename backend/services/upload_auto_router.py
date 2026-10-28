@@ -104,10 +104,11 @@ def route_uploaded_document(
 
         careful = not _tenant_needs_full_brand_write(tid)
         bifurcator = AutoBifurcator(tenant_id=tid, actor=actor)
+        # Stage offerings by default — wrong PDFs must not go live on WhatsApp.
         result = bifurcator.process_document_bytes(
             filename=filename,
             content=content,
-            auto_publish=True,
+            auto_publish=False,
             careful_brand_merge=careful,
         )
         result["status"] = "configured"

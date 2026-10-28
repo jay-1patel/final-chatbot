@@ -56,9 +56,10 @@ import { OnboardingKitWidget } from '@/components/onboarding/onboarding-kit-widg
  * Uploads is the tenant's own knowledge hub: FAQ documents, KB articles,
  * brochure PDFs, and new-release sheets.
  *
- * Every upload auto-bifurcates in the background: products go live in the
- * catalog, FAQs/KB are indexed, and brand/menu merge only when real signals
- * are found. "Re-process library" remains for bulk re-runs.
+ * Every upload auto-bifurcates in the background: products are staged
+ * (inactive) for review, FAQs/KB are indexed, and brand/menu merge only fills
+ * empty fields. Off-vertical / junk offerings are rejected. "Re-process
+ * library" remains for bulk re-runs.
  */
 export function UploadsPanel({ tenantId }: { tenantId: string }) {
   const { can } = useAuth()
