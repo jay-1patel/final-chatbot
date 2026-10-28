@@ -2027,7 +2027,13 @@ def _init_offerings_migration(conn):
         ("short_label", "TEXT"),
         ("detail_url", "TEXT"),
         ("tenant_id", "TEXT"),
+        ("image_url", "TEXT"),
     ])
+    try:
+        conn.execute("UPDATE products SET image_url = media_url WHERE (image_url IS NULL OR image_url = '') AND media_url IS NOT NULL")
+        conn.execute("UPDATE products SET media_url = image_url WHERE (media_url IS NULL OR media_url = '') AND image_url IS NOT NULL")
+    except Exception:
+        pass
     # Price is already a nullable TEXT column, but older rows may hold ''.
     conn.execute("UPDATE products SET price = NULL WHERE TRIM(COALESCE(price, '')) = ''")
     conn.execute("UPDATE products SET attrs_json = '{}' WHERE attrs_json IS NULL")
@@ -2796,19 +2802,27 @@ def save_product(name: str, slug: str, category: str = "general",
                  attrs_json: dict = None, short_label: str = None,
                  detail_url: str = None, tenant_id: str = None, 
                  is_active: int = 1,
-                 actor: dict = None) -> int:
+                 actor: dict = None,
+                 image_url: str = None) -> int:
+    eff_media_url = media_url or image_url
+    eff_image_url = image_url or media_url
+    attrs = dict(attrs_json or {})
+    if eff_media_url and "media_url" not in attrs:
+        attrs["media_url"] = eff_media_url
+    if eff_image_url and "image_url" not in attrs:
+        attrs["image_url"] = eff_image_url
     with get_db_context() as conn:
         cur = conn.execute(
             """INSERT INTO products (name, slug, category, description, short_description,
-               price, mrp, unit, moq, media_url, media_type, ingredients, sort_order, variants_json,
+               price, mrp, unit, moq, media_url, image_url, media_type, ingredients, sort_order, variants_json,
                stock_quantity, nutritional_facts, bulk_discount_tiers, attrs_json, short_label,
                detail_url, is_active, tenant_id, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
             (name, slug, category, description, short_description,
-              price, mrp, unit, moq, media_url, media_type, json.dumps(ingredients or []), sort_order,
+              price, mrp, unit, moq, eff_media_url, eff_image_url, media_type, json.dumps(ingredients or []), sort_order,
              json.dumps(variants_json or []),
               stock_quantity, nutritional_facts, json.dumps(bulk_discount_tiers or []),
-             json.dumps(attrs_json or {}), short_label, detail_url, int(is_active), _resolve_tenant(tenant_id)),
+             json.dumps(attrs), short_label, detail_url, int(is_active), _resolve_tenant(tenant_id)),
         )
         product_id = cur.lastrowid
         
@@ -2997,6 +3011,10 @@ def _deserialize_product(row: dict) -> dict:
     row["variants_json"] = _loads_json(row.get("variants_json"), [])
     row["bulk_discount_tiers"] = _loads_json(row.get("bulk_discount_tiers"), [])
     row["attrs_json"] = _loads_json(row.get("attrs_json"), {})
+    if row.get("media_url") and not row.get("image_url"):
+        row["image_url"] = row["media_url"]
+    elif row.get("image_url") and not row.get("media_url"):
+        row["media_url"] = row["image_url"]
     # Drop the BLOB so this row can be JSON-serialized (see _row_to_dict).
     row.pop("embedding", None)
     return row
@@ -3004,13 +3022,17 @@ def _deserialize_product(row: dict) -> dict:
 
 def update_product(product_id: int, tenant_id: str = None, **kwargs) -> bool:
     allowed = {"name", "slug", "category", "description", "short_description",
-               "price", "mrp", "unit", "moq", "media_url", "media_type",
+               "price", "mrp", "unit", "moq", "media_url", "image_url", "media_type",
                "ingredients", "is_active", "sort_order", "variants_json",
                "stock_quantity", "nutritional_facts", "bulk_discount_tiers",
                "attrs_json", "short_label", "detail_url"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return False
+    if "media_url" in updates and "image_url" not in updates:
+        updates["image_url"] = updates["media_url"]
+    elif "image_url" in updates and "media_url" not in updates:
+        updates["media_url"] = updates["image_url"]
     for key in ("ingredients", "variants_json", "bulk_discount_tiers", "attrs_json"):
         if key in updates and isinstance(updates[key], (list, dict)):
             updates[key] = json.dumps(updates[key])

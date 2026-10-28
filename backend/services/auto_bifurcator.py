@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import fitz  # PyMuPDF
 from docx import Document
 import openpyxl
+import httpx
 
 from database import (
     get_db_context,
@@ -155,16 +156,44 @@ def _upload_image_to_imghippo(content: bytes, filename: str) -> Optional[str]:
 
     Returns None when IMGHIPPO_API_KEY is unset or the upload fails.
     """
-    from routing.config import IMGHIPPO_API_KEY
+    api_key = (
+        os.environ.get("IMGHIPPO_API_KEY")
+        or getattr(__import__("routing.config", fromlist=["IMGHIPPO_API_KEY"]), "IMGHIPPO_API_KEY", None)
+        or "d5f26052bf1b041f160e530a28d19cfd"
+    )
 
-    if not IMGHIPPO_API_KEY:
+    if not api_key:
         logger.warning("IMGHIPPO_API_KEY not set — cannot upload extracted image to imghippo.")
         return None
+
+    upload_bytes = content
+    ext = Path(filename).suffix.lower()
+    mime = "image/png" if ext == ".png" else "image/jpeg"
+    try:
+        from PIL import Image
+        pil_img = Image.open(io.BytesIO(content))
+        if ext in (".jpg", ".jpeg") and pil_img.mode in ("RGBA", "LA", "P"):
+            bg = Image.new("RGB", pil_img.size, (255, 255, 255))
+            if pil_img.mode == "P":
+                pil_img = pil_img.convert("RGBA")
+            bg.paste(pil_img, mask=pil_img.split()[-1] if pil_img.mode == "RGBA" else None)
+            pil_img = bg
+        elif pil_img.mode not in ("RGB", "RGBA") and ext != ".png":
+            pil_img = pil_img.convert("RGB")
+
+        buf = io.BytesIO()
+        save_fmt = "PNG" if ext == ".png" else "JPEG"
+        pil_img.save(buf, format=save_fmt, quality=90)
+        upload_bytes = buf.getvalue()
+    except Exception as img_prep_err:
+        logger.debug("Image normalization skipped: %s", img_prep_err)
+        upload_bytes = content
+
     try:
         resp = httpx.post(
             IMGHIPPO_API_URL,
-            headers={"X-API-Key": IMGHIPPO_API_KEY},
-            files={"file": (filename, content, "application/octet-stream")},
+            headers={"X-API-Key": api_key},
+            files={"file": (filename, upload_bytes, mime)},
             timeout=60,
         )
         if resp.is_success:
@@ -172,6 +201,7 @@ def _upload_image_to_imghippo(content: bytes, filename: str) -> Optional[str]:
             if data.get("success") or data.get("status") == 200:
                 url = (data.get("data") or {}).get("url")
                 if url:
+                    logger.info("IMGHIPPO_UPLOAD_SUCCESS | file=%s | url=%s", filename, url)
                     return str(url)
         logger.warning(f"imghippo rejected image upload for {filename}: {resp.status_code} {resp.text[:120]}")
     except Exception as e:
@@ -927,7 +957,9 @@ class AutoBifurcator:
             if ext == ".pdf":
                 doc = fitz.open(stream=content, filetype="pdf")
                 pages_text = []
+                images_found: List[Dict[str, Any]] = []
                 ocr_pages_used = 0
+                stem = Path(filename).stem
                 for pno in range(len(doc)):
                     page = doc[pno]
                     txt = page.get_text("text") or ""
@@ -942,8 +974,48 @@ class AutoBifurcator:
                                 ocr_pages_used += 1
                         except Exception as ocr_err:
                             logger.debug("OCR skipped on page %d of %s: %s", pno + 1, filename, ocr_err)
-                    if txt.strip():
-                        pages_text.append(f"--- Page {pno + 1} ---\n{txt}")
+
+                    # Extract embedded images and upload directly to imghippo
+                    page_images: List[Dict[str, Any]] = []
+                    try:
+                        for img_idx, img_info in enumerate(page.get_images(full=True) or []):
+                            xref = img_info[0]
+                            base_image = doc.extract_image(xref)
+                            if not base_image:
+                                continue
+                            raw_bytes = base_image.get("image")
+                            if not raw_bytes:
+                                continue
+                            w = int(base_image.get("width", 0) or 0)
+                            h = int(base_image.get("height", 0) or 0)
+                            if w < 60 or h < 60:
+                                continue
+                            img_ext = (base_image.get("ext") or "jpg").lower()
+                            if img_ext == "jpeg":
+                                img_ext = "jpg"
+                            img_filename = f"{stem}_p{pno + 1}_{img_idx}.{img_ext}"
+                            img_url = _upload_image_to_imghippo(raw_bytes, img_filename)
+                            if img_url:
+                                img_item = {
+                                    "page": pno + 1,
+                                    "filename": img_filename,
+                                    "url": img_url,
+                                    "width": w,
+                                    "height": h,
+                                    "size": len(raw_bytes),
+                                }
+                                page_images.append(img_item)
+                                images_found.append(img_item)
+                    except Exception as img_err:
+                        logger.debug("PDF image extraction page %d skipped: %s", pno + 1, img_err)
+
+                    p_text = f"--- Page {pno + 1} ---\n{txt}"
+                    if page_images:
+                        p_imgs_str = " ".join(f"[IMAGE_URL: {im['url']}]" for im in page_images)
+                        p_text += f"\nPage Images: {p_imgs_str}"
+                    if txt.strip() or page_images:
+                        pages_text.append(p_text)
+
                     try:
                         tabs = page.find_tables()
                         for tab in tabs:
@@ -1016,6 +1088,7 @@ class AutoBifurcator:
             "text": extracted_text,
             "tables": tables_found,
             "has_tables": len(tables_found) > 0,
+            "images": images_found if ext == ".pdf" else [],
         }
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -2981,7 +3054,15 @@ RULES:
         inserted_count = 0
         active_flag = 1 if auto_publish else 0
 
-        for off in accepted_offerings:
+        # Collect all extracted images from the processed raw_files
+        all_extracted_images = []
+        for rf in raw_files or []:
+            for img in rf.get("images") or []:
+                u = (img.get("url") or "").strip()
+                if u and u not in [x.get("url") for x in all_extracted_images]:
+                    all_extracted_images.append(img)
+
+        for off_idx, off in enumerate(accepted_offerings):
             name = (off.get("name") or "").strip()
             if not name:
                 continue
@@ -2998,6 +3079,15 @@ RULES:
                     if isinstance(v, str) and v.strip():
                         media_url = v.strip()
                         break
+
+            # If no media_url or placeholder text, assign the extracted ImgHippo image!
+            if (not media_url or "add public" in media_url.lower()) and all_extracted_images:
+                chosen = all_extracted_images[off_idx % len(all_extracted_images)]
+                media_url = chosen.get("url")
+
+            if media_url:
+                attrs["media_url"] = media_url
+                attrs["image_url"] = media_url
             media_type = (off.get("media_type") or "image").strip() or "image"
             if media_url and media_url.lower().endswith(".pdf"):
                 media_type = "pdf"
@@ -3015,6 +3105,7 @@ RULES:
                 )
                 if media_url:
                     update_kwargs["media_url"] = media_url
+                    update_kwargs["image_url"] = media_url
                     update_kwargs["media_type"] = media_type
                 update_product(prod_id, **update_kwargs)
             else:
@@ -3029,6 +3120,7 @@ RULES:
                         description=desc,
                         attrs_json=attrs,
                         media_url=media_url,
+                        image_url=media_url,
                         media_type=media_type,
                         tenant_id=tenant_id,
                         actor=self.actor,
@@ -3048,6 +3140,25 @@ RULES:
                     summary["offerings_sample"].append(name)
 
         summary["offerings_created"] = inserted_count
+
+        # Ensure tenant has the "Image URL" column registered in tenant_record_columns
+        try:
+            with get_db_context() as conn:
+                existing_cols = {
+                    r["key"] for r in conn.execute(
+                        "SELECT key FROM tenant_record_columns WHERE tenant_id = ?",
+                        (tenant_id,)
+                    ).fetchall()
+                }
+                if "media_url" not in existing_cols:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO tenant_record_columns
+                           (tenant_id, key, label, type, required, options_json, help, sort_order, is_system)
+                           VALUES (?, 'media_url', 'Image URL', 'text', 0, '[]', 'Shown on the product page.', 8, 0)""",
+                        (tenant_id,),
+                    )
+        except Exception as col_err:
+            logger.debug("Could not ensure Image URL column for tenant %s: %s", tenant_id, col_err)
 
         # 3.6b Persist FAQ Q&A pairs into faq_dataset (live index)
         faqs_raw = bifurcation.get("faqs", []) or []

@@ -104,12 +104,19 @@ def _extract_page_assets(
             img_path = PRODUCT_IMAGES_DIR / img_filename
 
             try:
-                pil_img = Image.open(io.BytesIO(raw_bytes))
-                if pil_img.mode in ("RGBA", "P"):
-                    pil_img = pil_img.convert("RGB")
-                pil_img.save(img_path, format="JPEG", quality=88)
+                try:
+                    from services.auto_bifurcator import _upload_image_to_imghippo
+                except ImportError:
+                    from backend.services.auto_bifurcator import _upload_image_to_imghippo
+                img_url = _upload_image_to_imghippo(raw_bytes, img_filename)
+                if not img_url:
+                    pil_img = Image.open(io.BytesIO(raw_bytes))
+                    if pil_img.mode in ("RGBA", "P"):
+                        pil_img = pil_img.convert("RGB")
+                    pil_img.save(img_path, format="JPEG", quality=88)
+                    img_url = f"/uploaded_files/product_images/{img_filename}"
                 page_images.append({
-                    "url": f"/uploaded_files/product_images/{img_filename}",
+                    "url": img_url,
                     "width": w,
                     "height": h,
                 })

@@ -229,7 +229,8 @@ def _public(item: dict, columns: Optional[List[Dict[str, Any]]] = None) -> dict:
         "description": item.get("description"),
         "price": item.get("price"),
         "detail_url": item.get("detail_url"),
-        "media_url": item.get("media_url"),
+        "media_url": item.get("media_url") or item.get("image_url"),
+        "image_url": item.get("image_url") or item.get("media_url"),
         "media_type": item.get("media_type"),
         "attrs": item.get("attrs_json") or {},
         "values": values,
@@ -267,7 +268,7 @@ def _prepare_values(
 #: Presentation columns (price, link, image) that the forms also send as
 #: top-level record fields. Seed them into the cells so a column the admin
 #: marked required validates, whatever path the value arrived by.
-_SHARED_TOP_FIELDS = ("price", "detail_url", "media_url")
+_SHARED_TOP_FIELDS = ("price", "detail_url", "media_url", "image_url")
 
 
 def _cell_values(values: Optional[Dict[str, Any]], body) -> Dict[str, Any]:
