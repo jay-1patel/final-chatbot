@@ -522,11 +522,34 @@ async def forward_to_bot(query_type, user_text, wa_id=None, raw_message=None, te
 async def process_message(user_text: str, wa_id: str = None, raw_message: dict = None, tenant_id: str = None):
     try:
         from shared.tenancy.resolver import resolve_effective_tenant_id
-        tenant_id = resolve_effective_tenant_id(wa_id or "", tenant_id)
+        tenant_id = resolve_effective_tenant_id(
+            wa_id or "",
+            tenant_id,
+            allow_test_override=not bool(tenant_id),
+        )
+        if not tenant_id:
+            logger.warning("No active tenant resolved for message from %s", wa_id or "?")
+            return {
+                "answer": "",
+                "media_url": None,
+                "media_type": None,
+                "whatsapp_sent": False,
+                "interactive": None,
+                "query_type": "ignored",
+            }
         from routing.database import set_request_tenant
         set_request_tenant(tenant_id)
     except Exception as exc:
-        logger.debug("Could not resolve effective tenant in process_message: %s", exc)
+            logger.exception("Could not resolve active tenant for message from %s", wa_id or "?")
+            return {
+                "answer": "",
+                "media_url": None,
+                "media_type": None,
+                "whatsapp_sent": False,
+                "interactive": None,
+                "query_type": "error",
+                "error": f"Tenant resolution failed: {exc}",
+            }
 
     is_btn_reply = _is_button_reply(raw_message)
     query_type = classify_query(user_text)

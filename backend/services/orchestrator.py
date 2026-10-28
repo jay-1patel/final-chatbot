@@ -75,12 +75,40 @@ async def _process_captured_message(wa_id: str, message: str, tenant_id: str = N
     # and later messages only refresh the row. Runs before the handover early
     # return below, so an agent-handled chat still registers the contact.
     try:
-        from database import set_request_tenant, touch_customer
         from shared.tenancy.resolver import resolve_effective_tenant_id
 
-        effective_tenant = resolve_effective_tenant_id(wa_id, tenant_id)
+        effective_tenant = resolve_effective_tenant_id(
+            wa_id,
+            tenant_id,
+            allow_test_override=not bool(tenant_id),
+        )
+    except Exception as exc:
+        logger.exception("ORCH_TENANT_RESOLUTION_FAILED | wa_id=%s", wa_id)
+        return {
+            "messages": [],
+            "new_state": None,
+            "human_handover": False,
+            "user_type": None,
+            "status": "error",
+            "error": f"Tenant resolution failed: {exc}",
+        }
+
+    if not effective_tenant:
+        logger.warning("ORCH_UNROUTED | wa_id=%s | no active tenant", wa_id)
+        return {
+            "messages": [],
+            "new_state": None,
+            "human_handover": False,
+            "user_type": None,
+            "status": "ignored",
+            "error": "No active tenant is assigned to this WhatsApp number.",
+        }
+
+    tenant_id = effective_tenant
+    try:
+        from database import set_request_tenant, touch_customer
+
         set_request_tenant(effective_tenant)
-        tenant_id = effective_tenant
         touch_customer(effective_tenant, wa_id, "")
         logger.info("ORCH_TENANT | wa_id=%s | tenant=%s", wa_id, effective_tenant)
         try:
@@ -138,8 +166,7 @@ async def _process_captured_message(wa_id: str, message: str, tenant_id: str = N
         msg_lower = (message or "").strip().lower()
         if msg_lower in ("#tenants", "#switch", "#tenant", "#testbot"):
             from shared.tenancy import store
-            from database import get_active_test_tenant
-            current_active = get_active_test_tenant() or tenant_id
+            current_active = tenant_id
             all_tenants = store.list_tenants()
             lines = [
                 "🧪 *WhatsApp Tenant Switcher (Single-Number Testing)*",
@@ -165,10 +192,8 @@ async def _process_captured_message(wa_id: str, message: str, tenant_id: str = N
             }
 
         if msg_lower in ("#info", "#status", "#whoami"):
-            from database import get_active_test_tenant
             from shared.tenancy.loader import get_tenant_profile
-            from shared.tenancy.resolver import resolve_tenant_for_user
-            current_active = get_active_test_tenant() or resolve_tenant_for_user(wa_id) or tenant_id or "default"
+            current_active = tenant_id
             prof = get_tenant_profile(current_active)
             brand_name = prof.brand.name if (prof and prof.brand and prof.brand.name) else current_active
             tagline = prof.brand.tagline if (prof and prof.brand and prof.brand.tagline) else "Multi-tenant Chatbot"

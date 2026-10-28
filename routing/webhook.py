@@ -310,19 +310,25 @@ def _is_duplicate(msg_id: str, wa_id: str) -> bool:
 
 async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, msg_id, tenant_id=None):
     start_time = time.time()
-    # Single-number test override must win over phone binding / stale user stamp.
+    # A live WABA phone binding is authoritative; never let a global test
+    # tenant override route real customer messages to another tenant.
     try:
         from shared.tenancy.resolver import resolve_effective_tenant_id
-        tenant_id = resolve_effective_tenant_id(wa_id, tenant_id)
+        tenant_id = resolve_effective_tenant_id(
+            wa_id, tenant_id, allow_test_override=False
+        )
     except Exception as exc:
-        logger.debug(f"Could not resolve effective tenant for {wa_id}: {exc}")
-    if tenant_id:
-        set_request_tenant(tenant_id)
-        try:
-            from backend.services import state_manager as sm
-            sm.set_tenant(wa_id, tenant_id)
-        except Exception as exc:
-            logger.debug(f"Could not stamp tenant {tenant_id} on {wa_id}: {exc}")
+        logger.error("Could not resolve active tenant for %s; dropping message: %s", wa_id, exc)
+        return
+    if not tenant_id:
+        logger.warning("No active tenant for inbound message from %s; dropping message", wa_id)
+        return
+    set_request_tenant(tenant_id)
+    try:
+        from backend.services import state_manager as sm
+        sm.set_tenant(wa_id, tenant_id)
+    except Exception as exc:
+        logger.debug(f"Could not stamp tenant {tenant_id} on {wa_id}: {exc}")
     # Customer directory: everyone who messages gets a record — the first
     # message creates it, every later message refreshes it (never duplicates).
     try:
@@ -915,8 +921,23 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
         from shared.tenancy.resolver import resolve_tenant_from_payload
         tenant_id = resolve_tenant_from_payload(payload)
     except Exception as exc:
-        logger.warning(f"Tenant resolution failed, using default: {exc}")
+        logger.error("Tenant resolution failed; dropping inbound message: %s", exc)
         tenant_id = None
+
+    if not tenant_id:
+        logger.warning(
+            "WEBHOOK_UNROUTED | wa_id=%s | msg_id=%s | no active tenant is bound to the WABA phone id",
+            wa_id or "?",
+            msg_id or "?",
+        )
+        log_webhook(
+            "incoming",
+            "/webhook/message",
+            json.dumps({"wa_id": wa_id, "message_id": msg_id}),
+            200,
+            "Ignored: no active tenant bound to WABA phone id",
+        )
+        return {"status": "ignored", "type": "unbound_tenant"}
 
     # Campaign consent wins over everything else: a STOP must unsubscribe even
     # mid-flow, and the contact must not get a marketing reply afterwards.

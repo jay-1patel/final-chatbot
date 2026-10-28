@@ -1,1 +1,0 @@
-# Loan Help: Student loans cover tuition, hostel and books with a moratorium during the course. Collateral and co-applicant needs depend on the amount. Gold loans are given against gold ornaments after valuation as per bank norms. Always check the current rate and documents on bank.sbi before applying.

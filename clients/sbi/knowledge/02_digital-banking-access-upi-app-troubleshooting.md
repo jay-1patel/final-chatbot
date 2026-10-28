@@ -1,1 +1,0 @@
-# Digital Banking Help: Use official channels only for net banking and YONO SBI registration, password reset and UPI setup. SBI never asks for OTP, PIN, CVV or passwords over phone, SMS or WhatsApp. This assistant cannot show balances, move money or reset passwords. If an app fails, update it from the official store, restart and raise a ticket with the error.

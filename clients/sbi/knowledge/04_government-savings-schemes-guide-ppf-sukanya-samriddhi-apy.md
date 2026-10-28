@@ -1,1 +1,0 @@
-# Scheme Guide: PPF runs 15 years with a yearly deposit range of ₹500 to ₹1.5 lakh. Sukanya Samriddhi is for a girl child under 10, with deposits of ₹250 to ₹1.5 lakh a year. Atal Pension Yojana gives a fixed pension from age 60. Interest rates are notified by the Government, so always check bank.sbi before quoting a rate.

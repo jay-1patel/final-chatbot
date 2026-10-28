@@ -970,7 +970,9 @@ class AutoBifurcator:
 
 
 
-        return menu_items[:8]
+        # WhatsApp list menus support up to 10 rows; preserve all extracted
+        # items within that limit instead of silently dropping the last two.
+        return menu_items[:10]
 
 
 

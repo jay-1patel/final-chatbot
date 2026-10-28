@@ -24,6 +24,7 @@ from routing.config import (
     SEND2_USERNAME,
     SEND2_PASSWORD,
     SEND2_INCOMING_URL,
+    SEND2_NUMBER,
 )
 from routing.whatsapp import (
     send_whatsapp_message,
@@ -191,7 +192,7 @@ def _header_media_link(header_media: dict | None) -> tuple[str | None, str]:
     return url, htype if htype in ("image", "document", "video", "audio") else "document"
 
 
-async def _send_reply(wa_id: str, messages: list) -> None:
+async def _send_reply(wa_id: str, messages: list, tenant_id: str = None) -> None:
     """Send the orchestrator's captured messages via send2.digital.
 
     `messages` is a list of dicts like:
@@ -262,14 +263,18 @@ async def _send_reply(wa_id: str, messages: list) -> None:
                             })
                     if rows:
                         header_title = "Options"
-                        try:
-                            from shared.tenancy.resolver import resolve_tenant_for_user
-                            from shared.tenancy.loader import get_tenant_profile
-                            p = get_tenant_profile(resolve_tenant_for_user(wa_id))
-                            if p and p.brand and p.brand.name:
-                                header_title = p.brand.name
-                        except Exception:
-                            pass
+                        if tenant_id:
+                            try:
+                                from shared.tenancy.loader import get_tenant_profile
+                                p = get_tenant_profile(tenant_id)
+                                if p and p.brand and p.brand.name:
+                                    header_title = p.brand.name
+                            except Exception as exc:
+                                logger.warning(
+                                    "Could not load tenant %s for menu header: %s",
+                                    tenant_id,
+                                    exc,
+                                )
                         send_whatsapp_list_menu(
                             to=wa_id,
                             header_text=header_title,
@@ -396,6 +401,34 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                     ):
                         continue
 
+                    # The polling API does not include Meta's inbound
+                    # phone_number_id on each message. Route using this
+                    # configured business number's tenant binding; never use
+                    # a global/default tenant or a stale customer stamp.
+                    try:
+                        from shared.tenancy.resolver import resolve_tenant_for_phone
+
+                        tenant_id = resolve_tenant_for_phone(
+                            SEND2_NUMBER or "",
+                            allow_test_override=False,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "Could not resolve configured Send2 business number; "
+                            "ignoring message %s: %s",
+                            message_id,
+                            exc,
+                        )
+                        tenant_id = None
+                    if not tenant_id:
+                        logger.warning(
+                            "POLL_UNROUTED | message_id=%s | configured business number "
+                            "has no active tenant binding",
+                            message_id,
+                        )
+                        _record_processed(message_id, wa_id)
+                        continue
+
                     # Claim content first (cross-channel), then message id.
                     if text and _is_duplicate_content(wa_id, text):
                         logger.info(
@@ -418,7 +451,7 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                                 from routing.whatsapp import send_whatsapp_list_menu
                                 from bots.customer_b2c.menus import get_main_menu
 
-                                menu_data = get_main_menu(wa_id)
+                                menu_data = get_main_menu(wa_id, tenant_id=tenant_id)
                                 if menu_data.get("type") == "buttons":
                                     from routing.whatsapp import send_whatsapp_interactive, normalize_reply_buttons
                                     send_whatsapp_interactive(
@@ -448,13 +481,13 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
 
                         # Process through the orchestrator (captures outgoing messages).
                         result = await process_incoming_message(
-                            wa_id, text, capture_only=True
+                            wa_id, text, capture_only=True, tenant_id=tenant_id
                         )
 
                         # Send the captured replies via send2.digital.
                         outgoing = result.get("messages", [])
                         if outgoing:
-                            await _send_reply(wa_id, outgoing)
+                            await _send_reply(wa_id, outgoing, tenant_id=tenant_id)
                             logger.info(f"Processed and replied to {wa_id} ({len(outgoing)} messages)")
                         else:
                             logger.info(f"Processed {wa_id} but no outgoing messages")

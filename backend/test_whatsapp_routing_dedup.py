@@ -30,6 +30,9 @@ class WhatsAppRoutingDedupTests(unittest.IsolatedAsyncioTestCase):
         tenant_id = "leewaysoftech"
         expected = "Configured careers response"
         with (
+            patch("shared.tenancy.store.get_tenant", return_value={
+                "id": tenant_id, "slug": "leeway-softech", "status": "active",
+            }),
             patch.object(message_router, "_is_distributor", return_value=False),
             patch.object(message_router, "_tenant_feature_enabled", return_value=(True, tenant_id)),
             patch("backend.services.service_answers.answer_for_text", return_value=None),
@@ -78,6 +81,9 @@ class WhatsAppRoutingDedupTests(unittest.IsolatedAsyncioTestCase):
             },
         }
         with (
+            patch("shared.tenancy.store.get_tenant", return_value={
+                "id": "leewaysoftech", "slug": "leeway-softech", "status": "active",
+            }),
             patch.object(webhook_router, "_is_handover_active", return_value=False),
             patch.object(webhook_router, "_wants_human_agent", return_value=False),
             patch("backend.services.flow_runner.is_running", return_value=False),
@@ -120,6 +126,7 @@ class WhatsAppRoutingDedupTests(unittest.IsolatedAsyncioTestCase):
         dedup._content_cache.clear()
         with (
             patch.object(webhook_router, "log_webhook"),
+            patch("services.incoming_listener.read_poller_enabled", return_value=False),
             patch("shared.tenancy.resolver.resolve_tenant_from_payload", return_value="tenant-a"),
             patch.object(webhook_router, "_is_duplicate", side_effect=[False, True]) as claim,
             patch("backend.services.dedup.is_duplicate_content", return_value=False),
@@ -131,6 +138,33 @@ class WhatsAppRoutingDedupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["type"], "duplicate")
         self.assertEqual(tasks.add_task.call_count, 1)
         self.assertEqual(claim.call_args_list[0].args, ("wamid.duplicate", "919512777899"))
+
+    async def test_webhook_drops_message_when_phone_has_no_active_tenant(self):
+        request = SimpleNamespace()
+        request.body = AsyncMock(return_value=json.dumps({
+            "object": "whatsapp_business_account",
+            "entry": [{"changes": [{"value": {
+                "metadata": {"phone_number_id": "unbound-business-number"},
+                "contacts": [{"wa_id": "919500000000", "profile": {"name": "Test"}}],
+                "messages": [{
+                    "id": "wamid.unbound",
+                    "type": "text",
+                    "text": {"body": "hello"},
+                }],
+            }}]}],
+        }).encode())
+        tasks = SimpleNamespace(add_task=Mock())
+        with (
+            patch.object(webhook_router, "log_webhook"),
+            patch("services.incoming_listener.read_poller_enabled", return_value=False),
+            patch("shared.tenancy.resolver.resolve_tenant_from_payload", return_value=None),
+            patch.object(webhook_router, "_is_duplicate", return_value=False),
+            patch("backend.services.dedup.is_duplicate_content", return_value=False),
+        ):
+            result = await webhook_router.receive_webhook(request, tasks)
+
+        self.assertEqual(result, {"status": "ignored", "type": "unbound_tenant"})
+        tasks.add_task.assert_not_called()
 
     def test_database_dedup_blocks_repeats_across_local_caches(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -190,6 +224,48 @@ class WhatsAppRoutingDedupTests(unittest.IsolatedAsyncioTestCase):
         intent.assert_not_called()
         fallback.assert_not_awaited()
 
+    async def test_message_without_active_tenant_stops_before_classification(self):
+        with (
+            patch(
+                "shared.tenancy.resolver.resolve_effective_tenant_id",
+                return_value=None,
+            ),
+            patch.object(message_router, "classify_query") as classify,
+        ):
+            result = await message_router.process_message("hello", "919500000000")
+
+        self.assertEqual(result["query_type"], "ignored")
+        self.assertEqual(result["answer"], "")
+        classify.assert_not_called()
+
+    async def test_tenant_resolution_exception_stops_message_processing(self):
+        with (
+            patch(
+                "shared.tenancy.resolver.resolve_effective_tenant_id",
+                side_effect=RuntimeError("registry unavailable"),
+            ),
+            patch.object(message_router, "classify_query") as classify,
+        ):
+            result = await message_router.process_message("hello", "919500000000")
+
+        self.assertEqual(result["query_type"], "error")
+        self.assertIn("Tenant resolution failed", result["error"])
+        classify.assert_not_called()
+
+    async def test_orchestrator_ignores_message_without_active_tenant(self):
+        from backend.services import orchestrator
+
+        with patch(
+            "shared.tenancy.resolver.resolve_effective_tenant_id",
+            return_value=None,
+        ):
+            result = await orchestrator.process_incoming_message(
+                "919500000000", "hello", capture_only=True
+            )
+
+        self.assertEqual(result["status"], "ignored")
+        self.assertEqual(result["messages"], [])
+
     def test_tenant_lookup_rejects_prefix_false_positives(self):
         from shared.tenancy import store as tenancy_store
 
@@ -243,6 +319,11 @@ class WhatsAppRoutingDedupTests(unittest.IsolatedAsyncioTestCase):
             patch.object(incoming_listener, "SEND2_INCOMING_URL", "https://example.test/incoming"),
             patch.object(incoming_listener, "SEND2_USERNAME", "username"),
             patch.object(incoming_listener, "SEND2_PASSWORD", "password"),
+            patch.object(incoming_listener, "SEND2_NUMBER", "15550001111"),
+            patch("shared.tenancy.store.find_tenant_by_phone_id", return_value="tenant-a"),
+            patch("shared.tenancy.store.get_tenant", return_value={
+                "id": "tenant-a", "slug": "tenant-a", "status": "active",
+            }),
             patch.object(incoming_listener.httpx, "AsyncClient", FakeAsyncClient),
             patch.object(incoming_listener, "POLL_INTERVAL_SECONDS", 0),
             patch.object(incoming_listener, "_was_processed", side_effect=[False, True]) as claim,
@@ -256,8 +337,12 @@ class WhatsAppRoutingDedupTests(unittest.IsolatedAsyncioTestCase):
             await incoming_listener.poll_incoming_messages(stop_event)
 
         self.assertEqual(claim.call_count, 2)
-        process.assert_awaited_once_with("919512777899", "Career", capture_only=True)
-        send_reply.assert_awaited_once_with("919512777899", processed["messages"])
+        process.assert_awaited_once_with(
+            "919512777899", "Career", capture_only=True, tenant_id="tenant-a"
+        )
+        send_reply.assert_awaited_once_with(
+            "919512777899", processed["messages"], tenant_id="tenant-a"
+        )
 
     async def test_orchestrator_capture_only_prevents_listener_double_send(self):
         from services import orchestrator
@@ -281,11 +366,15 @@ class WhatsAppRoutingDedupTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(orchestrator, "get_db_context", fake_db_context),
+            patch("shared.tenancy.store.get_tenant", return_value={
+                "id": "tenant-a", "slug": "tenant-a", "status": "active",
+            }),
             patch("bots.distributor_b2b.workflows.handle_b2b_message", new=b2b_reply),
             patch("kb.services.whatsapp.send_whatsapp_message") as live_send,
         ):
             result = await orchestrator.process_incoming_message(
-                "919512777899", "distributor order inquiry", capture_only=True
+                "919512777899", "distributor order inquiry", capture_only=True,
+                tenant_id="tenant-a",
             )
 
         self.assertEqual(result["messages"], [{"type": "text", "text": "one reply", "sent_live": False}])

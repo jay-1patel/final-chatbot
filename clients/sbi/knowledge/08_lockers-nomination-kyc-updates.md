@@ -1,1 +1,0 @@
-# Everyday Banking Help: Lockers are allotted subject to availability, rent and a signed agreement. Nomination, re-KYC and profile updates need a branch visit or an authenticated channel for regulatory compliance. WhatsApp cannot change registered mobile, email or address.

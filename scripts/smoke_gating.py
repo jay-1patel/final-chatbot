@@ -3,7 +3,7 @@
 Three properties checked here:
   1. a commerce tenant is completely unaffected (TrooGood regression guard)
   2. a non-commerce tenant is refused at the service layer, not just in the menu
-  3. an unregistered user falls back to the default tenant and is allowed
+  3. WhatsApp user resolution never assigns an unregistered user to a default
 """
 import os
 import sys
@@ -48,9 +48,8 @@ def main():
     print("\n--- resolver: tenant for user comes from user_states ---")
     check("shopper", resolver.resolve_tenant_for_user(shopper), "troogood")
     check("prospect", resolver.resolve_tenant_for_user(prospect), "leewaytest")
-    check("stranger uses configured default", resolver.resolve_tenant_for_user(stranger),
-          "troogood")
-    check("no wa_id uses default", resolver.resolve_tenant_for_user(""), "troogood")
+    check("stranger remains unrouted", resolver.resolve_tenant_for_user(stranger), None)
+    check("no wa_id remains unrouted", resolver.resolve_tenant_for_user(""), None)
 
     print("\n--- default tenant auto-detects a single registered shop ---")
     # The pre-tenant deployment has one shop and no DEFAULT_TENANT_ID. That must
