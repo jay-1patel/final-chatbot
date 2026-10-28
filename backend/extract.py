@@ -170,7 +170,7 @@ def _upload_image_to_imghippo(content: bytes, filename: str) -> Optional[str]:
     api_key = (
         os.environ.get("IMGHIPPO_API_KEY")
         or getattr(__import__("routing.config", fromlist=["IMGHIPPO_API_KEY"]), "IMGHIPPO_API_KEY", None)
-        or "d5f26052bf1b041f160e530a28d19cfd"
+        or "ih_live_cb94f243b9804ac94df84a9c94ad7f8bc11062deeb406a6c"
     )
 
     if not api_key:

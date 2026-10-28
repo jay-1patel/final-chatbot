@@ -132,7 +132,7 @@ OTP_EXPIRY_MINUTES = _int_env("OTP_EXPIRY_MINUTES", 10)
 
 # ── Storage / uploads ─────────────────────────────────────────────────────
 UPLOAD_DIR = str(BACKEND_DIR / "uploaded_files")
-IMGHIPPO_API_KEY = os.getenv("IMGHIPPO_API_KEY", "d5f26052bf1b041f160e530a28d19cfd")
+IMGHIPPO_API_KEY = os.getenv("IMGHIPPO_API_KEY", "ih_live_cb94f243b9804ac94df84a9c94ad7f8bc11062deeb406a6c")
 
 # ── Email / SMTP (for OTP delivery) ──────────────────────────────────────
 # SECURITY FIX: All SMTP credentials loaded from environment variables

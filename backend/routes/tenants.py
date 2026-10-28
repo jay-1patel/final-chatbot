@@ -24,6 +24,7 @@ enforces token.tenant_id == target (Phase 0.5).
 import logging
 import re
 import secrets
+import sqlite3
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -53,6 +54,27 @@ from shared.tenancy.merge import deep_merge, merge_drafts
 
 logger = logging.getLogger("tenants")
 router = APIRouter(prefix="/api/admin/tenants", tags=["tenants"])
+
+
+def _backfill_domain(conn, tenant_id: str, website: str, only_if_empty: bool = False) -> None:
+    """Record the tenant's website on the registry row.
+
+    A convenience column only — the bot reads the website from the profile
+    snapshot, never from this — so it must never reject the save. Deployments
+    that started before the `domain` migration ran have no such column, and an
+    uncaught sqlite3.OperationalError there 500s the whole PUT. The error is
+    raised at execute time and leaves the surrounding transaction usable.
+    """
+    website = (website or "").strip()
+    if not website:
+        return
+    sql = "UPDATE tenants SET domain = ? WHERE (id = ? OR slug = ?)"
+    if only_if_empty:
+        sql += " AND (domain IS NULL OR domain = '')"
+    try:
+        conn.execute(sql, (website, tenant_id, tenant_id))
+    except sqlite3.OperationalError as exc:
+        logger.warning("domain backfill skipped for %s: %s", tenant_id, exc)
 
 
 # ── request models ────────────────────────────────────────────────────────
@@ -295,8 +317,7 @@ def create_tenant(
             status=body.status,
             conn=conn,
         )
-        if website_clean:
-            conn.execute("UPDATE tenants SET domain = ? WHERE id = ? OR slug = ?", (website_clean, tid, tid))
+        _backfill_domain(conn, tid, website_clean)
         record_admin_audit_event(
             conn,
             action="tenant_created",
@@ -485,9 +506,7 @@ def save_profile_draft(    tenant_id: str,
     merged = merge_drafts(draft, body.snapshot)
     with get_db_context() as conn:
         tenancy_store.save_draft(tenant_id, merged, updated_by=by, conn=conn)
-        website = (body.snapshot.get("brand") or {}).get("website") or ""
-        if website:
-            conn.execute("UPDATE tenants SET domain = ? WHERE (id = ? OR slug = ?) AND (domain IS NULL OR domain = '')", (website.strip(), tenant_id, tenant_id))
+        _backfill_domain(conn, tenant_id, (body.snapshot.get("brand") or {}).get("website") or "", only_if_empty=True)
         if principal.get("type") == "admin":
             audit_details: Dict[str, Any] = {
                 "changed_sections": sorted(body.snapshot.keys()),
@@ -630,9 +649,7 @@ def save_intent_draft(
     merged = deep_merge(draft, {"intents": [override]})
     with get_db_context() as conn:
         tenancy_store.save_draft(tenant_id, merged, updated_by=by, conn=conn)
-        website = (body.snapshot.get("brand") or {}).get("website") or ""
-        if website:
-            conn.execute("UPDATE tenants SET domain = ? WHERE (id = ? OR slug = ?) AND (domain IS NULL OR domain = '')", (website.strip(), tenant_id, tenant_id))
+        _backfill_domain(conn, tenant_id, (body.snapshot.get("brand") or {}).get("website") or "", only_if_empty=True)
         if principal.get("type") == "admin":
             record_admin_audit_event(
                 conn,
