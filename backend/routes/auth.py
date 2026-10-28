@@ -195,6 +195,18 @@ def _verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
+def _admin_signing_key() -> str:
+    if not isinstance(ADMIN_SECRET_KEY, str) or not ADMIN_SECRET_KEY.strip():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Admin authentication is not configured. Set ADMIN_SECRET_KEY "
+                "in routing/.env and restart the backend."
+            ),
+        )
+    return ADMIN_SECRET_KEY
+
+
 def _create_token(username: str) -> str:
     # SECURITY FIX: Add unique token ID (jti) for revocation
     payload = {
@@ -203,7 +215,7 @@ def _create_token(username: str) -> str:
         "exp": datetime.now(timezone.utc) + timedelta(hours=ADMIN_JWT_EXPIRY_HOURS),
         "jti": str(uuid.uuid4()),  # Unique token identifier for revocation
     }
-    return jwt.encode(payload, ADMIN_SECRET_KEY, algorithm="HS256")
+    return jwt.encode(payload, _admin_signing_key(), algorithm="HS256")
 
 
 def _decode_token(token: str) -> dict:
@@ -211,7 +223,7 @@ def _decode_token(token: str) -> dict:
     try:
         payload = jwt.decode(
             token,
-            ADMIN_SECRET_KEY,
+            _admin_signing_key(),
             algorithms=["HS256"],  # Only allow HS256
             options={"require": ["exp", "sub", "jti"]},  # Require these claims
         )
@@ -234,7 +246,7 @@ def _decode_token(token: str) -> dict:
 def revoke_token(token: str) -> bool:
     """Revoke a JWT token by adding its jti to the revocation list."""
     try:
-        payload = jwt.decode(token, ADMIN_SECRET_KEY, algorithms=["HS256"], options={"verify_exp": False})
+        payload = jwt.decode(token, _admin_signing_key(), algorithms=["HS256"], options={"verify_exp": False})
         jti = payload.get("jti")
         if jti:
             REVOKED_TOKENS.add(jti)

@@ -1,0 +1,1 @@
+# Stay Safe: Never share OTP, PIN, CVV or passwords. Report cyber fraud on 1930 or cybercrime.gov.in at once, and block the card. The schedule of charges is published on bank.sbi. Good habits include regular statement checks, transaction alerts and keeping nominees updated.

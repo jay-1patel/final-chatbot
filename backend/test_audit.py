@@ -152,7 +152,11 @@ class AuditHistoryTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/admin/audit-history", params={"outcome": "maybe"}).status_code, 422)
 
     def test_first_admin_creation_is_audited_without_password_material(self):
-        with patch.object(auth, "_admin_count", return_value=0), patch.object(auth, "_validate_password_strength"), patch.object(auth, "_hash_password", return_value="stored-hash"):
+        with patch.object(auth, "ADMIN_SECRET_KEY", "test-admin-signing-key"), patch.object(
+            auth, "_admin_count", return_value=0
+        ), patch.object(auth, "_validate_password_strength"), patch.object(
+            auth, "_hash_password", return_value="stored-hash"
+        ):
             response = self.client.post(
                 "/api/auth/first-admin",
                 json={"username": "bootstrap", "password": "BootstrapPassword!123", "email": "root@example.test"},
@@ -185,6 +189,26 @@ class AuditHistoryTests(unittest.TestCase):
         self.assertEqual(rows[0]["tenant_id"], "tenant-a")
         self.assertNotIn("wrong", " ".join(row["details_json"] for row in rows))
         self.assertNotIn("test-jwt", " ".join(row["details_json"] for row in rows))
+
+    def test_login_reports_missing_jwt_secret_as_configuration_error(self):
+        client = TestClient(self.client.app, raise_server_exceptions=False)
+        self.client.app.dependency_overrides.pop(auth.get_current_admin, None)
+        with patch.object(auth, "ADMIN_SECRET_KEY", None), patch.object(
+            auth, "_verify_password", return_value=True
+        ):
+            response = client.post(
+                "/api/auth/login",
+                json={"username": "staff", "password": "correct"},
+            )
+            token_response = client.get(
+                "/api/auth/me",
+                headers={"Authorization": "Bearer stale-token"},
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("ADMIN_SECRET_KEY", response.json()["detail"])
+        self.assertEqual(token_response.status_code, 503)
+        self.assertIn("ADMIN_SECRET_KEY", token_response.json()["detail"])
 
     def test_admin_role_change_records_before_after_and_changed_fields(self):
         target = {

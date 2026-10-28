@@ -1,0 +1,1 @@
+# Senior Help: The Senior Citizens Savings Scheme is for citizens aged 60 and above with a 5-year tenure. Pensioners submit a life certificate every year at the pension-paying branch or digitally. Doorstep banking is offered to eligible customers as per bank criteria. Rates and limits are notified, so verify on bank.sbi.

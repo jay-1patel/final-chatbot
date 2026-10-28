@@ -1,0 +1,1 @@
+# Statement Help: Statements and certificates are available through net banking, YONO SBI or the home branch. Passbooks can be updated at the branch or a self-service passbook printer. The assistant explains the steps but cannot send statements without authenticated channels.

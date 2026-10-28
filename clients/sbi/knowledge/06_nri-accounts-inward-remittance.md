@@ -1,0 +1,1 @@
+# NRI Help: NRIs can open NRE, NRO and FCNR(B) accounts. Inward remittances use the account number, branch IFSC and SWIFT code. NRE is repatriable, while NRO is for income earned in India with repatriation subject to RBI rules. The assistant does not process or track remittances.
