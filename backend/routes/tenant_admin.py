@@ -32,7 +32,10 @@ from backend.database_multi_tenant import (
 )
 from backend.database import get_db_context, record_admin_audit_event, get_db
 from backend.services.tenant_menu_service import get_tenant_menu_service
-from backend.kb.services.tenant_rag import add_document_to_tenant
+try:
+    from kb.services.tenant_rag import add_document_to_tenant
+except ImportError:  # pragma: no cover - package layout variants
+    from backend.kb.services.tenant_rag import add_document_to_tenant  # type: ignore
 
 logger = logging.getLogger("tenant_admin")
 

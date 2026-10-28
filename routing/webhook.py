@@ -676,14 +676,15 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
         logger.info(f"process_message returned: media_url={media_url}, media_type={media_type}, whatsapp_sent={whatsapp_sent}")
         save_chat(wa_id, sender_name, user_text, response_text, route)
 
-        # Media (image/video/audio/document) is no longer sent to customers.
-        # Strip any media payload and any "View/Download Document" button so no
-        # branch below attempts to send a file or image (those sends fail with
-        # 503 anyway); replies always go out as text buttons/text.
-        if media_type:
-            media_url = None
-            media_type = None
-        if isinstance(interactive, dict) and interactive.get("buttons"):
+        # Prefer sending the file when media_url is present. Drop the redundant
+        # "View/Download Document" button only when we will send the media
+        # ourselves (avoids a second tap that re-fetches the same file).
+        if (
+            media_url
+            and media_type
+            and isinstance(interactive, dict)
+            and interactive.get("buttons")
+        ):
             kept = [
                 b for b in interactive["buttons"]
                 if (b.get("reply") or {}).get("id") != DOCUMENT_BUTTON_ID
@@ -765,8 +766,9 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
                 )
                 send_status = "sent_list" if list_sent else "failed_list"
                 logger.info(f"Interactive list reply {'sent' if list_sent else 'failed'} to {wa_id}")
-            elif config.SEND_MEDIA and media_url and media_type:
-                media_url = _resolve_media_url(media_url)
+            elif media_url and media_type:
+                # Deliver attached FAQ/KB media when present (public Imghippo/catbox URLs).
+                media_url = _resolve_public(media_url) or _resolve_media_url(media_url)
                 media_type = _normalize_msg_type(media_type)
                 send_whatsapp_message(wa_id, response_text)
                 media_sent = send_whatsapp_message(wa_id, media_url, media_type)

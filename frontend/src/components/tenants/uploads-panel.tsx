@@ -35,6 +35,8 @@ import {
   knowledgeGapsApi,
   aggregateBifurcationStats,
   waitForUploadReady,
+  isBifurcationError,
+  parseBifurcationStats,
   type AdminFile,
   type BifurcationResult,
   type KnowledgeGap,
@@ -98,12 +100,32 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
 
   const finishUploadBatch = async (filenames: string[]) => {
     toast.push(`Extracting & publishing ${filenames.length} document${filenames.length === 1 ? '' : 's'}…`)
-    const readyFiles = await waitForUploadReady(tenantId, filenames, { module })
+    const { files: readyFiles, timedOut } = await waitForUploadReady(tenantId, filenames, { module })
     state.reload()
     const failed = readyFiles.filter((f) => f.status === 'failed')
+    const stillProcessing = readyFiles.filter((f) => f.status === 'processing')
+    const bifErrors = readyFiles.filter((f) => {
+      if (f.status !== 'ready') return false
+      return isBifurcationError(parseBifurcationStats(f.bifurcation_stats))
+    })
     if (failed.length) {
       toast.push(
         `${failed.length} file(s) failed: ${failed.map((f) => f.name).join(', ')}`,
+        'error',
+      )
+    }
+    if (timedOut || stillProcessing.length) {
+      toast.push(
+        timedOut
+          ? `Still processing after timeout: ${stillProcessing.map((f) => f.name).join(', ') || filenames.join(', ')}. Refresh later.`
+          : `${stillProcessing.length} file(s) still processing.`,
+        'error',
+      )
+      return
+    }
+    if (bifErrors.length) {
+      toast.push(
+        `Indexed, but auto-config failed for: ${bifErrors.map((f) => f.name).join(', ')}`,
         'error',
       )
     }
@@ -120,8 +142,8 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
           ? `Published live: ${bits.join(', ')}`
           : 'Upload complete — content indexed (no new catalog items detected).',
       )
-    } else if (!failed.length) {
-      toast.push('Upload complete — processing finished.')
+    } else if (!failed.length && !bifErrors.length) {
+      toast.push('Upload complete — content indexed.')
     }
   }
 
@@ -131,14 +153,25 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
     setUploading(true)
     setBifurcationResult(null)
     const uploadedNames: string[] = []
+    const failedNames: string[] = []
     try {
       for (const file of batch) {
-        const result = await action.run(() => uploadsApi.upload(tenantId, file, module))
-        if (result?.filename) uploadedNames.push(result.filename)
-        else uploadedNames.push(file.name)
+        try {
+          const result = await uploadsApi.upload(tenantId, file, module)
+          if (result?.filename) uploadedNames.push(result.filename)
+          else {
+            failedNames.push(file.name)
+            toast.push(`Upload failed: ${file.name}`, 'error')
+          }
+        } catch (err) {
+          failedNames.push(file.name)
+          toast.push(`${file.name}: ${(err as Error).message || 'Upload failed'}`, 'error')
+        }
       }
       if (uploadedNames.length) {
         await finishUploadBatch(uploadedNames)
+      } else if (failedNames.length) {
+        state.reload()
       }
     } catch (err) {
       toast.push((err as Error).message || 'Upload failed', 'error')
@@ -194,11 +227,16 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
     }
     setBifurcating(true)
     setBifurcationResult(null)
+    const moduleFilenames = files.map((f) => f.name)
     try {
-      toast.push('Re-processing library files…')
-      const res = await uploadsApi.bifurcateExisting(tenantId)
-      setBifurcationResult(res)
-      toast.push('Re-process complete — catalog & knowledge updated.')
+      toast.push(`Re-processing ${moduleFilenames.length} file(s) in this library…`)
+      const res = await uploadsApi.bifurcateExisting(tenantId, moduleFilenames)
+      if (String(res?.status || '').toLowerCase() === 'error') {
+        toast.push(res?.error || 'Re-process failed', 'error')
+      } else {
+        setBifurcationResult(res)
+        toast.push('Re-process complete — catalog & knowledge updated.')
+      }
       state.reload()
     } catch (err) {
       toast.push((err as Error).message || 'Re-process failed', 'error')
@@ -591,9 +629,15 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
                       ].filter(Boolean)
                       if (!parts.length && s.status !== 'error') return null
                       return (
-                        <p className="mt-0.5 text-2xs text-emerald-400/90">
+                        <p
+                          className={
+                            s.status === 'error'
+                              ? 'mt-0.5 text-2xs text-rose-400'
+                              : 'mt-0.5 text-2xs text-emerald-400/90'
+                          }
+                        >
                           {s.status === 'error'
-                            ? 'Auto-bifurcation error'
+                            ? 'Auto-bifurcation error — content may be indexed without catalog/menu updates'
                             : `Extracted: ${parts.join(' · ')}`}
                         </p>
                       )

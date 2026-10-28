@@ -683,13 +683,27 @@ def _process_document_background(
     chunks = []
     bifurcation_stats = None
     try:
+        # Drop prior indexed rows for this file so re-uploads do not duplicate.
+        try:
+            delete_file_chunks(filename, tenant_id=tenant_id)
+            delete_knowledge_base_file(filename, tenant_id=tenant_id)
+        except Exception as purge_err:
+            logger.warning("Pre-ingest purge failed for %s: %s", filename, purge_err)
+
         results = process_file(filepath)
         if results:
             chunks = results_to_chunks(results)
             if chunks:
                 if module == "kb":
                     from database import save_knowledge_base_chunks
-                    save_knowledge_base_chunks(chunks, filename, media_url=effective_url, media_type=effective_media_type, tenant_id=tenant_id)
+                    save_knowledge_base_chunks(
+                        chunks,
+                        filename,
+                        media_url=effective_url,
+                        media_type=effective_media_type,
+                        tenant_id=tenant_id,
+                        replace_existing=True,
+                    )
                     try:
                         from kb.services.rag import build_chunks_for_kb, generate_missing_embeddings, rebuild_faiss_index
                         build_chunks_for_kb()
@@ -699,7 +713,14 @@ def _process_document_background(
                     except Exception as e:
                         logger.error(f"KB FAISS rebuild failed after background upload {filename}: {e}")
                 else:
-                    save_chunks(chunks, module=module, media_url=effective_url, media_type=effective_media_type, tenant_id=tenant_id)
+                    save_chunks(
+                        chunks,
+                        module=module,
+                        media_url=effective_url,
+                        media_type=effective_media_type,
+                        tenant_id=tenant_id,
+                        replace_existing=True,
+                    )
                 try:
                     from faq.service import faq_index
                     faq_index.build(force=True)
@@ -707,7 +728,10 @@ def _process_document_background(
                 except Exception as e:
                     logger.warning(f"FAQ index auto-sync failed after background upload {filename}: {e}")
 
-                if os.environ.get("AUTO_BIFURCATE", "1").strip().lower() not in ("0", "false", "no", "off"):
+                # Legacy tenant_kb/tenant_faq writer is OFF by default — those tables
+                # are not used by live retrieval (faq_dataset / knowledge_base are).
+                # Opt in with AUTO_BIFURCATE=1 only when you still need that path.
+                if os.environ.get("AUTO_BIFURCATE", "0").strip().lower() not in ("0", "false", "no", "off"):
                     try:
                         try:
                             from bifurcate import bifurcate_and_save_chunks
@@ -746,14 +770,50 @@ def _process_document_background(
                 logger.warning(f"Full upload auto-router failed for {filename}: {e}", exc_info=True)
                 bifurcation_stats = {"status": "error", "error": str(e), "files_processed": [filename]}
 
-        update_admin_file_status(
-            filename,
-            status="ready",
-            chunks_count=len(chunks),
-            tenant_id=tenant_id,
-            bifurcation_stats=bifurcation_stats,
+        bif_err = (
+            isinstance(bifurcation_stats, dict)
+            and str(bifurcation_stats.get("status") or "").lower() == "error"
         )
-        logger.info(f"ASYNC_INGESTION_COMPLETED | {filename} | chunks={len(chunks)} | tenant={tenant_id}")
+        bif_useful = isinstance(bifurcation_stats, dict) and any(
+            int(bifurcation_stats.get(k) or 0)
+            for k in ("offerings_created", "faqs_saved", "kb_chunks_indexed", "menu_buttons_count", "intents_count")
+        )
+        # Brochure modules may be deliverable as the file itself (0 chunks OK).
+        # FAQ/KB uploads with no extract and no useful bifurcation are failures.
+        no_content = len(chunks) == 0 and not bif_useful and (
+            bif_err or module in ("faq", "kb")
+        )
+        if no_content:
+            err_msg = None
+            if isinstance(bifurcation_stats, dict):
+                err_msg = bifurcation_stats.get("error")
+            update_admin_file_status(
+                filename,
+                status="failed",
+                chunks_count=0,
+                error_message=err_msg or "No text could be extracted or configured from the document",
+                tenant_id=tenant_id,
+                bifurcation_stats=bifurcation_stats,
+            )
+            logger.warning(
+                "ASYNC_INGESTION_EMPTY | %s | chunks=0 | bif_err=%s | tenant=%s",
+                filename, bif_err, tenant_id,
+            )
+        else:
+            update_admin_file_status(
+                filename,
+                status="ready",
+                chunks_count=len(chunks),
+                error_message="",
+                tenant_id=tenant_id,
+                bifurcation_stats=bifurcation_stats,
+            )
+            logger.info(f"ASYNC_INGESTION_COMPLETED | {filename} | chunks={len(chunks)} | tenant={tenant_id}")
+            try:
+                from kb.services.brain import clear_response_cache
+                clear_response_cache()
+            except Exception:
+                pass
     except Exception as exc:
         logger.error(f"ASYNC_INGESTION_FAILED | {filename}: {exc}", exc_info=True)
         update_admin_file_status(
@@ -860,7 +920,7 @@ async def run_upload(
     # media_url for the answer. Catalogue PDF text is intentionally NOT
     # imported into the products table — "catalogue" requests send the PDF.
     catbox_url = None
-    if ext == ".pdf" and module in ("faq", "catalogue", "new_arrival") and not url:
+    if ext == ".pdf" and module in ("faq", "catalogue", "new_arrival", "kb") and not url:
         try:
             catbox_url = await _upload_to_catbox(filename, content, media_type or "application/pdf")
             logger.info(f"CATBOX_UPLOAD | {filename} -> {catbox_url}")
@@ -1148,19 +1208,55 @@ def decode_attachment_body(data: dict) -> tuple[str, bytes, str | None]:
 
 
 async def store_chat_attachment(filename: str, content: bytes, media_type: str | None = None) -> dict:
-    """Save one chat attachment on our own disk and return a descriptor.
+    """Save a chat/inbox attachment and return a public WhatsApp-ready URL.
 
-    Hosted locally (no ImgHippo/Catbox), so admin chat and the live inbox never
-    depend on a third-party host or an API key.
+    Always keeps a local copy under ``chat_attachments``. Images are hosted on
+    Imghippo; other files (PDFs, docs) on catbox.moe so Meta/send2 can fetch
+    them. Falls back to the local ``/api/uploads/chat/...`` path if hosting fails.
     """
     ext = Path(filename).suffix.lower()
     is_image = (media_type or "").startswith("image/") or ext in _IMAGE_EXTS
     safe_ext = ext if 0 < len(ext) <= 10 else (".png" if is_image else ".bin")
     stored = f"{uuid.uuid4().hex}{safe_ext}"
-    with open(os.path.join(CHAT_ATTACHMENTS_DIR, stored), "wb") as handle:
+    local_path = os.path.join(CHAT_ATTACHMENTS_DIR, stored)
+    with open(local_path, "wb") as handle:
         handle.write(content)
+
+    local_url = f"/api/uploads/chat/{stored}"
+    public_url = local_url
+    try:
+        if is_image and IMGHIPPO_API_KEY:
+            payload = aiohttp.FormData()
+            payload.add_field(
+                "file",
+                content,
+                filename=filename or stored,
+                content_type=media_type or "application/octet-stream",
+            )
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.imghippo.com/v1/upload",
+                    data=payload,
+                    headers={"X-API-Key": IMGHIPPO_API_KEY},
+                ) as resp:
+                    data = await resp.json()
+                    if resp.ok and data.get("success") and data.get("data", {}).get("url"):
+                        public_url = data["data"]["url"]
+                        logger.info(f"CHAT_ATTACH_IMGHIPPO | {filename} -> {public_url}")
+        if public_url == local_url:
+            public_url = await _upload_to_catbox(
+                filename or stored,
+                content,
+                media_type or "application/octet-stream",
+            )
+            logger.info(f"CHAT_ATTACH_CATBOX | {filename} -> {public_url}")
+    except Exception as e:
+        logger.error(f"Chat attachment public host failed for {filename}: {e}")
+        public_url = local_url
+
     return {
-        "url": f"/api/uploads/chat/{stored}",
+        "url": public_url,
+        "local_url": local_url,
         "name": filename,
         "type": "image" if is_image else "document",
         "size": len(content),

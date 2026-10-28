@@ -132,16 +132,19 @@ export function RegisterWizard({ onSubmitted }: { onSubmitted?: () => void } = {
       if (!saved) return
 
       if (draft.stagedUpload) {
-        const published = await action.run(() =>
-          onboardingKitsApi.publishTenant(id, {
+        try {
+          const published = await onboardingKitsApi.publishTenant(id, {
             ...draft.stagedUpload!,
             tenant_id: id,
             vertical: draft.vertical || draft.stagedUpload!.vertical,
-          }),
-        )
-        if (published) {
+          })
           toast.push(
             `Registered + applied upload (${published.summary?.offerings_created ?? 0} offerings, intents updated).`,
+          )
+        } catch (err) {
+          toast.push(
+            `${(err as Error).message || 'Document import failed'}. Tenant was registered — re-upload from Uploads.`,
+            'error',
           )
         }
       }
@@ -166,13 +169,22 @@ export function RegisterWizard({ onSubmitted }: { onSubmitted?: () => void } = {
       return
     }
     if (draft.stagedUpload) {
-      await action.run(() =>
-        onboardingKitsApi.publishTenant(id, {
+      try {
+        const published = await onboardingKitsApi.publishTenant(id, {
           ...draft.stagedUpload!,
           tenant_id: id,
           vertical: draft.vertical || draft.stagedUpload!.vertical,
-        }),
-      )
+        })
+        toast.push(
+          `Applied upload (${published.summary?.offerings_created ?? 0} offerings, intents updated).`,
+        )
+      } catch (err) {
+        toast.push(
+          `${(err as Error).message || 'Document import failed'}. Fix the upload before submitting for approval.`,
+          'error',
+        )
+        return
+      }
     }
     const submitted = await action.run(() => tenantApprovalsApi.submitPublish(id))
     if (!submitted) return

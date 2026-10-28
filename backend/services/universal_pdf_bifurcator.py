@@ -370,20 +370,35 @@ async def call_bifurcation_llm(system_prompt: str, user_prompt: str) -> Dict[str
 
 # ── Database Storage Routines for the 5 Buckets ─────────────────────────────
 
+def _resolve_storage_tenant_id(tenant_id: str):
+    """Keep the uploader's tenant identity — never fall back to tenant ``1``.
+
+    Prefer the numeric store id when the slug resolves; otherwise persist the
+    slug/string so FAQ/KB filters stay scoped to the real tenant.
+    """
+    tid = str(tenant_id or "").strip()
+    if not tid:
+        return None
+    try:
+        from shared.tenancy import store
+        rec = store.get_tenant(tid)
+        if rec and rec.get("id") is not None:
+            return rec["id"]
+    except Exception:
+        pass
+    if tid.isdigit():
+        return int(tid)
+    return tid
+
+
 def _save_faq_pairs(faqs: List[Dict[str, str]], tenant_id: str, source_file: str, page_number: int = 1) -> int:
     """Save extracted Q&A pairs into faq_dataset."""
     if not faqs:
         return 0
-    t_num = None
-    try:
-        from shared.tenancy import store
-        rec = store.get_tenant(tenant_id)
-        if rec and rec.get("id"):
-            t_num = rec["id"]
-    except Exception:
-        pass
+    t_num = _resolve_storage_tenant_id(tenant_id)
     if t_num is None:
-        t_num = int(tenant_id) if str(tenant_id).isdigit() else 1
+        logger.error("Refusing FAQ save without tenant_id for source=%s", source_file)
+        return 0
 
     saved = 0
     with db.get_db_context() as conn:
@@ -406,16 +421,10 @@ def _save_kb_chunks(kb_chunks: List[Dict[str, str]], tenant_id: str, source_file
     """Save narrative reference chunks into knowledge_base."""
     if not kb_chunks:
         return 0
-    t_num = None
-    try:
-        from shared.tenancy import store
-        rec = store.get_tenant(tenant_id)
-        if rec and rec.get("id"):
-            t_num = rec["id"]
-    except Exception:
-        pass
+    t_num = _resolve_storage_tenant_id(tenant_id)
     if t_num is None:
-        t_num = int(tenant_id) if str(tenant_id).isdigit() else 1
+        logger.error("Refusing KB save without tenant_id for source=%s", source_file)
+        return 0
 
     saved = 0
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -481,6 +490,17 @@ async def bifurcate_and_ingest_pdf(
         page = doc[page_idx]
         page_num = page_idx + 1
         text = page.get_text("text").strip()
+        # Scanned pages often have empty native text — OCR before skipping.
+        if len(text) < 30 and page_idx < 20:
+            try:
+                import pytesseract
+                pix = page.get_pixmap(dpi=200)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                ocr_txt = (pytesseract.image_to_string(img) or "").strip()
+                if len(ocr_txt) > len(text):
+                    text = ocr_txt
+            except Exception as ocr_err:
+                logger.debug("OCR skipped page %d of %s: %s", page_num, filename, ocr_err)
         if len(text) < 30:
             continue
 

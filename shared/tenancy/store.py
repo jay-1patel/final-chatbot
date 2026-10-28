@@ -247,19 +247,163 @@ def tenant_id_for_user(wa_id: str) -> Optional[str]:
     return tid or None
 
 
-def delete_tenant(tenant_id: str, conn=None) -> bool:
-    def _delete(connection):
-        connection.execute("DELETE FROM tenant_profile_versions WHERE tenant_id = ?", (str(tenant_id),))
-        connection.execute("DELETE FROM draft_config WHERE scope = ?", (profile_scope(tenant_id),))
-        connection.execute("DELETE FROM published_config WHERE scope = ?", (profile_scope(tenant_id),))
-        connection.execute("DELETE FROM tenants WHERE id = ?", (str(tenant_id),))
+# Tables that keep rows after a tenant is wiped (compliance / ops history).
+_PURGE_SKIP_TABLES = frozenset({
+    "admin_audit_events",
+    "sqlite_sequence",
+    "sqlite_stat1",
+})
+
+
+def _tables_with_column(connection, column: str) -> List[str]:
+    rows = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    out: List[str] = []
+    for row in rows:
+        name = row["name"] if hasattr(row, "keys") else row[0]
+        if name in _PURGE_SKIP_TABLES:
+            continue
+        cols = [
+            (c["name"] if hasattr(c, "keys") else c[1])
+            for c in connection.execute(f"PRAGMA table_info({name})").fetchall()
+        ]
+        if column in cols:
+            out.append(str(name))
+    return sorted(out)
+
+
+def _purge_tenant_disk(tenant_id: str, slug: str = "") -> List[str]:
+    """Remove clients/<id|slug> packs under repo and backend roots."""
+    import shutil
+    from .paths import BACKEND_DIR, CLIENTS_DIR
+
+    removed: List[str] = []
+    names = {str(tenant_id).strip()}
+    if slug and str(slug).strip():
+        names.add(str(slug).strip())
+    roots = [CLIENTS_DIR, BACKEND_DIR / "clients"]
+    for root in roots:
+        try:
+            if not root.exists():
+                continue
+        except Exception:
+            continue
+        for name in names:
+            if not name or name in (".", ".."):
+                continue
+            path = root / name
+            try:
+                if path.is_dir() and path.resolve().parent == root.resolve():
+                    shutil.rmtree(path)
+                    removed.append(str(path))
+            except Exception as exc:
+                logger.warning("TENANT_PURGE_DISK_FAILED | path=%s | %s", path, exc)
+    return removed
+
+
+def purge_tenant_data(tenant_id: str, conn=None, *, slug: str = "") -> Dict[str, Any]:
+    """Permanently delete all DB rows and client-pack files for a tenant.
+
+    Keeps ``admin_audit_events`` so who-deleted-what remains visible.
+    """
+    tid = str(tenant_id or "").strip()
+    if not tid:
+        raise ValueError("tenant_id is required")
+
+    summary: Dict[str, Any] = {"tenant_id": tid, "tables": {}, "disk": []}
+
+    def _purge(connection):
+        # Child event tables keyed by request id (no tenant_id column).
+        try:
+            connection.execute(
+                """DELETE FROM api_onboarding_request_events WHERE request_id IN (
+                     SELECT id FROM api_onboarding_requests WHERE tenant_id = ?
+                   )""",
+                (tid,),
+            )
+        except Exception:
+            pass
+        try:
+            connection.execute(
+                """DELETE FROM tenant_change_request_events WHERE request_id IN (
+                     SELECT id FROM tenant_change_requests WHERE tenant_id = ?
+                   )""",
+                (tid,),
+            )
+        except Exception:
+            pass
+
+        scope = profile_scope(tid)
+        for table, sql, params in (
+            ("draft_config", "DELETE FROM draft_config WHERE scope = ?", (scope,)),
+            ("published_config", "DELETE FROM published_config WHERE scope = ?", (scope,)),
+            ("publish_history", "DELETE FROM publish_history WHERE scope = ?", (scope,)),
+        ):
+            try:
+                cur = connection.execute(sql, params)
+                summary["tables"][table] = int(cur.rowcount or 0)
+            except Exception as exc:
+                logger.warning("TENANT_PURGE_TABLE_FAILED | table=%s | %s", table, exc)
+
+        for table in _tables_with_column(connection, "tenant_id"):
+            if table == "tenants":
+                continue
+            try:
+                cur = connection.execute(
+                    f"DELETE FROM {table} WHERE tenant_id = ?", (tid,)
+                )
+                summary["tables"][table] = int(cur.rowcount or 0)
+            except Exception as exc:
+                logger.warning("TENANT_PURGE_TABLE_FAILED | table=%s | %s", table, exc)
+
+        # Clear WhatsApp test override if it pointed at this tenant.
+        try:
+            row = connection.execute(
+                "SELECT value FROM app_settings WHERE key = ?",
+                ("active_test_tenant",),
+            ).fetchone()
+            active = ""
+            if row:
+                active = str(row["value"] if hasattr(row, "keys") else row[0] or "").strip()
+            if active and active in {tid, str(slug or "").strip()}:
+                connection.execute(
+                    "DELETE FROM app_settings WHERE key = ?",
+                    ("active_test_tenant",),
+                )
+                summary["tables"]["app_settings.active_test_tenant"] = 1
+        except Exception:
+            pass
+
+        cur = connection.execute("DELETE FROM tenants WHERE id = ?", (tid,))
+        summary["tables"]["tenants"] = int(cur.rowcount or 0)
 
     if conn is None:
         with _db().get_db_context() as own_conn:
-            _delete(own_conn)
+            _purge(own_conn)
     else:
-        _delete(conn)
-    invalidate(tenant_id)
+        _purge(conn)
+
+    summary["disk"] = _purge_tenant_disk(tid, slug=slug)
+    invalidate(tid)
+    logger.info(
+        "TENANT_PURGED | tenant=%s | tables=%s | disk=%s",
+        tid,
+        {k: v for k, v in summary["tables"].items() if v},
+        summary["disk"],
+    )
+    return summary
+
+
+def delete_tenant(tenant_id: str, conn=None) -> bool:
+    """Hard-delete a tenant registry row and all of its tenant-scoped data."""
+    record = None
+    try:
+        record = get_tenant(tenant_id)
+    except Exception:
+        record = None
+    slug = str((record or {}).get("slug") or "").strip()
+    purge_tenant_data(tenant_id, conn=conn, slug=slug)
     return True
 
 

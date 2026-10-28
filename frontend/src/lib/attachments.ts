@@ -2,9 +2,8 @@
  * Chat attachments for the internal admin chat and the live inbox.
  *
  * Both upload a file to a tenant-scoped endpoint that hosts it publicly
- * (imghippo for images, catbox otherwise) and returns a descriptor. The
- * descriptor is embedded in the admin-chat message, or turned into a link in
- * the inbox reply — WhatsApp media sending is disabled project-wide.
+ * (Imghippo for images, catbox.moe otherwise) and returns a descriptor.
+ * Inbox replies send the descriptor as native WhatsApp image/document media.
  */
 
 import { api } from './api'

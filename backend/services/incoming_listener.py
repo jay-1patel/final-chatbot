@@ -162,12 +162,43 @@ def _record_poll(wa_id: str, text: str) -> None:
         logger.warning(f"Could not log poll webhook for {wa_id}: {e}")
 
 
+def _resolve_send_url(media_url: str) -> str:
+    """Turn a stored/local media path into a public HTTPS URL for send2."""
+    if not media_url:
+        return media_url
+    try:
+        from kb.services.whatsapp import resolve_public_media_url
+        resolved = resolve_public_media_url(media_url)
+        if resolved:
+            return resolved
+    except Exception as e:
+        logger.warning(f"resolve_public_media_url failed: {e}")
+    return media_url
+
+
+def _header_media_link(header_media: dict | None) -> tuple[str | None, str]:
+    """Extract (url, msg_type) from a captured WhatsApp header_media payload."""
+    if not isinstance(header_media, dict):
+        return None, "document"
+    htype = (header_media.get("type") or "document").lower()
+    block = header_media.get(htype) or header_media.get("document") or header_media.get("image") or {}
+    if isinstance(block, dict):
+        url = block.get("link") or block.get("url") or ""
+    else:
+        url = ""
+    if not url:
+        return None, htype if htype in ("image", "document", "video", "audio") else "document"
+    return url, htype if htype in ("image", "document", "video", "audio") else "document"
+
+
 async def _send_reply(wa_id: str, messages: list) -> None:
     """Send the orchestrator's captured messages via send2.digital.
 
     `messages` is a list of dicts like:
         {"type": "text", "text": "..."}
-        {"type": "buttons", "text": "...", "buttons": [...]}
+        {"type": "image", "media_url": "...", "caption": "..."}
+        {"type": "document", "media_url": "...", "filename": "..."}
+        {"type": "buttons", "text": "...", "buttons": [...], "header_media": {...}}
         {"type": "list", "header": "...", "body": "...", "button_text": "...", "sections": [...]}
     """
     for msg in messages:
@@ -183,8 +214,34 @@ async def _send_reply(wa_id: str, messages: list) -> None:
                     send_whatsapp_message(wa_id, text)
                     logger.info(f"Sent text reply to {wa_id}: {text[:80]}...")
 
+            elif msg_type == "image":
+                url = _resolve_send_url(msg.get("media_url") or "")
+                if url:
+                    send_whatsapp_message(wa_id, url, msg_type="image")
+                    logger.info(f"Sent image reply to {wa_id}: {url[:80]}")
+                caption = (msg.get("caption") or "").strip()
+                if caption:
+                    send_whatsapp_message(wa_id, caption)
+                    logger.info(f"Sent image caption to {wa_id}: {caption[:80]}...")
+
+            elif msg_type == "document":
+                url = _resolve_send_url(msg.get("media_url") or "")
+                if url:
+                    send_whatsapp_message(wa_id, url, msg_type="document")
+                    logger.info(
+                        f"Sent document reply to {wa_id}: name={msg.get('filename') or ''} url={url[:80]}"
+                    )
+
             elif msg_type == "buttons":
                 text = msg.get("text", "")
+                # Catalogue / new-arrivals capture PDF in header_media; list menus
+                # cannot carry a document header, so send the file first.
+                hm_url, hm_type = _header_media_link(msg.get("header_media"))
+                if hm_url:
+                    resolved = _resolve_send_url(hm_url)
+                    if resolved:
+                        send_whatsapp_message(wa_id, resolved, msg_type=hm_type)
+                        logger.info(f"Sent header_media ({hm_type}) to {wa_id}: {resolved[:80]}")
                 # Buttons arrive already nested ({"type":"reply","reply":{...}})
                 # from the workflows; normalize tolerates flat {"id","title"} too.
                 api_buttons = normalize_reply_buttons(msg.get("buttons", []))

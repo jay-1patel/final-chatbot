@@ -327,13 +327,29 @@ async def send_media_message(contact_no: str, media_type: str, media_url: str, c
     if media_type not in ("image", "video", "document"):
         raise ValueError(f"Invalid media_type: {media_type}. Must be 'image', 'video', or 'document'")
 
-    # Image/video stay disabled. Documents are allowed only when the tenant
-    # has brochure_pdf enabled (catalogues and PDFs).
-    if media_type != "document" or not _brochure_pdf_allowed(contact_no):
-        logger.info(f"MEDIA_SEND_DISABLED | to={contact_no} | type={media_type} | url={str(media_url)[:120]}")
+    if media_type == "document" and not _brochure_pdf_allowed(contact_no):
+        logger.info(f"MEDIA_SEND_DISABLED | to={contact_no} | type=document | brochure_pdf off | url={str(media_url)[:120]}")
         return False
 
-    return await _send_document_media(contact_no, media_url, caption=caption)
+    if media_type == "document":
+        return await _send_document_media(contact_no, media_url, caption=caption)
+
+    try:
+        from routing.whatsapp import send_whatsapp_message as routing_send, _resolve_media_url
+        resolved = resolve_public_media_url(media_url) or _resolve_media_url(media_url)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        ok = await loop.run_in_executor(
+            None, lambda: routing_send(contact_no, resolved, msg_type=media_type)
+        )
+        if ok and caption:
+            await loop.run_in_executor(
+                None, lambda: routing_send(contact_no, caption, msg_type="text")
+            )
+        return bool(ok)
+    except Exception as e:
+        logger.error(f"send_media_message failed: {e}")
+        return False
 
 
 
@@ -872,6 +888,12 @@ def resolve_public_media_url(media_url: str) -> Optional[str]:
         if os.path.isfile(potential):
             local_path = potential
             stored_name = os.path.basename(potential)
+    elif media_url.startswith("/api/uploads/chat/"):
+        # Inbox/admin chat attachments live under uploaded_files/chat_attachments/
+        stored_name = media_url.rstrip("/").split("/")[-1]
+        potential = os.path.join(UPLOAD_DIR, "chat_attachments", stored_name)
+        if os.path.isfile(potential):
+            local_path = potential
     elif os.path.isfile(media_url):
         local_path = media_url
         stored_name = os.path.basename(media_url)
@@ -884,23 +906,24 @@ def resolve_public_media_url(media_url: str) -> Optional[str]:
     if stored_name:
         pass  # media table removed; local path resolution handled below
 
-    if (media_url.startswith("/media/serve/") or media_url.startswith("/uploaded_files/")) and config.PUBLIC_BASE_URL:
-        base = config.PUBLIC_BASE_URL.rstrip("/")
-        return f"{base}{media_url}"
-
+    # Prefer permanent Imghippo/catbox hosting over PUBLIC_BASE_URL tunnels
+    # (ngrok/local tunnels go stale and WhatsApp cannot fetch them).
     if local_path and os.path.isfile(local_path):
-        # FIX: Use native file extension checking instead of undefined variables
         file_ext = os.path.splitext(local_path)[1].lower()
-
-        # Determine if it's an image or PDF
         is_image = file_ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
-        is_pdf = file_ext == ".pdf"  # FIX: Direct file extension check, no undefined variable
-
-        # Only upload images and PDFs to external services as fallback
+        is_pdf = file_ext == ".pdf"
         if is_image or is_pdf:
             uploaded = _upload_image_file(local_path)
             if uploaded:
                 return uploaded
+
+    if (
+        media_url.startswith("/media/serve/")
+        or media_url.startswith("/uploaded_files/")
+        or media_url.startswith("/api/uploads/chat/")
+    ) and config.PUBLIC_BASE_URL:
+        base = config.PUBLIC_BASE_URL.rstrip("/")
+        return f"{base}{media_url}"
 
     return None
 
@@ -1006,11 +1029,21 @@ def _upload_image_file(file_path: str) -> Optional[str]:
 # They map old function names to the new API functions
 
 def send_whatsapp_message(to, text, message_type="text"):
-    """Legacy wrapper - maps to NEW API send_text_message."""
-    # Direct media sends are disabled for the bot; only text is supported here.
-    if message_type != "text":
-        logger.info(f"MEDIA_SEND_DISABLED | to={to} | type={message_type} | url={str(text)[:120]}")
-        return False
+    """Legacy wrapper - maps to routing.whatsapp (text + media)."""
+    mt = (message_type or "text").lower().strip()
+    if mt != "text":
+        try:
+            from routing.whatsapp import send_whatsapp_message as routing_send
+            url = text
+            if mt in ("image", "document", "video", "audio"):
+                resolved = resolve_public_media_url(str(text or ""))
+                if resolved:
+                    url = resolved
+            logger.info(f"OUTGOING (LEGACY MEDIA) | to={to} | type={mt} | url={str(url)[:120]}")
+            return routing_send(to, url, msg_type=mt)
+        except Exception as e:
+            logger.error(f"legacy media send failed: {e}")
+            return False
     # This is kept for synchronous compatibility
     import asyncio
     import threading
@@ -1075,21 +1108,39 @@ def _send_whatsapp_sync(to, payload, message_type):
 
 
 def send_image(to: str, media_url: str) -> bool:
-    """Legacy wrapper — direct image sends are disabled for the bot."""
-    logger.info(f"MEDIA_SEND_DISABLED | to={to} | type=image | url={str(media_url)[:120]}")
-    return False
+    """Send image directly via WhatsApp API (routing/send2)."""
+    try:
+        from routing.whatsapp import send_whatsapp_message as routing_send, _resolve_media_url
+        resolved = resolve_public_media_url(media_url) or _resolve_media_url(media_url)
+        logger.info(f"SEND_IMAGE | to={to} | url={resolved}")
+        return routing_send(to, resolved, msg_type="image")
+    except Exception as e:
+        logger.error(f"send_image failed: {e}")
+        return False
 
 
 def send_video(to: str, video_url: str) -> bool:
-    """Legacy wrapper — direct media sends are disabled for the bot."""
-    logger.info(f"MEDIA_SEND_DISABLED | to={to} | type=video | url={str(video_url)[:120]}")
-    return False
+    """Send video directly via WhatsApp API (routing/send2)."""
+    try:
+        from routing.whatsapp import send_whatsapp_message as routing_send, _resolve_media_url
+        resolved = resolve_public_media_url(video_url) or _resolve_media_url(video_url)
+        logger.info(f"SEND_VIDEO | to={to} | url={resolved}")
+        return routing_send(to, resolved, msg_type="video")
+    except Exception as e:
+        logger.error(f"send_video failed: {e}")
+        return False
 
 
 def send_audio(to: str, audio_url: str) -> bool:
-    """Legacy wrapper — direct media sends are disabled for the bot."""
-    logger.info(f"MEDIA_SEND_DISABLED | to={to} | type=audio | url={str(audio_url)[:120]}")
-    return False
+    """Send audio directly via WhatsApp API (routing/send2)."""
+    try:
+        from routing.whatsapp import send_whatsapp_message as routing_send, _resolve_media_url
+        resolved = resolve_public_media_url(audio_url) or _resolve_media_url(audio_url)
+        logger.info(f"SEND_AUDIO | to={to} | url={resolved}")
+        return routing_send(to, resolved, msg_type="audio")
+    except Exception as e:
+        logger.error(f"send_audio failed: {e}")
+        return False
 
 
 def send_document(to: str, doc_url: str, filename: str = None) -> bool:

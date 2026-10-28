@@ -2499,8 +2499,22 @@ def save_embeddings(embedding_data):
             )
 
 
-def save_chunks(chunks, module="faq", media_url=None, media_type=None, tenant_id=None):
+def save_chunks(chunks, module="faq", media_url=None, media_type=None, tenant_id=None, replace_existing=False):
+    """Insert FAQ/document chunks. When replace_existing=True, delete prior rows
+    for each distinct source_file (+ tenant) before inserting — prevents duplicate
+    vectors on re-upload.
+    """
     with get_db_context() as conn:
+        if replace_existing:
+            sources = {chunk.get("source_file") for chunk in chunks if chunk.get("source_file")}
+            for src in sources:
+                if tenant_id is not None:
+                    conn.execute(
+                        "DELETE FROM faq_dataset WHERE source_file = ? AND tenant_id = ?",
+                        (src, tenant_id),
+                    )
+                else:
+                    conn.execute("DELETE FROM faq_dataset WHERE source_file = ?", (src,))
         for chunk in chunks:
             conn.execute(
                 "INSERT INTO faq_dataset (source_file, content_type, content, page_number, module, media_url, media_type, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -2508,7 +2522,10 @@ def save_chunks(chunks, module="faq", media_url=None, media_type=None, tenant_id
             )
 
 
-def save_knowledge_base_chunks(chunks, source_file, media_url=None, media_type=None, tenant_id=None):
+def save_knowledge_base_chunks(chunks, source_file, media_url=None, media_type=None, tenant_id=None, replace_existing=True):
+    """Insert KB rows. Defaults to replace_existing so re-uploads do not leave
+    stale FAISS/SQL duplicates for the same source + tenant.
+    """
     from collections import defaultdict
     grouped = defaultdict(list)
     for chunk in chunks:
@@ -2516,6 +2533,14 @@ def save_knowledge_base_chunks(chunks, source_file, media_url=None, media_type=N
 
     with get_db_context() as conn:
         for src, group in grouped.items():
+            if replace_existing:
+                if tenant_id is not None:
+                    conn.execute(
+                        "DELETE FROM knowledge_base WHERE source = ? AND tenant_id = ?",
+                        (src, tenant_id),
+                    )
+                else:
+                    conn.execute("DELETE FROM knowledge_base WHERE source = ?", (src,))
             texts = [c.get("content", "") for c in group if c.get("content")]
             full_text = "\n".join(texts)
             conn.execute(

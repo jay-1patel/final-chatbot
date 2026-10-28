@@ -332,12 +332,25 @@ def delete_tenant(
     tenant_id: str,
     principal: dict = Depends(require_tenant_access()),
 ):
+    """Permanently wipe a tenant: registry, profile, and all tenant-scoped DB/disk data.
+
+    Super-admin only. ``admin_audit_events`` for the delete are kept.
+    """
     _admin_only(principal)
+    if principal.get("role") != "super_admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only a super admin can permanently delete a tenant and its data",
+        )
     tenant_snapshot = tenancy_store.get_tenant(tenant_id)
     if not tenant_snapshot:
         raise HTTPException(status_code=404, detail="tenant not found")
     with get_db_context() as conn:
-        tenancy_store.delete_tenant(tenant_id, conn=conn)
+        purge = tenancy_store.purge_tenant_data(
+            tenant_id,
+            conn=conn,
+            slug=str(tenant_snapshot.get("slug") or ""),
+        )
         record_admin_audit_event(
             conn,
             action="tenant_deleted",
@@ -347,11 +360,17 @@ def delete_tenant(
             tenant_id=tenant_id,
             tenant_name=tenant_snapshot.get("display_name"),
             tenant_slug=tenant_snapshot.get("slug"),
-            details={"display_name": tenant_snapshot.get("display_name"), "slug": tenant_snapshot.get("slug")},
+            details={
+                "display_name": tenant_snapshot.get("display_name"),
+                "slug": tenant_snapshot.get("slug"),
+                "hard_delete": True,
+                "purged_tables": {k: v for k, v in (purge.get("tables") or {}).items() if v},
+                "purged_disk": purge.get("disk") or [],
+            },
         )
     tenancy_cache.purge(tenant_id)
-    logger.info("TENANT_DELETED | tenant=%s | by=%s", tenant_id, principal.get("username"))
-    return {"ok": True, "tenant_id": tenant_id}
+    logger.info("TENANT_DELETED | tenant=%s | by=%s | hard=1", tenant_id, principal.get("username"))
+    return {"ok": True, "tenant_id": tenant_id, "purged": purge}
 
 
 # ── profile: read ─────────────────────────────────────────────────────────

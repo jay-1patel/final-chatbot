@@ -240,7 +240,8 @@ def build_catalog_summary(user_text: str) -> dict | None:
     )
 
     try:
-        from backend.database import list_products, get_db_context
+        from backend.database import list_products
+        # list_products scopes via request tenant set in process_message.
         if wants_arrivals:
             products = list_products(category="new_arrival", limit=8)
         else:
@@ -294,12 +295,16 @@ def build_catalog_summary(user_text: str) -> dict | None:
     media_url = None
     media_type = None
     try:
-        from backend.database import get_db_context
+        from backend.database import get_db_context, _resolve_tenant_ids
+        t_ids = _resolve_tenant_ids(None)
+        placeholders = ", ".join(["?"] * len(t_ids))
         with get_db_context() as conn:
             row = conn.execute(
-                "SELECT media_url, media_type FROM products "
-                "WHERE category = 'catalogue' AND media_url IS NOT NULL AND is_active = 1 "
-                "ORDER BY sort_order ASC LIMIT 1"
+                f"SELECT media_url, media_type FROM products "
+                f"WHERE tenant_id IN ({placeholders}) "
+                f"AND category = 'catalogue' AND media_url IS NOT NULL AND is_active = 1 "
+                f"ORDER BY sort_order ASC LIMIT 1",
+                list(t_ids),
             ).fetchone()
         if row:
             media_url = row[0]
@@ -859,16 +864,13 @@ async def process_message(user_text: str, wa_id: str = None, raw_message: dict =
             buttons = None
 
         if buttons is not None:
-            # Documents are no longer sent to customers. Drop any "View
-            # Document" attachment button and the document media payload so
-            # nothing attempts to send the file.
-            buttons = [
-                b for b in buttons
-                if (b.get("reply") or {}).get("id") != DOCUMENT_BUTTON_ID
-            ]
-            if _media_is_document(result.get("media_type")):
-                result["media_url"] = None
-                result["media_type"] = None
+            # When document media will be sent with the reply, drop the redundant
+            # "View Document" button so the customer is not asked to tap twice.
+            if result.get("media_url") and _media_is_document(result.get("media_type")):
+                buttons = [
+                    b for b in buttons
+                    if (b.get("reply") or {}).get("id") != DOCUMENT_BUTTON_ID
+                ]
             # WhatsApp allows max 3 buttons.
             if len(buttons) > 3:
                 buttons = buttons[:3]

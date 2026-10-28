@@ -49,7 +49,7 @@ export function TenantList() {
   const remove = async (tenant: Tenant) => {
     const result = await action.run(() => tenantsApi.remove(tenant.id))
     if (result) {
-      toast.push(`Tenant "${tenant.id}" deleted`)
+      toast.push(`Tenant "${tenant.id}" permanently deleted (DB + files)`)
       setConfirming(null)
       reload()
     }
@@ -208,7 +208,7 @@ export function TenantList() {
                       (confirming === tenant.id ? (
                         <>
                           <Button size="sm" variant="danger" loading={action.busy} onClick={() => remove(tenant)}>
-                            Confirm
+                            Delete forever
                           </Button>
                           <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>
                             Cancel
@@ -218,7 +218,7 @@ export function TenantList() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          title="Delete tenant"
+                          title="Permanently delete tenant and all its data"
                           onClick={() => setConfirming(tenant.id)}
                           icon={<Trash2 className="h-4 w-4" />}
                         />

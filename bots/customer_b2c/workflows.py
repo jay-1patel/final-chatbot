@@ -136,21 +136,27 @@ async def _llm_synthesize(raw: str, label: str, query: str, tenant_id: str | Non
         return raw
 
 
-async def handle_b2c_message(wa_id: str, message: str, state: str, context: dict) -> dict:
+async def handle_b2c_message(
+    wa_id: str,
+    message: str,
+    state: str,
+    context: dict,
+    tenant_id: str | None = None,
+) -> dict:
     from services.whatsapp_sender import send_text_message, send_button_message, send_list_menu
     from . import tools, menus
 
     cfg = _cfg()
     message = (message or "").strip()
     context = context or {}
-    
-    # Resolve tenant_id for this user
-    tenant_id = None
-    try:
-        from shared.tenancy.resolver import resolve_tenant_for_user
-        tenant_id = resolve_tenant_for_user(wa_id)
-    except Exception:
-        pass
+
+    # Prefer caller-stamped tenant (orchestrator); fall back to user resolver.
+    if not tenant_id:
+        try:
+            from shared.tenancy.resolver import resolve_tenant_for_user
+            tenant_id = resolve_tenant_for_user(wa_id)
+        except Exception:
+            tenant_id = None
 
     # ── Global rule: human handover request wins over anything else ──────────
     if tools.should_escalate(message):
@@ -564,7 +570,12 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
     """
     # Sanitize the message
     message = _sanitize_kb_query(message)
-    from services.whatsapp_sender import send_text_message, send_button_message
+    from services.whatsapp_sender import (
+        send_text_message,
+        send_button_message,
+        send_image_message,
+        send_document_message,
+    )
 
     # 0. Tenant menu row (tapped title) / rules intent: authoritative, no RAG.
     try:
@@ -671,12 +682,16 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
 
     # 1. Query FAQ service (which performs hybrid retrieval + LLM answer synthesis)
     interactive = None
+    faq_media_url = None
+    faq_media_type = None
     try:
         from faq.service import handle_faq_query
         faq_res = await handle_faq_query({"message": message, "wa_id": wa_id, "tenant_id": tid})
         if faq_res and faq_res.get("answer") and faq_res.get("answer").strip():
             answer = faq_res["answer"]
             interactive = faq_res.get("interactive")
+            faq_media_url = faq_res.get("media_url")
+            faq_media_type = faq_res.get("media_type")
     except Exception as e:
         logger.warning(f"FAQ index lookup failed: {e}")
 
@@ -758,6 +773,25 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
         await send_button_message(wa_id, answer, interactive["buttons"])
     else:
         await send_text_message(wa_id, answer)
+
+    # Deliver FAQ/KB attached image or PDF after the text reply (captured by
+    # the send2 poller and sent as native WhatsApp media).
+    if faq_media_url:
+        mt = (faq_media_type or "").lower().strip()
+        try:
+            if mt in ("pdf", "doc", "docx", "xlsx", "xls", "csv", "document"):
+                await send_document_message(wa_id, faq_media_url)
+            elif mt in ("png", "jpg", "jpeg", "gif", "webp", "bmp", "image") or mt.startswith("image"):
+                await send_image_message(wa_id, faq_media_url)
+            else:
+                # Unknown label: treat PDFs by URL suffix, otherwise image.
+                if str(faq_media_url).lower().endswith(".pdf"):
+                    await send_document_message(wa_id, faq_media_url)
+                else:
+                    await send_image_message(wa_id, faq_media_url)
+        except Exception as e:
+            logger.warning(f"FAQ media send failed for {wa_id}: {e}")
+
     return {"status": "answered", "new_state": cfg.B2C_MAIN_MENU_STATE}
 
 

@@ -325,13 +325,22 @@ def reply_to_customer(
     """Send an agent's message to the customer and keep the bot out of the way."""
     message = (body.message or "").strip()
     attach = body.attachment or None
-    if attach and attach.get("url"):
-        # WhatsApp media sending is disabled project-wide, so an attachment is
-        # shared as its hosted URL in the message body.
-        name = attach.get("name") or "attachment"
-        line = f"\U0001F4CE {name}: {attach['url']}"
+    attach_url = (attach or {}).get("url") or ""
+    attach_type = ((attach or {}).get("type") or "").lower().strip()
+    attach_media_type = ((attach or {}).get("media_type") or "").lower().strip()
+    attach_name = (attach or {}).get("name") or "attachment"
+
+    # Prefer native WhatsApp image/document when the attachment has a public URL.
+    send_as_media = bool(attach_url) and (
+        attach_type in ("image", "document")
+        or attach_media_type.startswith("image/")
+        or attach_media_type in ("application/pdf", "application/octet-stream")
+        or attach_url.lower().endswith((".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp"))
+    )
+    if attach_url and not send_as_media:
+        line = f"\U0001F4CE {attach_name}: {attach_url}"
         message = f"{message}\n{line}" if message else line
-    if not message:
+    if not message and not send_as_media:
         raise HTTPException(status_code=400, detail="message or attachment is required")
 
     conn = get_db()
@@ -347,19 +356,42 @@ def reply_to_customer(
 
     try:
         from routing.whatsapp import send_whatsapp_message
-        sent = bool(send_whatsapp_message(wa_id, message))
+        sent = True
+        if message:
+            sent = bool(send_whatsapp_message(wa_id, message)) and sent
+        if send_as_media:
+            is_image = (
+                attach_type == "image"
+                or attach_media_type.startswith("image/")
+                or attach_url.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
+            )
+            msg_type = "image" if is_image else "document"
+            try:
+                from kb.services.whatsapp import resolve_public_media_url
+                resolved = resolve_public_media_url(attach_url) or attach_url
+            except Exception:
+                resolved = attach_url
+            media_ok = bool(send_whatsapp_message(wa_id, resolved, msg_type=msg_type))
+            sent = sent and media_ok
+            if not media_ok and not message:
+                # Last resort: share the URL as text so the customer still gets something.
+                fallback = f"\U0001F4CE {attach_name}: {resolved}"
+                sent = bool(send_whatsapp_message(wa_id, fallback))
     except Exception as exc:
         logger.error(f"inbox reply send failed: {exc}")
         sent = False
     if not sent:
         raise HTTPException(status_code=502, detail="WhatsApp message could not be sent")
 
+    history_text = message
+    if send_as_media:
+        history_text = f"{message}\n[attachment:{attach_name}]".strip() if message else f"[attachment:{attach_name}]"
     try:
         from database import save_chat
         save_chat(
             wa_id,
             principal.get("username", "agent"),
-            message,
+            history_text,
             response="[sent by agent]",
             route="agent",
             tenant_id=tenant_id,
@@ -378,11 +410,7 @@ async def attach_inbox_file(
     data: dict,
     principal: dict = Depends(_require("view_inbox")),
 ):
-    """Host a file so an agent can share it with a customer.
-
-    WhatsApp media sending is disabled project-wide, so the descriptor's URL is
-    included in the reply text rather than sent as native media.
-    """
+    """Host a file on Imghippo/catbox so an agent can send it as WhatsApp media."""
     from routes.admin import decode_attachment_body, store_chat_attachment
 
     filename, content, media_type = decode_attachment_body(data)

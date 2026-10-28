@@ -19,10 +19,19 @@ from routing.config import (
 )
 from .rate_limiter import groq_rate_limiter
 
-# Enhanced response cache to reduce repeated API calls (helps with rate limiting)
+# Enhanced response cache to reduce repeated API calls (helps with rate limiting).
+# Keep TTL short so freshly uploaded PDF knowledge is not masked by old answers.
 _response_cache = {}
-_cache_ttl = 900  # 15 minutes (increased from 5 min)
+_cache_ttl = 180  # 3 minutes
 _max_cache_size = 200  # Increased cache size
+
+def clear_response_cache() -> int:
+    """Drop cached LLM replies (call after KB/FAQ ingest). Returns cleared count."""
+    n = len(_response_cache)
+    _response_cache.clear()
+    if n:
+        logger.info("Brain response cache cleared (%d entries)", n)
+    return n
 
 def _get_cache_key(prompt: str, context: str = "") -> str:
     """Generate cache key from prompt and context."""

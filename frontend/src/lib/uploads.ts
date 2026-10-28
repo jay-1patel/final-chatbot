@@ -185,6 +185,29 @@ export interface BifurcationResult {
   version: number
   status: string
   files_processed: string[]
+  error?: string
+}
+
+/** Parse bifurcation_stats that may arrive as an object or JSON string. */
+export function parseBifurcationStats(
+  raw: AdminFile['bifurcation_stats'],
+): BifurcationStats | null {
+  if (!raw) return null
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw) as BifurcationStats
+      return parsed && typeof parsed === 'object' ? parsed : null
+    } catch {
+      return null
+    }
+  }
+  return typeof raw === 'object' ? raw : null
+}
+
+/** True when bifurcation_stats explicitly reports an error. */
+export function isBifurcationError(stats: BifurcationStats | null | undefined): boolean {
+  if (!stats) return false
+  return String(stats.status || '').toLowerCase() === 'error'
 }
 
 /** Normalize and sum bifurcation_stats from one or more ready admin files. */
@@ -195,7 +218,9 @@ export function aggregateBifurcationStats(
   const target = filenames?.length ? new Set(filenames) : null
   const ready = files.filter((f) => {
     if (target && !target.has(f.name)) return false
-    return f.status === 'ready' && f.bifurcation_stats
+    if (f.status !== 'ready' || !f.bifurcation_stats) return false
+    const stats = parseBifurcationStats(f.bifurcation_stats)
+    return Boolean(stats) && !isBifurcationError(stats)
   })
   if (ready.length === 0) return null
 
@@ -220,15 +245,8 @@ export function aggregateBifurcationStats(
   let tenant_id = ''
 
   for (const file of ready) {
-    let stats = file.bifurcation_stats
-    if (typeof stats === 'string') {
-      try {
-        stats = JSON.parse(stats) as BifurcationStats
-      } catch {
-        continue
-      }
-    }
-    if (!stats || typeof stats !== 'object') continue
+    const stats = parseBifurcationStats(file.bifurcation_stats)
+    if (!stats) continue
     offerings_created += Number(stats.offerings_created || 0)
     faqs_saved += Number(stats.faqs_saved || 0)
     kb_chunks_indexed += Number(stats.kb_chunks_indexed || 0)
@@ -262,12 +280,17 @@ export function aggregateBifurcationStats(
   }
 }
 
+export type UploadReadyResult = {
+  files: AdminFile[]
+  timedOut: boolean
+}
+
 /** Poll file list until named uploads leave `processing` (or timeout). */
 export async function waitForUploadReady(
   tenantId: string,
   filenames: string[],
   opts: { module?: string; timeoutMs?: number; intervalMs?: number } = {},
-): Promise<AdminFile[]> {
+): Promise<UploadReadyResult> {
   const timeoutMs = opts.timeoutMs ?? 180_000
   const intervalMs = opts.intervalMs ?? 2500
   const wanted = new Set(filenames)
@@ -277,13 +300,15 @@ export async function waitForUploadReady(
     const files = await uploadsApi.list(tenantId, { module: opts.module })
     const matched = files.filter((f) => wanted.has(f.name))
     if (matched.length >= wanted.size && matched.every((f) => f.status && f.status !== 'processing')) {
-      return matched
+      return { files: matched, timedOut: false }
     }
     await new Promise((r) => setTimeout(r, intervalMs))
   }
-  return uploadsApi.list(tenantId, { module: opts.module }).then((files) =>
-    files.filter((f) => wanted.has(f.name)),
-  )
+  const files = await uploadsApi.list(tenantId, { module: opts.module })
+  return {
+    files: files.filter((f) => wanted.has(f.name)),
+    timedOut: true,
+  }
 }
 
 export const FILE_MODULES = [
@@ -302,6 +327,24 @@ export const UPLOAD_ACCEPT = '.pdf,.docx,.doc,.txt,.xlsx,.xls,.md,.csv'
 export const UPLOAD_TYPES_LABEL = 'PDF, DOC, DOCX, TXT, XLS, XLSX, MD, CSV'
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 export const MAX_UPLOAD_LABEL = `${MAX_UPLOAD_BYTES / (1024 * 1024)} MB`
+export const UPLOAD_EXTENSIONS = new Set(
+  UPLOAD_ACCEPT.split(',').map((ext) => ext.trim().toLowerCase()).filter(Boolean),
+)
+
+/** Client-side guard before base64 + POST. Throws ApiError-compatible Error. */
+export function assertValidUploadFile(file: File, opts: { maxBytes?: number } = {}): void {
+  const maxBytes = opts.maxBytes ?? MAX_UPLOAD_BYTES
+  if (!file || !file.name) throw new Error('No file selected.')
+  if (file.size <= 0) throw new Error(`"${file.name}" is empty.`)
+  if (file.size > maxBytes) {
+    throw new Error(`"${file.name}" is too large (max ${Math.round(maxBytes / (1024 * 1024))} MB).`)
+  }
+  const dot = file.name.lastIndexOf('.')
+  const ext = dot >= 0 ? file.name.slice(dot).toLowerCase() : ''
+  if (!ext || !UPLOAD_EXTENSIONS.has(ext)) {
+    throw new Error(`"${file.name}" is not a supported type (${UPLOAD_TYPES_LABEL}).`)
+  }
+}
 
 export function readAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -328,6 +371,7 @@ export const uploadsApi = {
   },
 
   upload: async (tenantId: string, file: File, module: string) => {
+    assertValidUploadFile(file)
     const content = await readAsBase64(file)
     return api.post<{ status: string; filename: string; chunks: number; size: number; file_url: string }>(
       `${base(tenantId)}/files/upload?module=${encodeURIComponent(module)}`,
@@ -397,6 +441,7 @@ export const onboardingKitsApi = {
     api.get<{ templates: OnboardingTemplate[] }>('/api/admin/onboarding-kits/list', signal),
 
   stageGlobal: async (file: File) => {
+    assertValidUploadFile(file)
     const content = await readAsBase64(file)
     return api.post<StagedOnboardingDraft>('/api/admin/onboarding/stage', {
       files: [{ filename: file.name, content }],
@@ -404,6 +449,7 @@ export const onboardingKitsApi = {
   },
 
   stageTenant: async (tenantId: string, file: File) => {
+    assertValidUploadFile(file)
     const content = await readAsBase64(file)
     return api.post<StagedOnboardingDraft>(
       `/api/admin/tenants/${encodeURIComponent(tenantId)}/onboarding/stage`,

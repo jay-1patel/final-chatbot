@@ -98,20 +98,23 @@ def _resolve_tenant_id(tenant_id=None) -> str:
 
 
 def _tenant_matches(meta_tid, target_tid) -> bool:
-    """Check if a chunk's tenant_id matches the search target_tid."""
+    """Check if a chunk's tenant_id matches the search target_tid.
+
+    Empty / NULL chunk tenant_ids never match a concrete tenant search — that
+    previously leaked global/default rows into every Leeway-variant query.
+    """
     if not target_tid:
         return True
     m_str = str(meta_tid or "").strip()
     t_str = str(target_tid or "").strip()
+    if not m_str:
+        return False
     if m_str == t_str:
         return True
-    # Compare resolved IDs
+    # Compare resolved numeric/slug IDs when both sides resolve.
     m_res = _resolve_tenant_id(m_str)
     t_res = _resolve_tenant_id(t_str)
     if m_res and t_res and m_res == t_res:
-        return True
-    # Leeway variants
-    if m_str in ("1", "default", "") and t_str in ("1", "default", "leewaysoftech", "leeway-softech", "leeway", "l"):
         return True
     return False
 

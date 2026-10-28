@@ -134,6 +134,118 @@ def _slugify(text: str) -> str:
     return text.strip("-") or "item"
 
 
+def _menu_button_id(text: str) -> str:
+    """WhatsApp menu button ids use underscores (match vertical defaults).
+
+    ``_slugify`` collapses separators to hyphens, which made PDF extracts emit
+    ``menu-products`` alongside default ``menu_products`` and doubled the menu.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return "menu_item"
+    # Preserve already-normalized ids; only re-slugify free-form titles.
+    if re.fullmatch(r"[a-zA-Z0-9_-]+", raw):
+        return re.sub(r"[-_\s]+", "_", raw.lower()).strip("_") or "menu_item"
+    return _slugify(raw).replace("-", "_") or "menu_item"
+
+
+def _normalize_menu_button_key(value: str) -> str:
+    """Compare button ids/titles ignoring hyphen vs underscore and case."""
+    return re.sub(r"[-_\s]+", "_", (value or "").strip().casefold()).strip("_")
+
+
+def _sanitize_menu_buttons(
+    menu_items_raw: List[Any],
+    *,
+    vertical: str = "generic",
+) -> List[Dict[str, Any]]:
+    """Build unique menu.buttons: underscore ids, no title/id duplicates vs defaults."""
+    defaults: List[Dict[str, Any]] = []
+    try:
+        from shared.tenancy.defaults import get_vertical_defaults
+
+        defaults = list(
+            (get_vertical_defaults(vertical) or {}).get("menu", {}).get("buttons") or []
+        )
+    except Exception:
+        defaults = []
+
+    default_by_norm_id: Dict[str, Dict[str, Any]] = {}
+    default_by_title: Dict[str, Dict[str, Any]] = {}
+    for b in defaults:
+        if not isinstance(b, dict):
+            continue
+        bid = str(b.get("id") or "").strip()
+        title = str(b.get("title") or "").strip()
+        if bid:
+            default_by_norm_id[_normalize_menu_button_key(bid)] = b
+        if title:
+            default_by_title[_normalize_menu_button_key(title)] = b
+
+    menu_buttons: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    seen_titles: set = set()
+
+    for i, item in enumerate(menu_items_raw or []):
+        if not isinstance(item, dict):
+            continue
+        title = (item.get("title") or f"Option {i + 1}").strip()[:24]
+        desc = (item.get("description") or "").strip()[:72]
+        sec = (item.get("section") or "Explore").strip()[:24]
+        action = str(
+            item.get("action") or item.get("flow") or item.get("intent") or "faq"
+        ).strip().lower()
+
+        raw_id = item.get("id") or item.get("title") or f"opt_{i}"
+        b_id = _menu_button_id(str(raw_id))
+        title_key = _normalize_menu_button_key(title)
+        id_key = _normalize_menu_button_key(b_id)
+
+        # Prefer the vertical default id when title or normalized id already exists.
+        matched = default_by_norm_id.get(id_key) or default_by_title.get(title_key)
+        if matched and matched.get("id"):
+            b_id = str(matched["id"])
+            id_key = _normalize_menu_button_key(b_id)
+
+        if id_key in seen_ids or (title_key and title_key in seen_titles):
+            continue
+        seen_ids.add(id_key)
+        if title_key:
+            seen_titles.add(title_key)
+
+        button_dict: Dict[str, Any] = {
+            "id": b_id,
+            "title": title,
+            "description": desc,
+            "section": sec,
+            "sort_order": len(menu_buttons) + 1,
+            "enabled": True if item.get("enabled", True) else False,
+        }
+        # Map kit "action" labels onto schema fields (MenuButton forbids "action")
+        if action in ("offerings", "catalog", "offering_details", "products", "services"):
+            button_dict["intent"] = "offerings" if action != "services" else "services"
+        elif action in ("technologies", "projects", "careers", "benefits"):
+            button_dict["intent"] = action
+        elif action in ("quote", "get_quote", "pricing"):
+            button_dict["flow"] = "get_quote"
+        elif action in ("book_callback", "callback", "enquire", "inquire", "appointment"):
+            button_dict["flow"] = "book_callback"
+        elif action in ("raise_ticket", "support", "ticket", "help"):
+            button_dict["flow"] = "raise_ticket"
+        elif action in ("faq", "info"):
+            button_dict["intent"] = "faq" if b_id == "faq" else b_id
+        elif item.get("flow"):
+            button_dict["flow"] = str(item["flow"])
+        elif item.get("intent"):
+            button_dict["intent"] = str(item["intent"])
+        else:
+            button_dict["intent"] = b_id
+
+        menu_buttons.append(button_dict)
+
+    return menu_buttons
+
+
 def _sanitize_business_hours(raw_hours: Any) -> Dict[str, Any]:
     """Normalize kit/LLM hours into BusinessHours schema fields (no ``raw``)."""
     if not isinstance(raw_hours, dict):
@@ -719,7 +831,11 @@ def merge_bifurcation_results(*parts: Optional[Dict[str, Any]], tenant_id: str =
         if isinstance(bh, dict) and (bh.get("raw") or bh.get("open") or bh.get("always_open")):
             if not merged["business_hours"] or bh.get("raw") or bh.get("always_open"):
                 merged["business_hours"] = {**merged["business_hours"], **bh}
-        _extend("menu_items", part.get("menu_items"), lambda x: _slugify(str(x.get("id") or x.get("title") or "")))
+        _extend(
+            "menu_items",
+            part.get("menu_items"),
+            lambda x: _normalize_menu_button_key(str(x.get("id") or x.get("title") or "")),
+        )
         _extend("intents", part.get("intents"), _dedupe_key_intent)
         _extend("offerings", part.get("offerings"), _dedupe_key_offering)
         _extend("faqs", part.get("faqs"), _dedupe_key_faq)
@@ -775,9 +891,21 @@ class AutoBifurcator:
             if ext == ".pdf":
                 doc = fitz.open(stream=content, filetype="pdf")
                 pages_text = []
+                ocr_pages_used = 0
                 for pno in range(len(doc)):
                     page = doc[pno]
                     txt = page.get_text("text") or ""
+                    # Scanned / image-only pages: fall back to OCR when native text is thin.
+                    if len(txt.strip()) < 30 and pytesseract and Image and ocr_pages_used < MAX_OCR_PAGES:
+                        try:
+                            pix = page.get_pixmap(dpi=200)
+                            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                            ocr_txt = (pytesseract.image_to_string(img) or "").strip()
+                            if len(ocr_txt) > len(txt.strip()):
+                                txt = ocr_txt
+                                ocr_pages_used += 1
+                        except Exception as ocr_err:
+                            logger.debug("OCR skipped on page %d of %s: %s", pno + 1, filename, ocr_err)
                     if txt.strip():
                         pages_text.append(f"--- Page {pno + 1} ---\n{txt}")
                     try:
@@ -793,6 +921,8 @@ class AutoBifurcator:
                     except Exception as tab_err:
                         logger.debug("PDF find_tables page %d skipped: %s", pno, tab_err)
                 extracted_text = "\n\n".join(pages_text)
+                if ocr_pages_used:
+                    logger.info("OCR used on %d page(s) for %s", ocr_pages_used, filename)
 
             elif ext in (".docx", ".doc"):
                 doc_file = io.BytesIO(content)
@@ -1578,7 +1708,7 @@ RULES:
 
                     menu_items.append({
 
-                        "id": _slugify(title),
+                        "id": _menu_button_id(title),
 
                         "title": title,
 
@@ -2515,44 +2645,10 @@ RULES:
         has_real_brand = bool(real_brand.get("name") or real_brand.get("bot_name") or real_brand.get("support_email") or real_brand.get("support_phone"))
 
         # 3.3 Sanitize WhatsApp Menu Buttons (Meta Character Limitations)
+        # Underscore ids + skip duplicates vs vertical defaults / within the extract
+        # so PDF uploads do not create menu-products alongside menu_products.
         menu_items_raw = bifurcation.get("menu_items", []) or []
-        menu_buttons = []
-        for i, item in enumerate(menu_items_raw):
-            b_id = _slugify(item.get("id") or item.get("title") or f"opt_{i}")
-            title = (item.get("title") or f"Option {i+1}").strip()[:24]
-            desc = (item.get("description") or "").strip()[:72]
-            sec = (item.get("section") or "Explore").strip()[:24]
-            action = str(item.get("action") or item.get("flow") or item.get("intent") or "faq").strip().lower()
-
-            button_dict = {
-                "id": b_id,
-                "title": title,
-                "description": desc,
-                "section": sec,
-                "sort_order": i + 1,
-                "enabled": True if item.get("enabled", True) else False,
-            }
-            # Map kit "action" labels onto schema fields (MenuButton forbids "action")
-            if action in ("offerings", "catalog", "offering_details", "products", "services"):
-                button_dict["intent"] = "offerings" if action != "services" else "services"
-            elif action in ("technologies", "projects", "careers", "benefits"):
-                button_dict["intent"] = action
-            elif action in ("quote", "get_quote", "pricing"):
-                button_dict["flow"] = "get_quote"
-            elif action in ("book_callback", "callback", "enquire", "inquire", "appointment"):
-                button_dict["flow"] = "book_callback"
-            elif action in ("raise_ticket", "support", "ticket", "help"):
-                button_dict["flow"] = "raise_ticket"
-            elif action in ("faq", "info"):
-                button_dict["intent"] = "faq" if b_id == "faq" else b_id
-            elif item.get("flow"):
-                button_dict["flow"] = str(item["flow"])
-            elif item.get("intent"):
-                button_dict["intent"] = str(item["intent"])
-            else:
-                button_dict["intent"] = b_id
-
-            menu_buttons.append(button_dict)
+        menu_buttons = _sanitize_menu_buttons(menu_items_raw, vertical=vertical)
 
         has_real_menu = len(menu_buttons) > 0
         if not menu_buttons and not careful_brand_merge:
@@ -2890,17 +2986,36 @@ RULES:
                         build_chunks_for_kb,
                         generate_missing_embeddings,
                         rebuild_faiss_index,
+                        rebuild_product_faiss_index,
                     )
                     build_chunks_for_kb()
                     generate_missing_embeddings()
                     rebuild_faiss_index()
+                    try:
+                        rebuild_product_faiss_index()
+                    except Exception as prod_err:
+                        logger.warning("Product FAISS rebuild error: %s", prod_err)
                     logger.info("VECTOR_RAG_INDEX_REBUILT | tenant=%s | chunks=%d", tenant_id, len(all_chunks_to_index))
+                    try:
+                        from kb.services.brain import clear_response_cache
+                        clear_response_cache()
+                    except Exception:
+                        pass
                 except Exception as rag_err:
                     logger.warning("RAG vector rebuild error: %s", rag_err)
 
                 summary["kb_chunks_indexed"] = len(all_chunks_to_index)
             except Exception as chunk_err:
                 logger.error("Failed storing knowledge base chunks: %s", chunk_err)
+
+        # Offerings may have been written even when no KB chunks were produced —
+        # always refresh the product vector index after a live catalog write.
+        if inserted_count > 0 and not all_chunks_to_index:
+            try:
+                from kb.services.rag import rebuild_product_faiss_index
+                rebuild_product_faiss_index()
+            except Exception as prod_err:
+                logger.warning("Product FAISS rebuild (offerings-only) failed: %s", prod_err)
 
         try:
             with get_db_context() as conn:
@@ -2948,7 +3063,23 @@ RULES:
                 })
             if not chunks:
                 return 0
-            save_chunks(chunks, module="faq", tenant_id=self.tenant_id)
+            # Drop prior auto-extracted QAs for this source so re-process does not
+            # duplicate FAQ index rows (leave non-qa raw extract chunks intact).
+            try:
+                with get_db_context() as conn:
+                    if self.tenant_id is not None:
+                        conn.execute(
+                            "DELETE FROM faq_dataset WHERE source_file = ? AND tenant_id = ? AND content_type = 'qa'",
+                            (source_file, self.tenant_id),
+                        )
+                    else:
+                        conn.execute(
+                            "DELETE FROM faq_dataset WHERE source_file = ? AND content_type = 'qa'",
+                            (source_file,),
+                        )
+            except Exception as purge_err:
+                logger.warning("FAQ QA purge before save failed: %s", purge_err)
+            save_chunks(chunks, module="faq", tenant_id=self.tenant_id, replace_existing=False)
             saved = len(chunks)
             try:
                 from faq.service import faq_index
