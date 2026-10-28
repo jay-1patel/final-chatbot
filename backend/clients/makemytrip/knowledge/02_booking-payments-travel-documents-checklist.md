@@ -1,1 +1,0 @@
-# Booking Checklist Confirm destination, dates, traveller names as per passport, rooming and meal plan. Pay the booking amount to hold the package; clear the balance as per the payment schedule. Carry passport (6+ months validity for international), tickets, vouchers, insurance and destination forms. Domestic travellers need a government photo ID.

@@ -1,1 +1,0 @@
-# Visas & Support Visa help is available for select destinations with document checklists and guidance. Final approval is always the embassy/consulate's decision - never guarantee outcomes. On trip, use app/website support or the helpline in your booking confirmation.

@@ -1,1 +1,0 @@
-# Cancellations & Insurance Charges depend on the package and supplier terms shown at booking. Airline tickets follow airline fare rules. Insurance premiums are generally non-refundable. Travel insurance is strongly recommended for medical emergencies, baggage loss and trip interruption.

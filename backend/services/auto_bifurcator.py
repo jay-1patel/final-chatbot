@@ -1918,6 +1918,8 @@ RULES:
                         kl = key.lower()
                         if any(tok in kl for tok in ("image url", "image", "media url", "media_url", "photo", "thumbnail")):
                             v = (val or "").strip()
+                            # Clean zero-width spaces and inner whitespace caused by cell line breaks
+                            v = re.sub(r'[​\s]+', '', v)
                             if v and not v.startswith("[") and ("http://" in v.lower() or "https://" in v.lower()):
                                 return v
                             if v and not v.startswith("["):
@@ -2481,6 +2483,20 @@ RULES:
         if len(menu_items) < 3:
             menu_items = self.extract_menu_section({"text": "", "tables": []}, vertical=vertical)
         offerings = draft.get("offerings") or []
+        all_doc_images = []
+        for d in extracted_docs:
+            for img in d.get("images") or []:
+                if img.get("url"):
+                    all_doc_images.append(img)
+        if all_doc_images:
+            for idx, off in enumerate(offerings):
+                cur_url = (off.get("media_url") or "").strip()
+                if not cur_url or "imghippo.com" not in cur_url.lower() or "​" in cur_url or " " in cur_url or "add public" in cur_url.lower():
+                    chosen = all_doc_images[idx % len(all_doc_images)]
+                    off["media_url"] = chosen["url"]
+                    if isinstance(off.get("attrs"), dict):
+                        off["attrs"]["media_url"] = chosen["url"]
+                        off["attrs"]["image_url"] = chosen["url"]
         faqs = draft.get("faqs") or []
         articles = draft.get("knowledge_articles") or []
         intents = draft.get("intents") or []
@@ -2652,6 +2668,22 @@ RULES:
                 ).get("knowledge_articles") or articles
             except Exception as exc:
                 logger.warning("Kit gap-fill LLM failed: %s", exc)
+
+        # If document has embedded images (uploaded to ImgHippo), ALWAYS assign them to offerings
+        all_kit_images = []
+        for d in extracted_docs:
+            for img in d.get("images") or []:
+                if img.get("url"):
+                    all_kit_images.append(img)
+        if all_kit_images:
+            for idx, off in enumerate(offerings):
+                cur_url = (off.get("media_url") or "").strip()
+                if not cur_url or "imghippo.com" not in cur_url.lower() or "​" in cur_url or " " in cur_url or "add public" in cur_url.lower():
+                    chosen = all_kit_images[idx % len(all_kit_images)]
+                    off["media_url"] = chosen["url"]
+                    if isinstance(off.get("attrs"), dict):
+                        off["attrs"]["media_url"] = chosen["url"]
+                        off["attrs"]["image_url"] = chosen["url"]
 
         intents = self._enrich_intents_with_offerings(
             intents, offerings, brand.get("name") or ""
@@ -3080,10 +3112,14 @@ RULES:
                         media_url = v.strip()
                         break
 
-            # If no media_url or placeholder text, assign the extracted ImgHippo image!
-            if (not media_url or "add public" in media_url.lower()) and all_extracted_images:
-                chosen = all_extracted_images[off_idx % len(all_extracted_images)]
-                media_url = chosen.get("url")
+            # If the PDF provided embedded images, ALWAYS prioritize the real ImgHippo
+            # image URLs over broken external URLs or raw PDF table text (like housiey.com)!
+            if all_extracted_images:
+                if not media_url or "imghippo.com" not in media_url.lower() or "​" in media_url or " " in media_url or "add public" in media_url.lower():
+                    chosen = all_extracted_images[off_idx % len(all_extracted_images)]
+                    media_url = chosen.get("url")
+            elif media_url:
+                media_url = re.sub(r'[​\s]+', '', media_url)
 
             if media_url:
                 attrs["media_url"] = media_url
