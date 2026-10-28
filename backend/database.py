@@ -2670,8 +2670,11 @@ def set_active_test_tenant(tenant_id: Optional[str]) -> None:
         try:
             from shared.tenancy import store
             record = store.get_tenant(val)
-            if record:
-                val = record.get("slug") or str(record.get("id"))
+            if not record:
+                raise ValueError(f"Unknown tenant for WhatsApp test override: {val}")
+            val = str(record.get("slug") or record.get("id") or val)
+        except ValueError:
+            raise
         except Exception:
             pass
     set_app_setting("active_test_tenant", val)

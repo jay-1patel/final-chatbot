@@ -265,7 +265,9 @@ _ECOMMERCE = {
 
 _IT_SOFTWARE = {
     "vertical": "it_software",
-    "display_name": "Leeway Softech",
+    # Neutral template name — never a live brand. Real tenants overwrite via
+    # registry display_name / clients/<id>/config.json / published DB layer.
+    "display_name": "IT Services",
     "prompt": {
         "name": "IT/Software Company",
         "tone": "professional",
@@ -416,7 +418,7 @@ _IT_SOFTWARE = {
          "keywords": ["brochure", "company profile", "pdf", "capability statement"],
          "requires_feature": "brochure_pdf",
          "answer": ("• 📄 *Company Brochure & Profile*\n"
-                    "• You can download our latest company profile and service capabilities deck at www.leewaysoftech.com\n"
+                    "• Ask for our latest company profile and service capabilities deck, or tap *Get a Quote*.\n"
                     "• Or request a customized proposal and case study presentation by tapping *Get a Quote*.")},
         {"name": "careers", "examples": ["are you hiring", "job openings at your company"],
          "keywords": ["career", "careers", "job", "hiring", "vacancy", "internship", "open role"],

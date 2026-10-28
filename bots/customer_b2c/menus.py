@@ -36,8 +36,16 @@ def get_main_menu(wa_id: str = "", tenant_id: Optional[str] = None) -> dict:
         from shared.tenancy.loader import get_tenant_profile
         p = get_tenant_profile(resolved_tid)
         if p:
-            if p.brand and p.brand.name:
-                header_title = p.brand.name
+            brand_name = (p.brand.name if p.brand else "") or ""
+            # Kit/placeholder names must not become the WhatsApp list header.
+            if brand_name.strip() and brand_name.strip().lower() not in (
+                "brand", "company", "name", "your company", "company name",
+            ):
+                header_title = brand_name.strip()
+            elif getattr(p, "display_name", None):
+                header_title = str(p.display_name).strip() or header_title
+            else:
+                header_title = resolved_tid
             if p.menu and p.menu.body:
                 body_text = p.menu.body
             if p.menu and p.menu.buttons:

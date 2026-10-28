@@ -43,7 +43,10 @@ class WhatsAppRoutingDedupTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["answer"], expected)
         self.assertEqual(result["query_type"], "intent")
-        answer.assert_called_once_with("919512777899", "💼 Career", tenant_id=tenant_id)
+        # Registry slug wins over pack folder alias (leewaysoftech → leeway-softech).
+        answer.assert_called_once_with(
+            "919512777899", "💼 Career", tenant_id="leeway-softech"
+        )
         fallback.assert_not_awaited()
 
     async def test_faq_forwarding_keeps_explicit_tenant(self):
@@ -98,7 +101,9 @@ class WhatsAppRoutingDedupTests(unittest.IsolatedAsyncioTestCase):
                 "wamid.career", tenant_id="leewaysoftech",
             )
 
-        answer.assert_called_once_with("919512777899", "menu_careers", "leewaysoftech")
+        answer.assert_called_once_with(
+            "919512777899", "menu_careers", "leeway-softech"
+        )
         send.assert_called_once_with("919512777899", expected)
         pipeline.assert_not_awaited()
 

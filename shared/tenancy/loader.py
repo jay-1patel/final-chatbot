@@ -164,12 +164,23 @@ def get_tenant_profile(tenant_id: str = DEFAULT_TENANT_ID) -> TenantProfile:
         profile = build_profile(tid)
     except ProfileValidationError as exc:
         logger.error("PROFILE_INVALID | tenant=%s | version=%s | %s", tid, version, exc)
-        # Last resort: defaults for the recorded vertical, nothing from disk/DB.
+        # Last resort: vertical skeleton only — but keep the registry label so a
+        # broken phone field cannot resurface another client's demo brand
+        # (e.g. IT defaults used to say "Leeway Softech").
         record = store.get_tenant(tid) or {}
-        profile = TenantProfile(
-            tenant_id=tid,
-            **get_vertical_defaults(str(record.get("vertical") or "generic")),
+        vertical = str(record.get("vertical") or "generic")
+        skeleton = get_vertical_defaults(vertical)
+        registry_name = (
+            str(record.get("display_name") or record.get("company_name") or "").strip()
+            or tid
         )
+        skeleton["display_name"] = registry_name
+        brand = dict(skeleton.get("brand") or {})
+        brand["name"] = registry_name
+        if not str(brand.get("bot_name") or "").strip():
+            brand["bot_name"] = f"{registry_name} Assistant"
+        skeleton["brand"] = brand
+        profile = TenantProfile(tenant_id=tid, **skeleton)
 
     profile.version = version
     profile.source = f"v{version}" if version else "file"

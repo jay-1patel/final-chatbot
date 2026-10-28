@@ -83,7 +83,7 @@ def resolve_effective_tenant_id(wa_id: str = "", tenant_id: Optional[str] = None
     """
     override = _active_test_override()
     if override:
-        logger.debug(
+        logger.info(
             "ACTIVE_TEST_TENANT | routing wa_id=%s to %s (ignoring hint=%s)",
             wa_id or "?", override, tenant_id,
         )

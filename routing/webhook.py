@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 from fastapi import APIRouter, Request, HTTPException, Query, BackgroundTasks
 from fastapi.responses import PlainTextResponse
@@ -840,6 +841,29 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     if "messages" not in value:
         log_webhook("incoming", "/webhook", raw_payload[:3000], 200, "No messages or statuses in payload")
         return {"status": "no_messages"}
+
+    # When the send2 poller is the live inbound path, do NOT also answer here.
+    # Dual delivery (poller + Meta/Hookdeck webhook) produced 2–3 menus on "Hi"
+    # with mixed tenant headers (Brand / leewaysoftech / active test).
+    try:
+        from services.incoming_listener import read_poller_enabled
+        poller_on = read_poller_enabled()
+    except Exception:
+        try:
+            from backend.services.incoming_listener import read_poller_enabled
+            poller_on = read_poller_enabled()
+        except Exception:
+            poller_on = os.getenv("SEND2_POLLER_ENABLED", "1").strip().lower() not in (
+                "0", "false", "no", "off",
+            )
+    if poller_on:
+        msg0 = (value.get("messages") or [{}])[0] or {}
+        logger.info(
+            "WEBHOOK_DEFER_TO_POLLER | msg_id=%s | type=%s",
+            msg0.get("id", ""), msg0.get("type", ""),
+        )
+        log_webhook("incoming", "/webhook", raw_payload[:2000], 200, "Deferred to send2 poller")
+        return {"status": "ok", "type": "deferred_to_poller"}
 
     message = value["messages"][0]
     contact = (value.get("contacts") or [{}])[0]

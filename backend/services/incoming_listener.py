@@ -339,17 +339,16 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                     ):
                         continue
 
-                    # Atomic claim BEFORE processing so Meta webhook / a racing
-                    # poll cycle cannot also answer this message.
-                    if _was_processed(message_id) or not _claim_inbound(message_id, wa_id):
-                        continue
-
+                    # Claim content first (cross-channel), then message id.
                     if text and _is_duplicate_content(wa_id, text):
                         logger.info(
                             "Skipping duplicate content from poller %s: %s",
                             wa_id, text[:40],
                         )
                         _record_processed(message_id, wa_id)
+                        continue
+
+                    if _was_processed(message_id) or not _claim_inbound(message_id, wa_id):
                         continue
 
                     if not text:

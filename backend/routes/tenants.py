@@ -182,7 +182,10 @@ def set_current_active_test_tenant(
 ):
     from database import set_active_test_tenant, get_active_test_tenant
     tid = (body.tenant_id or "").strip() or None
-    set_active_test_tenant(tid)
+    try:
+        set_active_test_tenant(tid)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     stored = get_active_test_tenant()
     logger.info(
         "ACTIVE_TEST_TENANT_CHANGED | tenant=%s | by=%s",

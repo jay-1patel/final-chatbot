@@ -186,25 +186,20 @@ def _get_brand_name(wa_id: str = "") -> str:
     except Exception as e:
         logger.debug("profile brand unavailable, using config: %s", e)
 
-    # Tenancy store still resolves a default tenant even when this user has no
-    # profile row (fresh deployments, untagged users) - prefer it over the
-    # global env, which belongs to the legacy single-tenant stack.
-    try:
-        from shared.tenancy import loader
-        from shared.tenancy.resolver import resolve_default_tenant
-
-        profile = loader.get_tenant_profile(resolve_default_tenant())
-        name = (getattr(profile.brand, "name", "") or profile.display_name or "").strip()
-        if name:
-            return name
-    except Exception as e:
-        logger.debug("default tenant brand unavailable, using config: %s", e)
-
+    # Never borrow another tenant's brand (DEFAULT_TENANT / leeway pack) when
+    # this user's profile is missing — that leaked "Leewaysoftech" / "Brand"
+    # headers onto MakeMyTrip and other Activate-on-WhatsApp tenants.
     try:
         from routing.config import BRAND_NAME
-        return BRAND_NAME or "our company"
+        env_brand = (BRAND_NAME or "").strip()
+        if env_brand and env_brand.lower() not in (
+            "brand", "company", "name", "your company", "company name",
+            "leewaysoftech", "leeway softtech", "leeway",
+        ):
+            return env_brand
     except Exception:
-        return "our company"
+        pass
+    return "our company"
 
 
 def personalize_header(wa_id: str, user_type: str = "b2c") -> str:

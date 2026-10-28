@@ -46,9 +46,9 @@ def client_dir(tenant_id: str) -> Path:
     except Exception:
         pass
 
-    # Alias short / legacy ids onto the canonical leeway pack BEFORE returning
-    # a coincidental clients/l folder (that pack was a second brand header).
-    if tid.lower() in ("1", "default", "leeway-softech", "leewaysoftech", "leeway", "l"):
+    # Only remap known Leeway slug aliases — never map "default" / bare "1" /
+    # unrelated tenants onto clients/leewaysoftech (that mixed Brand headers).
+    if tid.lower() in ("leeway-softech", "leewaysoftech", "leeway"):
         if (CLIENTS_DIR / "leewaysoftech").exists() and (
             CLIENTS_DIR / "leewaysoftech" / "config.json"
         ).exists():

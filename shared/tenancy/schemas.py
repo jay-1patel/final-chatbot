@@ -134,22 +134,51 @@ def _require_email(value: str, field: str) -> str:
     return value
 
 
+def _phone_ok(compact: str) -> bool:
+    if not _PHONE_RE.fullmatch(compact):
+        return False
+    body = compact[1:]
+    return any(
+        body.startswith(cc) and len(body) - len(cc) == 10
+        for cc in _PHONE_COUNTRY_CODES
+    )
+
+
+def _extract_first_valid_phone(value: str) -> str:
+    """Pick the first +CC 10-digit number from kits that paste multi-line contacts."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    candidates = [raw]
+    candidates.extend(
+        m.group(0).strip()
+        for m in re.finditer(r"\+\d[\d\s\-()]{8,24}\d", raw)
+    )
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        compact = re.sub(r"[\s\-()]", "", candidate)
+        if _phone_ok(compact):
+            return candidate
+    return ""
+
+
 def _require_phone(value: str, field: str) -> str:
-    v = re.sub(r"[\s\-()]", "", (value or "").strip())
-    if not v:
+    raw = (value or "").strip()
+    if not raw:
         return value
-    ok = _PHONE_RE.fullmatch(v)
-    if ok:
-        body = v[1:]
-        ok = any(
-            body.startswith(cc) and len(body) - len(cc) == 10
-            for cc in _PHONE_COUNTRY_CODES
-        )
-    if not ok:
-        raise ValueError(
-            f"{field} must be a country code followed by a 10-digit number, e.g. +91 98765 43210 (got '{value}')"
-        )
-    return value
+    compact = re.sub(r"[\s\-()]", "", raw)
+    if _phone_ok(compact):
+        return value
+    # Kits often ship "toll-free / landline / WhatsApp +91 …" — keep the first valid mobile.
+    extracted = _extract_first_valid_phone(raw)
+    if extracted:
+        return extracted
+    raise ValueError(
+        f"{field} must be a country code followed by a 10-digit number, e.g. +91 98765 43210 (got '{value}')"
+    )
 
 
 def _require_url(value: str, field: str) -> str:

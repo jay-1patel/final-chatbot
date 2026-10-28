@@ -82,6 +82,16 @@ async def _process_captured_message(wa_id: str, message: str, tenant_id: str = N
         set_request_tenant(effective_tenant)
         tenant_id = effective_tenant
         touch_customer(effective_tenant, wa_id, "")
+        logger.info("ORCH_TENANT | wa_id=%s | tenant=%s", wa_id, effective_tenant)
+        try:
+            from backend.services import state_manager as sm
+            sm.set_tenant(wa_id, effective_tenant)
+        except Exception:
+            try:
+                from services import state_manager as sm
+                sm.set_tenant(wa_id, effective_tenant)
+            except Exception:
+                pass
     except Exception as exc:
         logger.debug(f"Could not touch customer {wa_id}: {exc}")
 
