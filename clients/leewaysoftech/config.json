@@ -1,0 +1,427 @@
+{
+  "tenant_id": "leeway-softech",
+  "vertical": "it_software",
+  "display_name": "Leeway Softech",
+  "brand": {
+    "name": "Leeway Softech",
+    "bot_name": "Leeway Tech Advisor",
+    "tagline": "Innovative Technology. Creative Work. Trusted Delivery. — AI, software & CPaaS since 2012",
+    "website": "https://leewaysoftech.com",
+    "support_email": "sales@leewaysoftech.com",
+    "support_phone": "+91 8690783030",
+    "signature": "Leeway Softech — Building software that moves business forward.",
+    "legal_name": "Leeway Softech Private Limited",
+    "headquarters": "Ahmedabad, Gujarat, India",
+    "global_reach": "USA, UK, UAE, Canada, Australia, India",
+    "founded": "2012",
+    "core_capabilities": [
+      "Generative AI & LLM Solutions",
+      "AI Chatbots & Virtual Assistants",
+      "Enterprise Software Development",
+      "Cloud & Data Engineering",
+      "WhatsApp Business API Solutions",
+      "Mobile & Web Applications",
+      "Shopify & Headless Commerce",
+      "UI/UX Design Systems"
+    ],
+    "logo_url": "https://leewaysoftech.com/assets/logo.png"
+  },
+  "features": {
+    "cart": false,
+    "buy_now": false,
+    "orders": false,
+    "track_order": false,
+    "returns": false,
+    "brochure_pdf": true,
+    "distributors": false,
+    "offerings": true,
+    "offering_details": true,
+    "lead_capture": true,
+    "quote": true,
+    "callback": true,
+    "book_appointment": true,
+    "handoff": true,
+    "faq": true,
+    "kb": true,
+    "complaints": true,
+    "campaigns": false,
+    "human_handover": true,
+    "services": true,
+    "payments": false,
+    "products": false,
+    "products_schemes": false
+  },
+  "vocabulary": {
+    "item_noun": "services",
+    "item_noun_singular": "service",
+    "browse_label": "Our Services",
+    "catalog_label": "Services",
+    "catalog_noun": "services",
+    "brochure_label": "Company Profile",
+    "brochure_noun": "company profile",
+    "offer_noun": "engagement",
+    "offer_noun_plural": "engagements",
+    "lead_noun": "enquiry",
+    "enquiry_label": "Enquire",
+    "quote_label": "Get a Quote",
+    "callback_label": "Request a Callback",
+    "support_label": "Raise Ticket"
+  },
+  "business_hours": {
+    "timezone": "Asia/Kolkata",
+    "always_open": false,
+    "open": "09:30",
+    "close": "19:00",
+    "open_days": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "raw": "09:30 AM - 07:00 PM (Mon-Sat)",
+    "out_of_hours_message": "We are outside working hours (Mon–Sat 09:30–19:00 IST). Leave your name, phone and project summary — sales will call you next working day."
+  },
+  "intents": [
+    {
+      "name": "technologies",
+      "answer": "• *Leeway tech stack* (selected after requirement analysis): • *Frontend:* React.js, Next.js, Vue.js, Angular, TypeScript, Tailwind CSS • *Backend:* Node.js, Python (FastAPI / Django), Golang, Laravel, .NET Core • *AI & ML:* OpenAI (GPT APIs), LangChain, PyTorch, TensorFlow, Hugging Face, Vertex AI, Azure OpenAI • *Mobile:* iOS (Swift), Android (Kotlin), React Native, Flutter • *Data:* PostgreSQL, MySQL, MongoDB, DynamoDB, Firebase, Snowflake, BigQuery, Redis • *Cloud & DevOps:* AWS, Azure, GCP, Docker, Kubernetes, CI/CD • Ask which stack fits your product — tap *Get a Quote* or *Technologies* in the menu.",
+      "examples": [
+        "what technologies do you use",
+        "what is your tech stack",
+        "which tools do you work with"
+      ],
+      "keywords": [
+        "technologies",
+        "technology",
+        "tech stack",
+        "stack",
+        "framework",
+        "tools",
+        "react",
+        "python",
+        "flutter",
+        "aws"
+      ],
+      "enabled": true,
+      "description": "Technologies"
+    },
+    {
+      "name": "projects",
+      "answer": "• *Portfolio & impact:* • 1500+ clients · 14 years · 120+ CPaaS projects · 60+ apps · 45+ AI solutions • *Trusted names:* Tata Tele, BHEL, Powergrid, Bandhan Bank, Club Mahindra, Airport Authority, Indian Railway, RITES, Jindal, Lodha, universities & education boards • *Industries:* Government & PSU, BFSI, Education, Hospitality, Enterprise, Politics, Retail & e-commerce • *Highlight:* MoU with Government of Gujarat for AI (pathway for 250+ jobs) • Detailed case studies shared on request with client permission — ask for a walkthrough.",
+      "examples": [
+        "show me your projects",
+        "who have you built for",
+        "any case studies"
+      ],
+      "keywords": [
+        "projects",
+        "project",
+        "portfolio",
+        "case study",
+        "case studies",
+        "clients",
+        "our work",
+        "experience"
+      ],
+      "enabled": true,
+      "description": "Projects"
+    },
+    {
+      "name": "careers",
+      "answer": "💼 *Careers at Leeway Softech* • We're hiring across sales, product, design, QA, support and operations. • *Sample openings:* Sales Executive (2–4 yrs, Mumbai/Bhavnagar), BDM (2–5 yrs, Mumbai), QA Tester (1–2 yrs, Bhavnagar), UI/UX Designer (1–2 yrs, Bhavnagar), L1/L2 Support (2–4 yrs, Delhi), Senior HR/Accountant/IT Manager as posted. • Apply: https://leewaysoftech.com/careers — PDF resume max 2 MB, or email HR with the role in the subject. • Culture: Life @ Leeway — festivals, anniversaries, trips and team events.",
+      "keywords": [
+        "career",
+        "careers",
+        "job",
+        "hiring",
+        "vacancy",
+        "internship",
+        "open role",
+        "join us"
+      ],
+      "examples": [
+        "are you hiring",
+        "job openings",
+        "careers at leeway",
+        "internship"
+      ],
+      "enabled": true,
+      "description": "Careers"
+    },
+    {
+      "name": "benefits",
+      "answer": "• *Why teams choose Leeway Softech:* • *Certified security & quality* — ISO 9001:2015, ISO/IEC 27001:2013, CMMI Level 3 • *Proven at scale* — 1,500+ clients across India • *Government-grade trust* — MoU with Government of Gujarat for AI • *True end-to-end* — CPaaS, software, AI and cloud under one partner • Dedicated POC, transparent delivery, NDA/IP-friendly contracts, post-go-live support • Offices: Mumbai (corporate), Bhavnagar (registered), Delhi/NCR, Ahmedabad",
+      "keywords": [
+        "benefits",
+        "why choose you",
+        "why work with you",
+        "advantages",
+        "perks",
+        "differentiators"
+      ],
+      "examples": [
+        "why should we work with you",
+        "what are the benefits",
+        "why choose leeway"
+      ],
+      "enabled": true,
+      "description": "Benefits"
+    },
+    {
+      "name": "service_enquiry",
+      "examples": [
+        "what services do you offer",
+        "do you build mobile apps"
+      ],
+      "keywords": [
+        "service",
+        "services",
+        "what do you do",
+        "capability",
+        "capabilities",
+        "offerings",
+        "solution",
+        "expertise"
+      ],
+      "requires_feature": "offerings",
+      "answer": "",
+      "enabled": true
+    },
+    {
+      "name": "menu_development",
+      "answer": "",
+      "keywords": [],
+      "enabled": true
+    },
+    {
+      "name": "service-enquiry",
+      "examples": [
+        "what services do you offer",
+        "tell me about your offerings"
+      ],
+      "keywords": [
+        "service",
+        "services",
+        "what do you do",
+        "offerings",
+        "catalog"
+      ],
+      "enabled": true,
+      "description": "What services / offerings we provide",
+      "answer": "• Here's what Leeway Softech offers:\n• *Generative AI Development* — LLM apps, agents, private RAG, evaluation & guardrails (₹1.5 Lakh - 8 Lakh / Project)\n• *AI Chatbot Development* — Flows, FAQ/KB, handoff, analytics, multilingual options (₹75,000 - 3.5 Lakh)\n• *Machine Learning Solutions* — Predictive models, NLP, ranking, model ops handoff (₹2 Lakh - 10 Lakh)\n• *Computer Vision Solutions* — Detection, OCR, quality inspection, dashboards (₹2 Lakh - 8 Lakh)\n• *AI Workflow Automation* — Document processing, approvals, system integrations (₹1 Lakh - 5 Lakh)\n• *Enterprise Software Development* — Custom enterprise apps, workflows, SSO, audit trails (₹3 Lakh - 25 Lakh)\n• *SaaS Product Development* — MVP to scale: tenancy, roles, subscriptions, analytics (₹4 Lakh - 30 Lakh)\n• *Web Application Development* — Responsive portals, APIs, admin consoles, SEO basics (₹1 Lakh - 10 Lakh)\n• Ask for details on any item, or tap *Get a Quote* / *Request a Callback*."
+    },
+    {
+      "name": "pricing-enquiry",
+      "examples": [
+        "what are your prices",
+        "how much does it cost"
+      ],
+      "keywords": [
+        "price",
+        "pricing",
+        "cost",
+        "rate",
+        "package",
+        "quote"
+      ],
+      "enabled": true,
+      "description": "Pricing and packages",
+      "answer": "• Pricing depends on scope, volume, and packaging.\n• *Generative AI Development* — LLM apps, agents, private RAG, evaluation & guardrails (₹1.5 Lakh - 8 Lakh / Project)\n• *AI Chatbot Development* — Flows, FAQ/KB, handoff, analytics, multilingual options (₹75,000 - 3.5 Lakh)\n• *Machine Learning Solutions* — Predictive models, NLP, ranking, model ops handoff (₹2 Lakh - 10 Lakh)\n• *Computer Vision Solutions* — Detection, OCR, quality inspection, dashboards (₹2 Lakh - 8 Lakh)\n• *AI Workflow Automation* — Document processing, approvals, system integrations (₹1 Lakh - 5 Lakh)\n• *Enterprise Software Development* — Custom enterprise apps, workflows, SSO, audit trails (₹3 Lakh - 25 Lakh)\n• *SaaS Product Development* — MVP to scale: tenancy, roles, subscriptions, analytics (₹4 Lakh - 30 Lakh)\n• *Web Application Development* — Responsive portals, APIs, admin consoles, SEO basics (₹1 Lakh - 10 Lakh)\n• Share your requirements and we'll send a tailored quote — tap *Get a Quote*."
+    }
+  ],
+  "guardrails": {
+    "never_state": [
+      "unconfirmed project prices",
+      "guaranteed delivery dates without SOW",
+      "client names without permission",
+      "discounts not approved by sales",
+      "security certifications you do not hold"
+    ],
+    "escalate_keywords": [
+      "fraud",
+      "legal",
+      "lawsuit",
+      "urgent",
+      "complaint",
+      "breach",
+      "data leak"
+    ],
+    "escalation_message": "This needs a human — connecting you with our team now. A specialist will follow up shortly.",
+    "handoff_keywords": [
+      "human",
+      "agent",
+      "person",
+      "manager",
+      "call me",
+      "speak to someone"
+    ],
+    "tone": "professional and confident",
+    "forbidden_terms": [
+      "OTP",
+      "password",
+      "share card details",
+      "wire transfer to personal account"
+    ]
+  },
+  "notifications": {
+    "sales_email": "sales@leewaysoftech.com",
+    "support_email": "support@leewaysoftech.com",
+    "brochure_url": "https://leewaysoftech.com/company-profile.pdf",
+    "brochure_label": "Service Brochure",
+    "channels": [
+      {
+        "type": "email",
+        "to": "sales@leewaysoftech.com",
+        "label": "sales"
+      }
+    ]
+  },
+  "flows": [
+    {
+      "name": "get_quote",
+      "success_message": "Thank you! Our specialist will prepare a customized quote and follow up promptly."
+    },
+    {
+      "name": "raise_ticket",
+      "success_message": "Your request has been logged. A support ticket has been created and an executive will assist you."
+    },
+    {
+      "name": "book_callback",
+      "success_message": "Thank you! Your consultation request has been scheduled with Leeway Tech Advisor."
+    }
+  ],
+  "menu": {
+    "key": "kb_main",
+    "header": "Leeway Softech",
+    "body": "Welcome to Leeway Softech! Ask about services, tech stack, projects, careers — or request a quote / callback.",
+    "footer": "Select an option or type your query directly",
+    "button_text": "Select Option",
+    "buttons": [
+      {
+        "id": "our-services",
+        "title": "Our Services",
+        "description": "AI, software, web, mobile & CPaaS",
+        "section": "💻 Services",
+        "sort_order": 1,
+        "enabled": true,
+        "intent": "offerings"
+      },
+      {
+        "id": "technologies",
+        "title": "Technologies",
+        "description": "React, Python, Flutter, cloud & AI",
+        "section": "💻 Services",
+        "sort_order": 2,
+        "enabled": true,
+        "intent": "technologies"
+      },
+      {
+        "id": "projects",
+        "title": "Projects",
+        "description": "Clients, portfolio & industries served",
+        "section": "🏢 Company",
+        "sort_order": 3,
+        "enabled": true,
+        "intent": "projects"
+      },
+      {
+        "id": "get-a-quote",
+        "title": "Get a Quote",
+        "description": "Share scope for a written estimate",
+        "section": "📋 Sales",
+        "sort_order": 4,
+        "enabled": true,
+        "flow": "get_quote"
+      },
+      {
+        "id": "careers",
+        "title": "Careers",
+        "description": "Open roles & how to apply",
+        "section": "🏢 Company",
+        "sort_order": 5,
+        "enabled": true,
+        "intent": "careers"
+      },
+      {
+        "id": "benefits",
+        "title": "Benefits",
+        "description": "Why 1500+ clients choose Leeway",
+        "section": "🏢 Company",
+        "sort_order": 6,
+        "enabled": true,
+        "intent": "benefits"
+      }
+    ]
+  },
+  "prompt": {
+    "tone": "professional and confident",
+    "keywords": [
+      "react",
+      "next.js",
+      "node.js",
+      "python",
+      "flutter",
+      "aws",
+      "azure",
+      "gcp",
+      "ai/ml",
+      "devops",
+      "mixed — fixed-price",
+      "time & materials",
+      "dedicated pods / retainers",
+      "projects from ₹75",
+      "000 · dedicated pods from ₹1.8 lakh/month",
+      "60-day defect warranty",
+      "optional sla retainers for monitoring",
+      "patches & feature velocity",
+      "iso 9001:2015",
+      "iso/iec 27001:2013",
+      "cmmi level 3",
+      "mumbai (corporate)",
+      "bhavnagar (registered)",
+      "delhi/ncr",
+      "ahmedabad"
+    ],
+    "domain_specific_topics": "Technologies / tech stack: React, Next.js, Node.js, Python, Flutter, AWS, Azure, GCP, AI/ML, DevOps; Engagement models: Mixed — Fixed-price, Time & materials, Dedicated pods / retainers; Typical engagement size: Projects from ₹75,000 · dedicated pods from ₹1.8 Lakh/month; After-sales / AMC / SLA: 60-day defect warranty; optional SLA retainers for monitoring, patches & feature velocity; Certifications: ISO 9001:2015, ISO/IEC 27001:2013, CMMI Level 3; Offices: Mumbai (corporate), Bhavnagar (registered), Delhi/NCR, Ahmedabad; Founded / scale: Founded 2012 · 1500+ clients · AI MoU with Government of Gujarat"
+  },
+  "waba_phone_hint": "+91 8690783030",
+  "domain_answers": [
+    {
+      "label": "Technologies / tech stack",
+      "help": "Chips the bot understands",
+      "value": "React, Next.js, Node.js, Python, Flutter, AWS, Azure, GCP, AI/ML, DevOps"
+    },
+    {
+      "label": "Engagement models",
+      "help": "How you contract",
+      "value": "Mixed — Fixed-price, Time & materials, Dedicated pods / retainers"
+    },
+    {
+      "label": "Typical engagement size",
+      "help": "Budget framing for quotes",
+      "value": "Projects from ₹75,000 · dedicated pods from ₹1.8 Lakh/month"
+    },
+    {
+      "label": "After-sales / AMC / SLA",
+      "help": "Post go-live support",
+      "value": "60-day defect warranty; optional SLA retainers for monitoring, patches & feature velocity"
+    },
+    {
+      "label": "Certifications",
+      "help": "Trust signals",
+      "value": "ISO 9001:2015, ISO/IEC 27001:2013, CMMI Level 3"
+    },
+    {
+      "label": "Offices",
+      "help": "Locations shown on Benefits",
+      "value": "Mumbai (corporate), Bhavnagar (registered), Delhi/NCR, Ahmedabad"
+    },
+    {
+      "label": "Founded / scale",
+      "help": "Credibility stats",
+      "value": "Founded 2012 · 1500+ clients · AI MoU with Government of Gujarat"
+    }
+  ]
+}
