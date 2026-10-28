@@ -105,6 +105,69 @@ class MenuButtonDedupeTests(unittest.TestCase):
         self.assertEqual(len(products), 1)
         self.assertEqual(products[0]["id"], "menu_products")
 
+    def test_merge_layers_collapses_raw_hyphen_duplicates_onto_defaults(self):
+        """Draft/PDF layers with hyphen ids must not double Cards/Loans/Products."""
+        defaults = get_vertical_defaults("banking")
+        draft = {
+            "menu": {
+                "buttons": [
+                    {
+                        "id": "menu-products",
+                        "title": "Banking Products",
+                        "description": "Accounts, cards & loans",
+                        "intent": "menu-products",
+                    },
+                    {
+                        "id": "menu-cards",
+                        "title": "Cards",
+                        "description": "Credit & debit card help",
+                        "intent": "offerings",
+                    },
+                    {
+                        "id": "menu-loans",
+                        "title": "Loans",
+                        "description": "Personal, home & business loans",
+                        "intent": "offerings",
+                    },
+                ]
+            }
+        }
+        merged = merge_layers(defaults, draft)
+        ids = [b["id"] for b in merged["menu"]["buttons"]]
+        titles = [b["title"] for b in merged["menu"]["buttons"]]
+
+        self.assertEqual(ids.count("menu_products"), 1)
+        self.assertEqual(ids.count("menu_cards"), 1)
+        self.assertEqual(ids.count("menu_loans"), 1)
+        self.assertNotIn("menu-products", ids)
+        self.assertNotIn("menu-cards", ids)
+        self.assertNotIn("menu-loans", ids)
+        self.assertEqual(titles.count("Banking Products"), 1)
+        self.assertEqual(titles.count("Cards"), 1)
+        self.assertEqual(titles.count("Loans"), 1)
+
+    def test_merge_layers_collapses_both_forms_inside_one_layer(self):
+        """A saved draft that already contains both id forms must still collapse."""
+        layer = {
+            "menu": {
+                "buttons": [
+                    {"id": "menu_products", "title": "Banking Products", "intent": "product_details"},
+                    {"id": "menu_cards", "title": "Cards", "intent": "product_details"},
+                    {"id": "menu-products", "title": "Banking Products", "intent": "menu-products"},
+                    {"id": "menu_loans", "title": "Loans", "intent": "product_details"},
+                    {"id": "menu-cards", "title": "Cards", "intent": "offerings"},
+                    {"id": "menu-loans", "title": "Loans", "intent": "offerings"},
+                ]
+            }
+        }
+        merged = merge_layers({}, layer)
+        ids = [b["id"] for b in merged["menu"]["buttons"]]
+        titles = [b["title"] for b in merged["menu"]["buttons"]]
+        self.assertEqual(ids, ["menu_products", "menu_cards", "menu_loans"])
+        self.assertEqual(titles.count("Banking Products"), 1)
+        self.assertEqual(titles.count("Cards"), 1)
+        self.assertEqual(titles.count("Loans"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
