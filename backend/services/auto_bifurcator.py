@@ -370,6 +370,7 @@ class AutoBifurcator:
             "tables": tables_found,
             "has_tables": len(tables_found) > 0,
             "images": images_found if ext == ".pdf" else [],
+            "images": images_found if ext == ".pdf" else [],
         }
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -1071,7 +1072,9 @@ class AutoBifurcator:
 
 
 
-        return menu_items[:8]
+        # WhatsApp list menus support up to 10 rows; preserve all extracted
+        # items within that limit instead of silently dropping the last two.
+        return menu_items[:10]
 
 
 

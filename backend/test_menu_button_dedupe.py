@@ -3,6 +3,8 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
@@ -12,15 +14,77 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from services.auto_bifurcator import (  # noqa: E402
+    AutoBifurcator,
     _menu_button_id,
     _normalize_menu_button_key,
     _sanitize_menu_buttons,
 )
 from shared.tenancy.merge import merge_layers  # noqa: E402
 from shared.tenancy.defaults import get_vertical_defaults  # noqa: E402
+from bots.customer_b2c.menus import get_main_menu  # noqa: E402
 
 
 class MenuButtonDedupeTests(unittest.TestCase):
+    def test_pdf_extractor_keeps_all_ten_menu_items(self):
+        rows = [["Title", "Description", "Section", "Action"]]
+        rows.extend(
+            [f"Banking option {index}", f"Description {index}", "Banking", "faq"]
+            for index in range(1, 11)
+        )
+
+        items = AutoBifurcator("state-bank-of-india").extract_menu_section(
+            {"tables": [rows]},
+            vertical="banking",
+        )
+
+        self.assertEqual(len(items), 10)
+        self.assertEqual(items[-1]["title"], "Banking option 10")
+
+    def test_ten_extracted_menu_items_render_as_ten_whatsapp_rows(self):
+        rows = [["Title", "Description", "Section", "Action"]]
+        rows.extend(
+            [f"Banking option {index}", f"Description {index}", "Banking", "faq"]
+            for index in range(1, 11)
+        )
+        extracted = AutoBifurcator("state-bank-of-india").extract_menu_section(
+            {"tables": [rows]},
+            vertical="banking",
+        )
+        buttons = _sanitize_menu_buttons(extracted, vertical="banking")
+        profile = SimpleNamespace(
+            brand=SimpleNamespace(name="State Bank of India"),
+            display_name="State Bank of India",
+            menu=SimpleNamespace(
+                body="Welcome",
+                buttons=[
+                    SimpleNamespace(
+                        id=button["id"],
+                        title=button["title"],
+                        description=button["description"],
+                        section=button["section"],
+                        icon="",
+                        sort_order=button["sort_order"],
+                        enabled=True,
+                    )
+                    for button in buttons
+                ],
+            ),
+        )
+
+        with (
+            patch("shared.tenancy.resolver.resolve_effective_tenant_id", return_value="state-bank-of-india"),
+            patch("shared.tenancy.loader.get_tenant_profile", return_value=profile),
+        ):
+            menu = get_main_menu("919500000000", tenant_id="state-bank-of-india")
+
+        rendered_rows = [
+            row
+            for section in menu["sections"]
+            for row in section["rows"]
+        ]
+        self.assertEqual(len(rendered_rows), 10)
+        self.assertEqual(rendered_rows[-1]["title"], "Banking option 10")
+
     def test_menu_button_id_uses_underscores(self):
         self.assertEqual(_menu_button_id("menu-products"), "menu_products")
         self.assertEqual(_menu_button_id("menu_products"), "menu_products")

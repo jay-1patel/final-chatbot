@@ -1,0 +1,156 @@
+{
+  "tenant_id": "state-bank-of-india",
+  "vertical": "banking",
+  "display_name": "Stay Safe Block lost cards immediately via the menu, SMS BLOCK to 567676 or 1800",
+  "brand": {
+    "name": "Stay Safe Block lost cards immediately via the menu, SMS BLOCK to 567676 or 1800",
+    "bot_name": "State Bank Of India Advisor",
+    "tagline": "Official WhatsApp Concierge for State Bank Of India",
+    "website": "https://www.sbi.co.in",
+    "support_email": "customercare@sbi.co.in",
+    "support_phone": "+91 9876543210",
+    "signature": "Stay Safe Block lost cards immediately via the menu, SMS BLOCK to 567676 or 1800 — At your service."
+  },
+  "menu": {
+    "key": "kb_main",
+    "header": "Stay Safe Block lost cards immediately via the menu, SMS BLOCK to 567676 or 1800",
+    "body": "Welcome to State Bank of India! How can I assist you today?",
+    "footer": "Select an option or type your query directly",
+    "button_text": "Select Option",
+    "buttons": [
+      {
+        "id": "menu_products",
+        "title": "Banking Products",
+        "description": "Accounts, cards & loans",
+        "section": "🏦 Products",
+        "sort_order": 1,
+        "enabled": true,
+        "intent": "menu_products"
+      },
+      {
+        "id": "menu_cards",
+        "title": "Cards",
+        "description": "Credit & debit card help",
+        "section": "🏦 Products",
+        "sort_order": 2,
+        "enabled": true,
+        "intent": "offerings"
+      },
+      {
+        "id": "menu_loans",
+        "title": "Loans",
+        "description": "Personal, home & business loans",
+        "section": "🏦 Products",
+        "sort_order": 3,
+        "enabled": true,
+        "intent": "offerings"
+      },
+      {
+        "id": "menu_eligibility",
+        "title": "Check Eligibility",
+        "description": "Get a quick check",
+        "section": "📞 Talk To Us",
+        "sort_order": 4,
+        "enabled": true,
+        "flow": "book_callback"
+      },
+      {
+        "id": "menu_callback",
+        "title": "Request a Callback",
+        "description": "Have us call you back",
+        "section": "📞 Talk To Us",
+        "sort_order": 5,
+        "enabled": true,
+        "flow": "book_callback"
+      },
+      {
+        "id": "menu_grievance",
+        "title": "Raise a Complaint",
+        "description": "Register a grievance",
+        "section": "🆘 Support",
+        "sort_order": 6,
+        "enabled": true,
+        "flow": "raise_ticket"
+      }
+    ]
+  },
+  "intents": [
+    {
+      "name": "service-enquiry",
+      "examples": [
+        "what services do you offer",
+        "tell me about your offerings"
+      ],
+      "keywords": [
+        "service",
+        "services",
+        "what do you do",
+        "offerings",
+        "catalog"
+      ],
+      "enabled": true,
+      "description": "What services / offerings we provide",
+      "answer": "• Here's what Stay Safe Block lost cards immediately via the menu, SMS BLOCK to 567676 or 1800 offers:\n• *Parameter* — Parameter (On Request)\n• *Company Legal Name* — Company Legal Name (On Request)\n• *Brand Display Name* — Brand Display Name (On Request)\n• *Tenant ID / Code* — Tenant ID / Code (On Request)\n• *AI Bot Assistant Name* — AI Bot Assistant Name (On Request)\n• *Brand Tagline* — Brand Tagline (On Request)\n• *Official Website* — Official Website (On Request)\n• *Support Email* — Support Email (On Request)\n• Ask for details on any item, or tap *Get a Quote* / *Request a Callback*."
+    },
+    {
+      "name": "pricing-enquiry",
+      "examples": [
+        "what are your prices",
+        "how much does it cost"
+      ],
+      "keywords": [
+        "price",
+        "pricing",
+        "cost",
+        "rate",
+        "package",
+        "quote"
+      ],
+      "enabled": true,
+      "description": "Pricing and packages",
+      "answer": "• Pricing depends on scope, volume, and packaging.\n• *Parameter* — Parameter (On Request)\n• *Company Legal Name* — Company Legal Name (On Request)\n• *Brand Display Name* — Brand Display Name (On Request)\n• *Tenant ID / Code* — Tenant ID / Code (On Request)\n• *AI Bot Assistant Name* — AI Bot Assistant Name (On Request)\n• *Brand Tagline* — Brand Tagline (On Request)\n• *Official Website* — Official Website (On Request)\n• *Support Email* — Support Email (On Request)\n• Share your requirements and we'll send a tailored quote — tap *Get a Quote*."
+    }
+  ],
+  "business_hours": {
+    "timezone": "Asia/Kolkata",
+    "always_open": false,
+    "open": "09:30",
+    "close": "18:30",
+    "open_days": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "guardrails": {
+    "tone": "Consultative, professional and brand-aligned",
+    "never_state": [
+      "Never offer unauthorized discounts; Never promise unlisted dates; Never ask for OTPs"
+    ],
+    "escalate_keywords": [
+      "human",
+      "agent",
+      "manager",
+      "dispute",
+      "representative"
+    ],
+    "escalation_message": "Transfer to human sales advisor when user asks for 'human', 'agent' or expresses dispute"
+  },
+  "flows": [
+    {
+      "name": "book_callback",
+      "success_message": "Thank you! Your consultation request has been scheduled with State Bank Of India Advisor."
+    },
+    {
+      "name": "get_quote",
+      "success_message": "Thank you! Our specialist will prepare a customized quote and follow up promptly."
+    },
+    {
+      "name": "raise_ticket",
+      "success_message": "Your request has been logged. A support ticket has been created and an executive will assist you."
+    }
+  ]
+}

@@ -1,14 +1,8 @@
-"""Inbound WABA payload -> tenant_id.
+"""Resolve incoming WhatsApp traffic only to registered, active tenants.
 
-Meta's webhook puts the phone-number id (not the WABA id) on the top-level
-``entry[]`` object, and the WABA id on ``value.metadata``. We try, in order:
-
-    entry[0].id  ->  value.metadata.phone_number_id  ->  value.metadata.display_phone_number
-                 ->  env FALLBACK
-
-The first two are numeric; the display number is not, so it is only used when
-the tenant table was seeded that way. Unknown phone-ids land on the default
-tenant rather than being dropped — a misconfigured client still gets a bot.
+Meta's webhook supplies a phone-number ID and may also include the display
+number. Unknown or inactive phone bindings are left unrouted rather than sent
+to a default tenant.
 """
 
 from __future__ import annotations
@@ -70,76 +64,109 @@ def canonical_tenant_id(tenant_id: Optional[str]) -> Optional[str]:
     return raw
 
 
-def resolve_effective_tenant_id(wa_id: str = "", tenant_id: Optional[str] = None) -> str:
+def _registered_active_tenant(tenant_id: Optional[str]) -> Optional[str]:
+    """Return a canonical tenant id only when it is registered and active."""
+    candidate = canonical_tenant_id(tenant_id)
+    if not candidate:
+        return None
+    from . import store
+
+    record = store.get_tenant(candidate)
+    if not record or str(record.get("status") or "active").strip().lower() != "active":
+        return None
+    return str(record.get("slug") or record.get("id") or candidate)
+
+
+def resolve_effective_tenant_id(
+    wa_id: str = "",
+    tenant_id: Optional[str] = None,
+    *,
+    allow_test_override: bool = True,
+) -> Optional[str]:
     """Single-number WhatsApp routing: which tenant profile handles this message.
 
     Order:
       1. ``active_test_tenant`` from the admin console (or ``#tenant`` in chat)
       2. An explicit hint (webhook phone binding, simulator, caller)
-      3. ``user_states.tenant_id`` for this ``wa_id``, then default tenant
+      3. ``user_states.tenant_id`` for this ``wa_id``
 
     Step 1 always wins so enabling Leeway in the console cannot leak SBI/L&T
-    menus from phone binding or stale per-user stamps.
+    menus from phone binding or stale per-user stamps. Live webhooks disable
+    the test override and must use the active tenant bound to their phone id.
+    Missing or inactive tenants return None; inbound traffic must never default
+    to another tenant.
     """
-    override = _active_test_override()
+    override = _active_test_override() if allow_test_override else None
     if override:
-        logger.info(
-            "ACTIVE_TEST_TENANT | routing wa_id=%s to %s (ignoring hint=%s)",
-            wa_id or "?", override, tenant_id,
-        )
-        return override
+        active_override = _registered_active_tenant(override)
+        if active_override:
+            logger.info(
+                "ACTIVE_TEST_TENANT | routing wa_id=%s to %s (ignoring hint=%s)",
+                wa_id or "?", active_override, tenant_id,
+            )
+            return active_override
 
-    hint = canonical_tenant_id(tenant_id)
+    hint = _registered_active_tenant(tenant_id)
     if hint:
-        from . import store
-        if store.get_tenant(hint):
-            return hint
+        return hint
 
-    return resolve_tenant_for_user(wa_id)
+    return resolve_tenant_for_user(wa_id, allow_test_override=False)
 
 
-def resolve_tenant_from_payload(payload: Dict[str, Any]) -> str:
-    """Tenant for an inbound webhook body. Respects active test tenant first, then phone binding."""
-    from . import store  # local import: store needs the backend on sys.path
-
-    # Active test override takes absolute precedence for single-number testing
-    override = _active_test_override()
-    if override:
-        return override
-
-    fallback = os.getenv("DEFAULT_TENANT_ID", DEFAULT_TENANT_ID)
-
+def resolve_tenant_from_payload(payload: Dict[str, Any]) -> Optional[str]:
+    """Resolve an inbound WABA message only to its active phone-bound tenant."""
     for phone_id in _extract_phone_ids(payload or {}):
-        tenant_id = store.find_tenant_by_phone_id(phone_id)
-        if tenant_id:
-            logger.debug("Resolved tenant %s from phone id %s", tenant_id, phone_id)
-            return tenant_id
+        active_tenant = resolve_tenant_for_phone(
+            phone_id,
+            allow_test_override=False,
+        )
+        if active_tenant:
+            logger.debug("Resolved active tenant %s from phone id %s", active_tenant, phone_id)
+            return active_tenant
 
     # Second pass: a tenant whose slug or id matches the id field directly.
     for candidate in _extract_phone_ids(payload or {}):
-        if store.get_tenant(candidate):
-            return candidate
+        active_tenant = _registered_active_tenant(candidate)
+        if active_tenant:
+            return active_tenant
 
     if _extract_phone_ids(payload or {}):
         logger.warning(
-            "Unbound WABA phone id(s) %s — falling back to tenant '%s'",
-            _extract_phone_ids(payload or {}), fallback,
+            "Unbound or inactive WABA phone id(s) %s — ignoring inbound message",
+            _extract_phone_ids(payload or {}),
         )
-    return fallback
+    return None
 
 
-def resolve_tenant_for_phone(phone_id: str, default: Optional[str] = None) -> str:
-    """Tenant for a known phone-number id (test harness, admin simulator)."""
-    override = _active_test_override()
+def resolve_tenant_for_phone(
+    phone_id: str,
+    *,
+    allow_test_override: bool = True,
+) -> Optional[str]:
+    """Resolve a phone binding; unknown or inactive numbers return None."""
+    override = _active_test_override() if allow_test_override else None
     if override:
-        return override
+        active_override = _registered_active_tenant(override)
+        if active_override:
+            return active_override
 
     from . import store
 
-    tid = store.find_tenant_by_phone_id(phone_id) if phone_id else None
-    if tid:
-        return tid
-    return default or resolve_default_tenant()
+    raw_phone_id = str(phone_id or "").strip()
+    candidates = [raw_phone_id] if raw_phone_id else []
+    try:
+        normalized = store.normalize_waba_phone_id(raw_phone_id)
+        if normalized not in candidates:
+            candidates.append(normalized)
+    except ValueError:
+        pass
+    for candidate in candidates:
+        tid = store.find_tenant_by_phone_id(candidate)
+        if tid:
+            active_tenant = _registered_active_tenant(tid)
+            if active_tenant:
+                return active_tenant
+    return None
 
 
 def bind_phone_id(tenant_id: str, phone_id: str) -> bool:
@@ -180,28 +207,35 @@ def resolve_default_tenant() -> str:
     return str(configured)
 
 
-def resolve_tenant_for_user(wa_id: str, default: Optional[str] = None) -> str:
+def resolve_tenant_for_user(
+    wa_id: str,
+    *,
+    allow_test_override: bool = True,
+) -> Optional[str]:
     """Tenant that owns a WhatsApp user.
 
     In single-number testing mode, active test tenant override takes absolute
     precedence so testers don't get trapped in stale tenant states.
     """
-    override = _active_test_override()
+    override = _active_test_override() if allow_test_override else None
     if override:
-        return override
+        active_override = _registered_active_tenant(override)
+        if active_override:
+            return active_override
 
     if not wa_id:
-        return default or resolve_default_tenant()
+        return None
 
     from . import store
 
     tid = store.tenant_id_for_user(wa_id)
     if tid:
-        if store.get_tenant(tid):
-            return tid
+        active_tenant = _registered_active_tenant(tid)
+        if active_tenant:
+            return active_tenant
         logger.warning(
-            "user %s is stamped with unregistered tenant %r; falling back to default",
+            "user %s is stamped with unregistered or inactive tenant %r; ignoring message",
             wa_id, tid,
         )
 
-    return default or resolve_default_tenant()
+    return None
