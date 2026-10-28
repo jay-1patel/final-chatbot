@@ -142,6 +142,43 @@ def _slugify(text: str) -> str:
     return text.strip("-") or "item"
 
 
+# ----------------------------------------------------------------------
+# IMGHIPPO image hosting (used for embedded PDF images extracted during
+# auto-configuration; URLs are stored in products.media_url / "image url")
+# ----------------------------------------------------------------------
+
+IMGHIPPO_API_URL = os.environ.get("IMGHIPPO_API_URL", "https://api.imghippo.com/v1/upload")
+
+
+def _upload_image_to_imghippo(content: bytes, filename: str) -> Optional[str]:
+    """Upload image bytes to imghippo and return the public URL.
+
+    Returns None when IMGHIPPO_API_KEY is unset or the upload fails.
+    """
+    from routing.config import IMGHIPPO_API_KEY
+
+    if not IMGHIPPO_API_KEY:
+        logger.warning("IMGHIPPO_API_KEY not set — cannot upload extracted image to imghippo.")
+        return None
+    try:
+        resp = httpx.post(
+            IMGHIPPO_API_URL,
+            headers={"X-API-Key": IMGHIPPO_API_KEY},
+            files={"file": (filename, content, "application/octet-stream")},
+            timeout=60,
+        )
+        if resp.is_success:
+            data = resp.json()
+            if data.get("success") or data.get("status") == 200:
+                url = (data.get("data") or {}).get("url")
+                if url:
+                    return str(url)
+        logger.warning(f"imghippo rejected image upload for {filename}: {resp.status_code} {resp.text[:120]}")
+    except Exception as e:
+        logger.error(f"imghippo upload failed for {filename}: {e}")
+    return None
+
+
 def _ensure_free_slug(base: str, used_slugs: set) -> str:
     """Find a product slug that is not taken.
 
