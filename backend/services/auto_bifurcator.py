@@ -1708,6 +1708,7 @@ class AutoBifurcator:
                 if not cur_url or "imghippo.com" not in cur_url.lower() or "​" in cur_url or " " in cur_url or "add public" in cur_url.lower():
                     chosen = all_doc_images[idx % len(all_doc_images)]
                     off["media_url"] = chosen["url"]
+                    off["image_url"] = chosen["url"]
                     if isinstance(off.get("attrs"), dict):
                         off["attrs"]["media_url"] = chosen["url"]
                         off["attrs"]["image_url"] = chosen["url"]
@@ -1895,6 +1896,7 @@ class AutoBifurcator:
                 if not cur_url or "imghippo.com" not in cur_url.lower() or "​" in cur_url or " " in cur_url or "add public" in cur_url.lower():
                     chosen = all_kit_images[idx % len(all_kit_images)]
                     off["media_url"] = chosen["url"]
+                    off["image_url"] = chosen["url"]
                     if isinstance(off.get("attrs"), dict):
                         off["attrs"]["media_url"] = chosen["url"]
                         off["attrs"]["image_url"] = chosen["url"]
