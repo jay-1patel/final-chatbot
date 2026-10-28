@@ -10,9 +10,13 @@ import re
 import sqlite3
 from typing import List, Dict, Any
 
-# Ensure backend and root are on sys.path
-sys.path.insert(0, os.path.abspath('backend'))
-sys.path.insert(0, os.path.abspath('.'))
+# Ensure backend and root are on sys.path (anchored to this file, not cwd)
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 import database as db
 from shared.tenancy.loader import get_tenant_profile

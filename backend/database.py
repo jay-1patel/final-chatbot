@@ -1,151 +1,124 @@
-import os
-import json
-import sqlite3
-import logging
-import hashlib
-import re
-import contextvars
-from ipaddress import ip_address as _parse_ip_address, ip_network
-from datetime import datetime, timedelta, timezone
-from contextlib import contextmanager
-from typing import Optional, Any, Dict, List
+"""SQLite data layer — public facade.
 
-logger = logging.getLogger("chiki_webhook")
+The concrete queries now live in backend/db/* (core, audit, products, menu,
+webhooks, chat, sessions, settings, state, templates, search, admins, gaps,
+crawl). This module keeps:
+  * the connection/tenant context helpers (via db.core re-exports),
+  * the one-time schema init + migration ladder (init_db and friends), and
+  * every public name, so `from database import X` is unchanged.
+"""
+import os  # noqa: F401 - kept for legacy consumers of `database`
+import json  # noqa: F401
+import sqlite3  # noqa: F401
+import logging  # noqa: F401
+import hashlib  # noqa: F401
+import re  # noqa: F401
+import contextvars  # noqa: F401
+from ipaddress import ip_address as _parse_ip_address, ip_network  # noqa: F401
+from datetime import datetime, timedelta, timezone  # noqa: F401
+from contextlib import contextmanager  # noqa: F401
+from typing import Optional, Any, Dict, List  # noqa: F401
 
-# ── Single database shared by the app, the FAQ bot and the KB bot ─────────
-# routing.config resolves DB_PATH from ROUTING_DB_PATH (routing/.env) and the
-# FAQ/KB indexes open that file. This module must open the SAME file, otherwise
-# the admin UI (chat_history / webhook_logs / customers) reads a different,
-# empty faq.db than the bot writes to.
-#
-# routing/.env is loaded here too because this module can be imported before
-# the app calls load_dotenv(). The resolution logic mirrors routing.config
-# exactly (relative paths resolve against the repo root).
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv(os.path.join(PROJECT_ROOT, "routing", ".env"))
-except Exception:  # pragma: no cover - dotenv missing is not fatal
-    pass
-
-
-def _resolve_db_path() -> str:
-    raw = (os.getenv("ROUTING_DB_PATH") or "").strip()
-    if raw:
-        if not os.path.isabs(raw):
-            raw = os.path.join(PROJECT_ROOT, raw)
-        return os.path.normpath(raw)
-    return os.path.join(PROJECT_ROOT, "faq.db")
-
-
-DB_PATH = _resolve_db_path()
-
-# ── Helpers ──────────────────────────────────────────────────────────────
-
-def _ensure_columns(conn, table, columns):
-    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-    for col_name, col_type in columns:
-        if col_name not in existing:
-            try:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
-                logger.info(f"Added column {col_name} {col_type} to {table}")
-            except Exception as e:
-                logger.error(f"Failed to add column {col_name} to {table}: {e}")
-
-
-def _loads_json(value, default=None):
-    try:
-        return json.loads(value) if value else (default if default is not None else {})
-    except (json.JSONDecodeError, TypeError):
-        return default if default is not None else {}
-
-
-# ── Request-scoped tenant ────────────────────────────────────────────────
-# The live webhook resolves the tenant from the inbound WABA phone-id and calls
-# `set_request_tenant` before handling the message. `save_chat` and friends then
-# attribute rows to that tenant without threading an argument through every
-# call site. A contextvar (not a global) so concurrent requests cannot bleed.
-
-_current_tenant: contextvars.ContextVar = contextvars.ContextVar("current_tenant", default=None)
-_audit_request_context: contextvars.ContextVar = contextvars.ContextVar("audit_request_context", default=None)
-
-
-def set_audit_request_context(*, ip_address: str | None = None, user_agent: str | None = None) -> None:
-    """Attach trusted request metadata to audit writes in this request context."""
-    _audit_request_context.set({
-        "ip_address": (ip_address or "")[:64] or None,
-        "user_agent": (user_agent or "")[:512] or None,
-    })
-
-
-def clear_audit_request_context() -> None:
-    _audit_request_context.set(None)
-
-
-def trusted_client_ip(peer_ip: str | None, forwarded_for: str | None = None) -> str | None:
-    """Resolve client IP, trusting forwarded-for only behind configured proxies."""
-    try:
-        peer = _parse_ip_address(str(peer_ip or "").strip())
-    except ValueError:
-        return None
-
-    trusted = []
-    for entry in os.getenv("TRUSTED_PROXY_IPS", "").split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        try:
-            trusted.append(ip_network(entry, strict=False))
-        except ValueError:
-            logger.warning("Ignoring invalid TRUSTED_PROXY_IPS entry")
-    if not any(peer in network for network in trusted):
-        return str(peer)
-
-    # Walk from nearest to farthest proxy. The first untrusted address is the
-    # client address; ignore malformed forwarded entries.
-    try:
-        chain = [_parse_ip_address(part.strip()) for part in (forwarded_for or "").split(",") if part.strip()]
-    except ValueError:
-        return str(peer)
-    for candidate in reversed(chain):
-        if not any(candidate in network for network in trusted):
-            return str(candidate)
-    return str(chain[0]) if chain else str(peer)
-
-
-def set_request_tenant(tenant_id) -> None:
-    """Attribute rows written during this request to `tenant_id`."""
-    _current_tenant.set(str(tenant_id).strip() if tenant_id else None)
-
-
-def get_request_tenant():
-    return _current_tenant.get()
+try:  # backend/ on sys.path (the normal import mode)
+    from db.core import (
+        DB_PATH, BASE_DIR, PROJECT_ROOT, logger, get_db, get_db_context,
+        _ensure_columns, _loads_json, _current_tenant, set_request_tenant,
+        get_request_tenant, set_audit_request_context, clear_audit_request_context,
+        trusted_client_ip, _resolve_db_path,
+    )
+    from db.audit import (  # noqa: F401
+        _AUDIT_SENSITIVE_KEY_PARTS, _init_admin_audit_tables, _init_audit_logs_table, record_admin_audit_event, record_audit_log_event, safe_audit_details,
+    )
+    from db.config_drafts import (  # noqa: F401
+        get_draft_config, get_publish_history, get_published_config, publish_config, save_draft_config,
+    )
+    from db.settings import (  # noqa: F401
+        get_active_test_tenant, get_app_setting, set_active_test_tenant, set_app_setting,
+    )
+    from db.products import (  # noqa: F401
+        _deserialize_product, _resolve_tenant, _resolve_tenant_ids, _row_to_dict, approve_staged_products, build_products_snapshot, count_products, delete_product, delete_staged_products, get_product, get_product_by_slug, get_products_by_category, get_published_products, list_product_categories, list_products, list_staged_products, product_slug_taken, save_product, search_products, update_product,
+    )
+    from db.menu import (  # noqa: F401
+        delete_menu_item, get_menu_items, get_menu_settings, invalidate_menu_cache, reset_menu, set_menu_settings, upsert_menu_item,
+    )
+    from db.webhooks import (  # noqa: F401
+        WEBHOOK_LOG_MAX_ROWS, _trim_webhook_logs, get_webhook_stats, log_webhook, mark_inbound_processed, was_inbound_processed,
+    )
+    from db.chat import (  # noqa: F401
+        delete_file_chunks, delete_knowledge_base_file, get_files_summary, get_recent_history, save_chat, save_chunks, save_embeddings, save_knowledge_base_chunks,
+    )
+    from db.sessions import (  # noqa: F401
+        get_session_info, is_session_open, update_session_inbound, update_session_outbound,
+    )
+    from db.state import (  # noqa: F401
+        clear_user_context, get_user_state, reopen_conversation_on_inbound, set_human_handover, set_user_state, update_user_context,
+    )
+    from db.templates import (  # noqa: F401
+        deactivate_session_button, delete_template, get_button_click_stats, get_button_clicks, get_session_button, get_template, list_session_buttons, list_templates, log_button_click, save_session_button, save_template, trigger_session_button,
+    )
+    from db.search import (  # noqa: F401
+        search_faq_db, search_knowledge_base_db,
+    )
+    from db.admins import (  # noqa: F401
+        _chat_message_to_dict, _parse_admin_file_row, clear_admin_otp, count_admins, count_admins_by_role, count_tenant_admins, create_admin, delete_admin, delete_admin_chat_message, delete_admin_file, delete_chat_message, get_admin_by_id, get_admin_by_username, get_admin_chat_history, get_admin_chat_preview, get_admin_file, get_admin_otp, get_admin_record, get_all_admins_except, get_chat_history, get_chat_last_message, list_admin_files, list_admin_records, list_admins, mark_chat_message_deleted, save_admin_chat_message, save_admin_file, save_chat_message, set_admin_otp, soft_delete_message_for_everyone, soft_delete_message_for_user, update_admin, update_admin_email, update_admin_file_status, update_admin_record,
+    )
+    from db.gaps import (  # noqa: F401
+        add_faq_from_gap, get_knowledge_gaps_summary, list_unanswered_queries, record_unanswered_query, resolve_unanswered_query,
+    )
+    from db.crawl import (  # noqa: F401
+        _crawl_schedule_row, delete_crawl_schedule, get_crawl_schedule, list_due_crawl_schedules, mark_crawl_finished, mark_crawl_started, upsert_crawl_schedule,
+    )
+except ImportError:  # imported as part of the `backend` package
+    from backend.db.core import (
+        DB_PATH, BASE_DIR, PROJECT_ROOT, logger, get_db, get_db_context,
+        _ensure_columns, _loads_json, _current_tenant, set_request_tenant,
+        get_request_tenant, set_audit_request_context, clear_audit_request_context,
+        trusted_client_ip, _resolve_db_path,
+    )
+    from backend.db.audit import (  # noqa: F401
+        _AUDIT_SENSITIVE_KEY_PARTS, _init_admin_audit_tables, _init_audit_logs_table, record_admin_audit_event, record_audit_log_event, safe_audit_details,
+    )
+    from backend.db.config_drafts import (  # noqa: F401
+        get_draft_config, get_publish_history, get_published_config, publish_config, save_draft_config,
+    )
+    from backend.db.settings import (  # noqa: F401
+        get_active_test_tenant, get_app_setting, set_active_test_tenant, set_app_setting,
+    )
+    from backend.db.products import (  # noqa: F401
+        _deserialize_product, _resolve_tenant, _resolve_tenant_ids, _row_to_dict, approve_staged_products, build_products_snapshot, count_products, delete_product, delete_staged_products, get_product, get_product_by_slug, get_products_by_category, get_published_products, list_product_categories, list_products, list_staged_products, product_slug_taken, save_product, search_products, update_product,
+    )
+    from backend.db.menu import (  # noqa: F401
+        delete_menu_item, get_menu_items, get_menu_settings, invalidate_menu_cache, reset_menu, set_menu_settings, upsert_menu_item,
+    )
+    from backend.db.webhooks import (  # noqa: F401
+        WEBHOOK_LOG_MAX_ROWS, _trim_webhook_logs, get_webhook_stats, log_webhook, mark_inbound_processed, was_inbound_processed,
+    )
+    from backend.db.chat import (  # noqa: F401
+        delete_file_chunks, delete_knowledge_base_file, get_files_summary, get_recent_history, save_chat, save_chunks, save_embeddings, save_knowledge_base_chunks,
+    )
+    from backend.db.sessions import (  # noqa: F401
+        get_session_info, is_session_open, update_session_inbound, update_session_outbound,
+    )
+    from backend.db.state import (  # noqa: F401
+        clear_user_context, get_user_state, reopen_conversation_on_inbound, set_human_handover, set_user_state, update_user_context,
+    )
+    from backend.db.templates import (  # noqa: F401
+        deactivate_session_button, delete_template, get_button_click_stats, get_button_clicks, get_session_button, get_template, list_session_buttons, list_templates, log_button_click, save_session_button, save_template, trigger_session_button,
+    )
+    from backend.db.search import (  # noqa: F401
+        search_faq_db, search_knowledge_base_db,
+    )
+    from backend.db.admins import (  # noqa: F401
+        _chat_message_to_dict, _parse_admin_file_row, clear_admin_otp, count_admins, count_admins_by_role, count_tenant_admins, create_admin, delete_admin, delete_admin_chat_message, delete_admin_file, delete_chat_message, get_admin_by_id, get_admin_by_username, get_admin_chat_history, get_admin_chat_preview, get_admin_file, get_admin_otp, get_admin_record, get_all_admins_except, get_chat_history, get_chat_last_message, list_admin_files, list_admin_records, list_admins, mark_chat_message_deleted, save_admin_chat_message, save_admin_file, save_chat_message, set_admin_otp, soft_delete_message_for_everyone, soft_delete_message_for_user, update_admin, update_admin_email, update_admin_file_status, update_admin_record,
+    )
+    from backend.db.gaps import (  # noqa: F401
+        add_faq_from_gap, get_knowledge_gaps_summary, list_unanswered_queries, record_unanswered_query, resolve_unanswered_query,
+    )
+    from backend.db.crawl import (  # noqa: F401
+        _crawl_schedule_row, delete_crawl_schedule, get_crawl_schedule, list_due_crawl_schedules, mark_crawl_finished, mark_crawl_started, upsert_crawl_schedule,
+    )
 
 
-# ── Connection helpers ───────────────────────────────────────────────────
-
-def get_db():
-    # Uses the absolute path we defined at the top of the file
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
-    except Exception:
-        pass
-    return conn
-
-
-@contextmanager
-def get_db_context():
-    conn = get_db()
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
 
 
 # ── Customer directory ──────────────────────────────────────────────────────
@@ -1143,6 +1116,7 @@ def init_db():
         _init_admin_audit_tables(conn)
         _init_integration_tables(conn)
         _init_offerings_migration(conn)
+        _migrate_products_per_tenant_slug(conn)
         _init_record_columns_table(conn)
         _init_conversation_state_columns(conn)
         _ensure_callback_tables(conn)
@@ -1202,6 +1176,7 @@ def _rebuild_tenants_for_partial_unique(conn):
             status          TEXT DEFAULT 'active',
             display_name    TEXT DEFAULT '',
             webhook_secret  TEXT DEFAULT '',
+            domain          TEXT,
             created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )"""
@@ -1209,9 +1184,9 @@ def _rebuild_tenants_for_partial_unique(conn):
     conn.execute(
         """INSERT INTO tenants
            (id, slug, waba_phone_id, vertical, status, display_name,
-            webhook_secret, created_at, updated_at)
+            webhook_secret, domain, created_at, updated_at)
            SELECT id, slug, NULLIF(waba_phone_id, ''), vertical, status, display_name,
-                  webhook_secret, created_at, updated_at
+                  webhook_secret, domain, created_at, updated_at
            FROM tenants_legacy_unique"""
     )
     conn.execute("DROP TABLE tenants_legacy_unique")
@@ -1246,6 +1221,9 @@ def _init_tenancy_tables(conn):
         ("webhook_secret", "TEXT DEFAULT ''"),
         ("status", "TEXT DEFAULT 'active'"),
         ("waba_phone_id", "TEXT"),
+        # First website seen for the tenant, backfilled by save_profile_draft
+        # (routes/tenants.py). Without this column a fresh DB 500s on draft save.
+        ("domain", "TEXT"),
     ])
     # Partial unique index, NOT an inline UNIQUE: a tenant is registered before
     # it is bound to a phone number, and an inline UNIQUE over the default ''
@@ -1421,76 +1399,6 @@ def _init_tenant_change_tables(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS ix_tenant_change_events_request ON tenant_change_request_events(request_id, id)"
     )
-
-
-def _init_admin_audit_tables(conn):
-    """Create the durable, append-only admin audit log retained for one year."""
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS admin_audit_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            actor_id INTEGER,
-            actor_username TEXT,
-            actor_role TEXT,
-            action TEXT NOT NULL,
-            outcome TEXT NOT NULL DEFAULT 'success' CHECK (outcome IN ('success', 'failure')),
-            resource_type TEXT NOT NULL DEFAULT '',
-            resource_id TEXT NOT NULL DEFAULT '',
-            target_username TEXT,
-            tenant_id TEXT,
-            details_json TEXT NOT NULL DEFAULT '{}',
-            ip_address TEXT,
-            user_agent TEXT,
-            tenant_name TEXT,
-            tenant_slug TEXT,
-            actor_kind TEXT NOT NULL DEFAULT 'admin',
-            actor_label TEXT
-        )"""
-    )
-    _ensure_columns(conn, "admin_audit_events", [
-        ("ip_address", "TEXT"),
-        ("user_agent", "TEXT"),
-        ("tenant_name", "TEXT"),
-        ("tenant_slug", "TEXT"),
-        ("actor_kind", "TEXT NOT NULL DEFAULT 'admin'"),
-        ("actor_label", "TEXT"),
-    ])
-    conn.execute("CREATE INDEX IF NOT EXISTS ix_admin_audit_created ON admin_audit_events(created_at DESC, id DESC)")
-    conn.execute("CREATE INDEX IF NOT EXISTS ix_admin_audit_actor ON admin_audit_events(actor_username, created_at DESC)")
-    conn.execute("CREATE INDEX IF NOT EXISTS ix_admin_audit_action ON admin_audit_events(action, created_at DESC)")
-    conn.execute("CREATE INDEX IF NOT EXISTS ix_admin_audit_tenant ON admin_audit_events(tenant_id, created_at DESC)")
-    conn.execute("DELETE FROM admin_audit_events WHERE datetime(created_at) < datetime('now', '-365 days')")
-    
-    # Initialize new audit_logs table
-    _init_audit_logs_table(conn)
-
-
-_AUDIT_SENSITIVE_KEY_PARTS = (
-    "password", "otp", "token", "secret", "credential", "authorization", "api_key", "payload",
-    "file_path", "filepath", "local_path", "media_url", "detail_url", "signed_url", "upload_url", "url",
-)
-
-
-def safe_audit_details(value):
-    """Remove secrets and deployment paths/URLs recursively before storing or returning details."""
-    if isinstance(value, dict):
-        return {
-            str(key): safe_audit_details(item)
-            for key, item in value.items()
-            if not any(part in str(key).lower().replace('-', '_') for part in _AUDIT_SENSITIVE_KEY_PARTS)
-        }
-    if isinstance(value, str):
-        text = value.strip()
-        if text.startswith(("/", "\\\\")) or re.match(r"^[A-Za-z]:[\\\\/]", text):
-            return "[redacted path]"
-        if re.search(r"https?://", text, flags=re.IGNORECASE):
-            return "[redacted URL]"
-        return text[:1000]
-    if isinstance(value, (list, tuple)):
-        return [safe_audit_details(item) for item in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)
 
 
 # ── Callback and Meeting Scheduling Tables ─────────────────────────────────
@@ -1729,71 +1637,6 @@ def _ensure_callback_tables(conn):
         pass
 
 
-def record_admin_audit_event(
-    conn,
-    *,
-    action: str,
-    actor: dict | None = None,
-    outcome: str = "success",
-    resource_type: str = "",
-    resource_id: str | int | None = None,
-    target_username: str | None = None,
-    tenant_id: str | None = None,
-    details: dict | None = None,
-    ip_address: str | None = None,
-    user_agent: str | None = None,
-    tenant_name: str | None = None,
-    tenant_slug: str | None = None,
-    actor_kind: str | None = None,
-    actor_label: str | None = None,
-) -> int:
-    """Record an audit event using the caller's transaction."""
-    if outcome not in {"success", "failure"}:
-        raise ValueError("Audit outcome must be success or failure")
-    actor = actor or {}
-    context = _audit_request_context.get() or {}
-    tenant_id = tenant_id or actor.get("tenant_id")
-    if tenant_id and (tenant_name is None or tenant_slug is None):
-        try:
-            tenant = conn.execute(
-                "SELECT display_name, slug FROM tenants WHERE id = ?",
-                (str(tenant_id),),
-            ).fetchone()
-            if tenant:
-                tenant_name = tenant_name or tenant["display_name"] or None
-                tenant_slug = tenant_slug or tenant["slug"] or None
-        except Exception:
-            # Compatibility with audit tests/older database fixtures without
-            # the tenant registry table.
-            pass
-    actor_kind = actor_kind or actor.get("type") or ("tenant_token" if actor.get("token_id") else "admin")
-    actor_label = actor_label or actor.get("label") or actor.get("username")
-    try:
-        _init_admin_audit_tables(conn)
-        conn.execute("DELETE FROM admin_audit_events WHERE datetime(created_at) < datetime('now', '-365 days')")
-    except Exception:
-        pass
-
-    cursor = conn.execute(
-        """INSERT INTO admin_audit_events
-           (created_at, actor_id, actor_username, actor_role, action, outcome,
-            resource_type, resource_id, target_username, tenant_id, details_json,
-            ip_address, user_agent, tenant_name, tenant_slug, actor_kind, actor_label)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            datetime.now(timezone.utc).isoformat(), actor.get("id"), actor.get("username"),
-            actor.get("role"), action, outcome, resource_type,
-            "" if resource_id is None else str(resource_id), target_username,
-            tenant_id,
-            json.dumps(safe_audit_details(details or {}), ensure_ascii=False),
-            ip_address or context.get("ip_address"),
-            (user_agent or context.get("user_agent") or "")[:512] or None,
-            tenant_name, tenant_slug, actor_kind, actor_label,
-        ),
-    )
-    return int(cursor.lastrowid)
-
-
 def _init_integration_tables(conn):
     """Real connected API credentials, payment transactions, and shipping trackings."""
     conn.execute(
@@ -1990,7 +1833,7 @@ def _init_embedding_tenancy(conn):
     # longer registered, so setting DEFAULT_TENANT_ID and re-running init_db
     # re-points previously mis-tagged data.
     resolved = _default_tenant_id(conn)
-    for table in ("cached_embeddings", "faq_dataset", "knowledge_base", "products",
+    for table in ("cached_embeddings", "faq_dataset", "knowledge_base",
                   "admin_files", "admin_chat_messages", "campaigns", "distributors",
                   "chat_history", "complaints"):
         cur = conn.execute(
@@ -2001,6 +1844,47 @@ def _init_embedding_tenancy(conn):
         )
         if cur.rowcount:
             logger.info("%s: tagged %s rows as %s", table, cur.rowcount, resolved)
+    # products is special: UNIQUE(tenant_id, slug) is enforced (see
+    # _migrate_products_per_tenant_slug), and NULL tenant ids are distinct under
+    # UNIQUE — so a blanket re-tag could force two same-slug rows into one
+    # tenant and crash init_db. Re-tag row by row; on collision, suffix the slug
+    # rather than dropping data or failing startup.
+    stray = conn.execute(
+        "SELECT id, slug FROM products "
+        "WHERE tenant_id IS NULL OR TRIM(tenant_id) = '' "
+        "   OR tenant_id NOT IN (SELECT id FROM tenants) ORDER BY id"
+    ).fetchall()
+    moved = 0
+    for row in stray:
+        try:
+            conn.execute(
+                "UPDATE products SET tenant_id = ? WHERE id = ?",
+                (resolved, row["id"]),
+            )
+            moved += 1
+            continue
+        except sqlite3.IntegrityError:
+            pass
+        base = (row["slug"] or "product").strip() or "product"
+        for k in range(1, 100):
+            candidate = (f"{base}-retagged-{row['id']}" if k == 1
+                         else f"{base}-retagged-{row['id']}-{k}")
+            try:
+                conn.execute(
+                    "UPDATE products SET tenant_id = ?, slug = ? WHERE id = ?",
+                    (resolved, candidate, row["id"]),
+                )
+                moved += 1
+                break
+            except sqlite3.IntegrityError:
+                continue
+        else:
+            logger.warning(
+                "products id=%s: cannot re-tag to %s without a slug collision; "
+                "left untagged", row["id"], resolved,
+            )
+    if moved:
+        logger.info("products: tagged %s rows as %s (collision-safe)", moved, resolved)
     logger.info("content tenant backfill target: %s", resolved)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS ix_cached_embeddings_tenant "
@@ -2009,7 +1893,6 @@ def _init_embedding_tenancy(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS ix_faq_dataset_tenant ON faq_dataset(tenant_id)"
     )
-
 
 
 # ── Phase 2: offerings are generic, price is optional ────────────────────
@@ -2046,6 +1929,83 @@ def _init_offerings_migration(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS ix_products_tenant ON products(tenant_id, is_active)"
     )
+
+
+def _has_legacy_global_unique_on_slug(conn) -> bool:
+    """True while products carries the original column-level UNIQUE(slug)."""
+    for row in conn.execute("PRAGMA index_list(products)").fetchall():
+        if row["origin"] != "u":
+            continue
+        cols = [c[2] for c in conn.execute(f"PRAGMA index_info('{row['name']}')").fetchall()]
+        if cols == ["slug"]:
+            return True
+    return False
+
+
+def _migrate_products_per_tenant_slug(conn):
+    """Rebuild products so slug is UNIQUE per tenant, not across the table.
+
+    The original schema baked `slug TEXT UNIQUE NOT NULL` in globally, but the
+    catalog is tenant-owned: two tenants selling "Personal Loan" could not both
+    exist and PDF publishing crashed with IntegrityError after the profile was
+    already published. SQLite cannot drop a column constraint in place, so the
+    table is rebuilt once (idempotent: origin-'u' index gone means nothing to
+    do). Columns are read from PRAGMA so admin-added record columns survive.
+    """
+    if not _has_legacy_global_unique_on_slug(conn):
+        return
+
+    dupes = conn.execute(
+        "SELECT tenant_id, slug, COUNT(*) c FROM products "
+        "GROUP BY tenant_id, slug HAVING c > 1"
+    ).fetchall()
+    if dupes:
+        logger.warning(
+            "not rebuilding products: duplicate (tenant_id, slug) rows %s - resolve first",
+            [(d["tenant_id"], d["slug"]) for d in dupes],
+        )
+        return
+
+    cols = conn.execute("PRAGMA table_info(products)").fetchall()
+    col_names = [c["name"] for c in cols]
+    defs = []
+    for c in cols:
+        if c["pk"]:
+            # Preserve AUTOINCREMENT semantics of the original table.
+            defs.append(f"{c['name']} INTEGER PRIMARY KEY AUTOINCREMENT")
+            continue
+        piece = f"{c['name']} {c['type'] or 'TEXT'}"
+        if c["notnull"]:
+            # The inline column-level UNIQUE vanishes by construction (it is
+            # re-expressed as UNIQUE(tenant_id, slug)); NOT NULL is preserved.
+            piece += " NOT NULL"
+        if c["dflt_value"] is not None:
+            piece += f" DEFAULT {c['dflt_value']}"
+        defs.append(piece)
+
+    # Remember explicit indexes to recreate after the rename (they die with the
+    # old table); sqlite_master gives their SQL verbatim.
+    kept_index_sql = [
+        r["sql"] for r in conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='products' "
+            "AND sql IS NOT NULL"
+        ).fetchall()
+    ]
+
+    conn.execute(f"CREATE TABLE products_new ({', '.join(defs)}, UNIQUE (tenant_id, slug))")
+    collist = ", ".join(col_names)
+    conn.execute(f"INSERT INTO products_new ({collist}) SELECT {collist} FROM products")
+    conn.execute("DROP TABLE products")
+    conn.execute("ALTER TABLE products_new RENAME TO products")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_products_tenant_slug ON products(tenant_id, slug)"
+    )
+    for sql in kept_index_sql:
+        try:
+            conn.execute(sql)
+        except Exception as exc:
+            logger.warning("rebuild products: could not recreate index (%s): %s", sql, exc)
+    logger.info("products: rebuilt with UNIQUE(tenant_id, slug) — slugs are per-tenant now")
 
 
 # ── Admin-editable record columns (shared/tenancy/records.py) ─────────────
@@ -2132,516 +2092,17 @@ def _init_conversation_state_columns(conn):
 
 # ── Generic publish/draft config helpers ──────────────────────────────────
 
-def get_published_config(scope: str, default=None):
-    """Return the published JSON snapshot for a scope, or default."""
-    with get_db_context() as conn:
-        row = conn.execute(
-            "SELECT snapshot_json FROM published_config WHERE scope = ?", (scope,)
-        ).fetchone()
-    if not row or not row["snapshot_json"]:
-        return default if default is not None else None
-    return _loads_json(row["snapshot_json"])
-
-
-def get_draft_config(scope: str, default=None, max_age_days=None):
-    """Return the draft JSON snapshot for a scope, or default.
-
-    With ``max_age_days`` the draft also acts as a working-copy lease: a
-    row whose last save is older than the limit is deleted instead of
-    returned, so an unpublishable draft cannot linger forever. ``updated_at``
-    is refreshed on every save, so publishing or re-saving always extends it.
-    """
-    with get_db_context() as conn:
-        if max_age_days is None:
-            row = conn.execute(
-                "SELECT snapshot_json FROM draft_config WHERE scope = ?", (scope,)
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT snapshot_json, COALESCE("
-                "    julianday(CURRENT_TIMESTAMP) - julianday(updated_at), 0) AS age_days"
-                " FROM draft_config WHERE scope = ?",
-                (scope,),
-            ).fetchone()
-            if row and float(row["age_days"] or 0) > float(max_age_days):
-                # Stale working copy: discard it rather than resurrect it.
-                conn.execute("DELETE FROM draft_config WHERE scope = ?", (scope,))
-                row = None
-    if not row or not row["snapshot_json"]:
-        return default if default is not None else None
-    return _loads_json(row["snapshot_json"])
-
-
-def save_draft_config(scope: str, snapshot: dict, updated_by: str = "", conn=None) -> bool:
-    """Save a draft snapshot for a scope. Does not affect the live bot."""
-    payload = json.dumps(snapshot)
-
-    def _save(connection):
-        connection.execute(
-            """INSERT INTO draft_config (scope, snapshot_json, updated_by, updated_at)
-               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-               ON CONFLICT(scope) DO UPDATE SET
-                   snapshot_json = excluded.snapshot_json,
-                   updated_by = excluded.updated_by,
-                   updated_at = CURRENT_TIMESTAMP""",
-            (scope, payload, updated_by),
-        )
-
-    if conn is None:
-        with get_db_context() as own_conn:
-            _save(own_conn)
-    else:
-        _save(conn)
-    return True
-
-
-def publish_config(scope: str, published_by: str = "", conn=None) -> bool:
-    """Copy the current draft to published and append to history.
-
-    If no draft exists, the published config is left unchanged.
-    """
-    def _publish(connection):
-        draft = connection.execute(
-            "SELECT snapshot_json FROM draft_config WHERE scope = ?", (scope,)
-        ).fetchone()
-        if not draft:
-            return False
-        snapshot_json = draft["snapshot_json"]
-        connection.execute(
-            """INSERT INTO published_config (scope, snapshot_json, published_by, published_at)
-               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-               ON CONFLICT(scope) DO UPDATE SET
-                   snapshot_json = excluded.snapshot_json,
-                   published_by = excluded.published_by,
-                   published_at = excluded.published_at""",
-            (scope, snapshot_json, published_by),
-        )
-        connection.execute(
-            "INSERT INTO publish_history (scope, snapshot_json, published_by, published_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
-            (scope, snapshot_json, published_by),
-        )
-        return True
-
-    if conn is None:
-        with get_db_context() as own_conn:
-            return _publish(own_conn)
-    return _publish(conn)
-
-
-def get_publish_history(scope: str, limit: int = 20) -> list:
-    """Return recent publish events for a scope, newest first."""
-    with get_db_context() as conn:
-        rows = conn.execute(
-            """SELECT id, scope, snapshot_json, published_by, published_at
-                 FROM publish_history
-                WHERE scope = ?
-                ORDER BY published_at DESC
-                LIMIT ?""",
-            (scope, limit),
-        ).fetchall()
-    return [
-        {
-            "id": r["id"],
-            "scope": r["scope"],
-            "snapshot": _loads_json(r["snapshot_json"]),
-            "published_by": r["published_by"],
-            "published_at": r["published_at"],
-        }
-        for r in rows
-    ]
-
-def invalidate_menu_cache():
-    """Clear the in-process menu cache (called after admin edits)."""
-    try:
-        from services.menu_catalog import invalidate_menu_cache as _inv
-        _inv()
-    except Exception:
-        pass
-
-
-def get_menu_items(menu_key: str, active_only: bool = True) -> list:
-    """Rows for one menu, ordered. Empty list when menu not in DB."""
-    sql = ("SELECT menu_key, item_id, title, description, section, icon, "
-           "sort_order, is_active FROM menus WHERE menu_key = ?")
-    if active_only:
-        sql += " AND is_active = 1"
-    sql += " ORDER BY sort_order ASC, id ASC"
-    with get_db_context() as conn:
-        rows = conn.execute(sql, (menu_key,)).fetchall()
-    return [
-        {"menu_key": r[0], "item_id": r[1], "title": r[2], "description": r[3],
-         "section": r[4], "icon": r[5], "sort_order": r[6], "is_active": r[7]}
-        for r in rows
-    ]
-
-
-def upsert_menu_item(menu_key: str, item_id: str, **fields) -> bool:
-    """Insert or update one menu item. item_id/menu_key are immutable keys."""
-    allowed = {"title", "description", "section", "icon", "sort_order", "is_active"}
-    data = {k: v for k, v in fields.items() if k in allowed}
-    if not data:
-        return False
-    sets = ", ".join(f"{k} = ?" for k in data)
-    with get_db_context() as conn:
-        conn.execute(
-            f"""INSERT INTO menus (menu_key, item_id, {", ".join(data)})
-                VALUES (?, ?, {", ".join("?" for _ in data)})
-                ON CONFLICT(menu_key, item_id) DO UPDATE SET
-                {sets}, updated_at = CURRENT_TIMESTAMP""",
-            (menu_key, item_id, *data.values(), *data.values()),
-        )
-    return True
-
-
-def reset_menu(menu_key: str) -> int:
-    """Delete DB overrides for one menu; loader falls back to code defaults."""
-    with get_db_context() as conn:
-        cur = conn.execute("DELETE FROM menus WHERE menu_key = ?", (menu_key,))
-    invalidate_menu_cache()
-    return cur.rowcount
-
-
-def delete_menu_item(menu_key: str, item_id: str) -> bool:
-    """Delete a single menu item row. Returns True if a row was removed."""
-    with get_db_context() as conn:
-        cur = conn.execute(
-            "DELETE FROM menus WHERE menu_key = ? AND item_id = ?",
-            (menu_key, item_id),
-        )
-    invalidate_menu_cache()
-    return cur.rowcount > 0
-
-
-def get_menu_settings(menu_key: str) -> dict:
-    with get_db_context() as conn:
-        row = conn.execute(
-            "SELECT header, body, footer, button_text FROM menu_settings WHERE menu_key = ?",
-            (menu_key,),
-        ).fetchone()
-    if not row:
-        return {}
-    return {"header": row[0] or "", "body": row[1] or "",
-            "footer": row[2] or "", "button_text": row[3] or ""}
-
-
-def set_menu_settings(menu_key: str, **fields) -> bool:
-    allowed = {"header", "body", "footer", "button_text"}
-    data = {k: v for k, v in fields.items() if k in allowed and v is not None}
-    if not data:
-        return False
-    cols = ", ".join(data)
-    sets = ", ".join(f"{k} = ?" for k in data)
-    with get_db_context() as conn:
-        conn.execute(
-            f"""INSERT INTO menu_settings (menu_key, {cols})
-                VALUES (?, {", ".join("?" for _ in data)})
-                ON CONFLICT(menu_key) DO UPDATE SET
-                {sets}, updated_at = CURRENT_TIMESTAMP""",
-            (menu_key, *data.values(), *data.values()),
-        )
-    return True
-
 
 # ── Webhook logging ──────────────────────────────────────────────────────
-
-WEBHOOK_LOG_MAX_ROWS = 5000
-
-
-def log_webhook(direction, endpoint, payload, status_code=None, notes=None, response_time_ms=None):
-    # SECURITY FIX: Store payload hash instead of raw payload to prevent sensitive data leakage
-    try:
-        payload_str = json.dumps(payload) if not isinstance(payload, str) else payload
-        # Compute hash of the payload for secure storage
-        payload_hash = hashlib.sha256(payload_str.encode('utf-8', errors='replace')).hexdigest()
-        payload_size = len(payload_str)
-        with get_db_context() as conn:
-            conn.execute(
-                "INSERT INTO webhook_logs (direction, endpoint, payload_hash, payload_size, status_code, notes, response_time_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (direction, endpoint, payload_hash, payload_size, status_code, notes, response_time_ms, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-            )
-            _trim_webhook_logs(conn)
-    except Exception as e:
-        logger.error(f"Failed to log webhook: {e}")
-
-
-def _trim_webhook_logs(conn, max_rows: int = WEBHOOK_LOG_MAX_ROWS):
-    try:
-        count = conn.execute("SELECT COUNT(*) FROM webhook_logs").fetchone()[0]
-        if count > max_rows:
-            excess = count - max_rows
-            conn.execute(
-                "DELETE FROM webhook_logs WHERE id IN "
-                "(SELECT id FROM webhook_logs ORDER BY created_at ASC, id ASC LIMIT ?)",
-                (excess,),
-            )
-    except Exception as e:
-        logger.error(f"Failed to trim webhook_logs: {e}")
-
-
-def get_webhook_stats():
-    with get_db_context() as conn:
-        total = conn.execute("SELECT COUNT(*) as cnt FROM webhook_logs").fetchone()["cnt"]
-        incoming = conn.execute("SELECT COUNT(*) as cnt FROM webhook_logs WHERE direction = 'incoming'").fetchone()["cnt"]
-        outgoing = conn.execute("SELECT COUNT(*) as cnt FROM webhook_logs WHERE direction = 'outgoing'").fetchone()["cnt"]
-        last_in = conn.execute("SELECT created_at FROM webhook_logs WHERE direction = 'incoming' ORDER BY created_at DESC LIMIT 1").fetchone()
-        last_out = conn.execute("SELECT created_at FROM webhook_logs WHERE direction = 'outgoing' ORDER BY created_at DESC LIMIT 1").fetchone()
-        return {
-            "total": total,
-            "incoming": incoming,
-            "outgoing": outgoing,
-            "last_incoming": last_in["created_at"] if last_in else None,
-            "last_outgoing": last_out["created_at"] if last_out else None,
-        }
 
 
 # ── Chat history ─────────────────────────────────────────────────────────
 
-def was_inbound_processed(message_id: str, channel: str = "send2") -> bool:
-    """True if this channel or the webhook already processed the message (survives restarts).
-
-    Used by the send2 poller and webhook receiver so a restart or dual-path
-    delivery does not double-answer the message.
-    """
-    if not message_id:
-        return False
-    try:
-        with get_db_context() as conn:
-            row1 = conn.execute(
-                "SELECT 1 FROM processed_inbound_messages WHERE message_id=?",
-                (message_id,),
-            ).fetchone()
-            if row1 is not None:
-                return True
-            row2 = conn.execute(
-                "SELECT 1 FROM webhook_dedup WHERE message_id=?",
-                (message_id,),
-            ).fetchone()
-            return row2 is not None
-    except Exception as e:
-        logger.error(f"was_inbound_processed check failed for {message_id}: {e}")
-        return False
-
-
-def mark_inbound_processed(message_id: str, wa_id: str, channel: str = "send2") -> None:
-    if not message_id:
-        return
-    try:
-        with get_db_context() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO processed_inbound_messages (message_id, wa_id, channel) VALUES (?, ?, ?)",
-                (message_id, wa_id, channel),
-            )
-            conn.execute(
-                "INSERT OR IGNORE INTO webhook_dedup (message_id, wa_id, processed_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-                (message_id, wa_id),
-            )
-    except Exception as e:
-        logger.error(f"mark_inbound_processed failed for {message_id}: {e}")
-
-
-def save_chat(wa_id, sender_name, message, response, route="faq", tenant_id=None):
-    tid = tenant_id or _current_tenant.get() or _resolve_tenant()
-    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    stored_message = f"[{route}] {message}"
-    with get_db_context() as conn:
-        conn.execute(
-            "INSERT INTO chat_history (wa_id, sender_name, message, response, route, tenant_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (wa_id, sender_name, stored_message, response, route, tid, created_at),
-        )
-    # Mirror every exchange into a per-tenant, per-day JSON audit file,
-    # alongside (never instead of) the DB row above.
-    try:
-        try:
-            from json_history import append_chat as _json_append
-        except ImportError:
-            from backend.json_history import append_chat as _json_append
-        _json_append(wa_id, sender_name, stored_message, response, route, tid, created_at)
-    except Exception as e:
-        logger.warning(f"json_history mirror failed for {wa_id}: {e}")
-
-
-def get_recent_history(wa_id: str, limit: int = 5, ttl_minutes: int = 30):
-    with get_db_context() as conn:
-        rows = conn.execute(
-            "SELECT message, response, created_at FROM chat_history "
-            "WHERE wa_id = ? ORDER BY created_at DESC LIMIT ?",
-            (wa_id, limit),
-        ).fetchall()
-    if not rows:
-        return []
-    rows.reverse()
-    last = rows[-1]
-    try:
-        now = datetime.now(timezone.utc)
-        last_time = datetime.strptime(last["created_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        if (now - last_time).total_seconds() > ttl_minutes * 60:
-            return []
-    except Exception:
-        pass
-    out = []
-    for row in rows:
-        raw_user = row["message"] or ""
-        # Strip internal route prefixes like [send2], [webhook], [faq]
-        clean_user = re.sub(r"^\[[\w\-/]+\]\s*", "", raw_user).strip()
-        out.append({"user": clean_user, "assistant": row["response"] or ""})
-    return out
-
 
 # ── FAQ dataset helpers ─────────────────────────────────────────────────
 
-def save_embeddings(embedding_data):
-    with get_db_context() as conn:
-        for faq_id, embedding_bytes in embedding_data:
-            conn.execute(
-                "UPDATE faq_dataset SET embedding = ? WHERE id = ?",
-                (embedding_bytes, faq_id),
-            )
-
-
-def save_chunks(chunks, module="faq", media_url=None, media_type=None, tenant_id=None, replace_existing=False):
-    """Insert FAQ/document chunks. When replace_existing=True, delete prior rows
-    for each distinct source_file (+ tenant) before inserting — prevents duplicate
-    vectors on re-upload.
-    """
-    with get_db_context() as conn:
-        if replace_existing:
-            sources = {chunk.get("source_file") for chunk in chunks if chunk.get("source_file")}
-            for src in sources:
-                if tenant_id is not None:
-                    conn.execute(
-                        "DELETE FROM faq_dataset WHERE source_file = ? AND tenant_id = ?",
-                        (src, tenant_id),
-                    )
-                else:
-                    conn.execute("DELETE FROM faq_dataset WHERE source_file = ?", (src,))
-        for chunk in chunks:
-            conn.execute(
-                "INSERT INTO faq_dataset (source_file, content_type, content, page_number, module, media_url, media_type, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (chunk["source_file"], chunk["content_type"], chunk["content"], chunk["page_number"], module, media_url, media_type, tenant_id),
-            )
-
-
-def save_knowledge_base_chunks(chunks, source_file, media_url=None, media_type=None, tenant_id=None, replace_existing=True):
-    """Insert KB rows. Defaults to replace_existing so re-uploads do not leave
-    stale FAISS/SQL duplicates for the same source + tenant.
-    """
-    from collections import defaultdict
-    grouped = defaultdict(list)
-    for chunk in chunks:
-        grouped[chunk.get("source_file", source_file)].append(chunk)
-
-    with get_db_context() as conn:
-        for src, group in grouped.items():
-            if replace_existing:
-                if tenant_id is not None:
-                    conn.execute(
-                        "DELETE FROM knowledge_base WHERE source = ? AND tenant_id = ?",
-                        (src, tenant_id),
-                    )
-                else:
-                    conn.execute("DELETE FROM knowledge_base WHERE source = ?", (src,))
-            texts = [c.get("content", "") for c in group if c.get("content")]
-            full_text = "\n".join(texts)
-            conn.execute(
-                """INSERT INTO knowledge_base (title, category, content, tags, source, chunks_json, embedding_blob, created_at, media_url, media_type, tenant_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    src,
-                    "uploaded",
-                    full_text,
-                    json.dumps([]),
-                    src,
-                    json.dumps(texts),
-                    None,
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    media_url,
-                    media_type,
-                    tenant_id,
-                ),
-            )
-
-
-def get_files_summary():
-    with get_db_context() as conn:
-        rows = conn.execute(
-            "SELECT source_file, module, COUNT(*) as chunk_count FROM faq_dataset GROUP BY source_file ORDER BY source_file"
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def delete_file_chunks(source_file, tenant_id=None):
-    with get_db_context() as conn:
-        if tenant_id:
-            result = conn.execute(
-                "DELETE FROM faq_dataset WHERE source_file = ? AND tenant_id = ?",
-                (source_file, tenant_id),
-            )
-        else:
-            result = conn.execute("DELETE FROM faq_dataset WHERE source_file = ?", (source_file,))
-        return result.rowcount
-
-
-def delete_knowledge_base_file(source_file, tenant_id=None):
-    with get_db_context() as conn:
-        if tenant_id:
-            result = conn.execute(
-                "DELETE FROM knowledge_base WHERE source = ? AND tenant_id = ?",
-                (source_file, tenant_id),
-            )
-        else:
-            result = conn.execute("DELETE FROM knowledge_base WHERE source = ?", (source_file,))
-        return result.rowcount
-
 
 # ── Session management (24-hour WhatsApp session window) ─────────────────
-
-def update_session_inbound(wa_id: str):
-    with get_db_context() as conn:
-        conn.execute(
-            """INSERT INTO user_sessions (wa_id, last_inbound_at, session_open)
-               VALUES (?, CURRENT_TIMESTAMP, 1)
-               ON CONFLICT(wa_id) DO UPDATE SET
-                 last_inbound_at = CURRENT_TIMESTAMP,
-                 session_open = 1""",
-            (wa_id,),
-        )
-
-
-def update_session_outbound(wa_id: str):
-    with get_db_context() as conn:
-        conn.execute(
-            """INSERT INTO user_sessions (wa_id, last_outbound_at)
-               VALUES (?, CURRENT_TIMESTAMP)
-               ON CONFLICT(wa_id) DO UPDATE SET
-                 last_outbound_at = CURRENT_TIMESTAMP""",
-            (wa_id,),
-        )
-
-
-def is_session_open(wa_id: str, window_hours: int = 24) -> bool:
-    with get_db_context() as conn:
-        row = conn.execute(
-            "SELECT last_inbound_at FROM user_sessions WHERE wa_id = ?",
-            (wa_id,),
-        ).fetchone()
-    if not row or not row["last_inbound_at"]:
-        return False
-    try:
-        last = datetime.strptime(row["last_inbound_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        return (now - last).total_seconds() < window_hours * 3600
-    except Exception:
-        return False
-
-
-def get_session_info(wa_id: str) -> dict:
-    with get_db_context() as conn:
-        row = conn.execute(
-            "SELECT * FROM user_sessions WHERE wa_id = ?",
-            (wa_id,),
-        ).fetchone()
-    return dict(row) if row else {}
 
 
 # ── Product helpers ──────────────────────────────────────────────────────
@@ -2650,1968 +2111,31 @@ def get_session_info(wa_id: str) -> dict:
 # tenant; None means the registered default tenant (single-shop deployments),
 # never "all tenants".
 
-def get_app_setting(key: str, default: str = "") -> str:
-    try:
-        with get_db_context() as conn:
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS app_settings (
-                    key        TEXT PRIMARY KEY,
-                    value      TEXT NOT NULL,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )"""
-            )
-            row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
-            return row["value"] if row and row["value"] is not None else default
-    except Exception as e:
-        logger.debug(f"get_app_setting error for key {key}: {e}")
-        return default
-
-
-def set_app_setting(key: str, value: str) -> None:
-    with get_db_context() as conn:
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS app_settings (
-                key        TEXT PRIMARY KEY,
-                value      TEXT NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )"""
-        )
-        conn.execute(
-            """INSERT INTO app_settings (key, value, updated_at)
-               VALUES (?, ?, CURRENT_TIMESTAMP)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
-            (key, str(value or "")),
-        )
-
-
-def get_active_test_tenant() -> Optional[str]:
-    val = get_app_setting("active_test_tenant", "").strip()
-    return val or None
-
-
-def set_active_test_tenant(tenant_id: Optional[str]) -> None:
-    val = str(tenant_id or "").strip()
-    if val:
-        try:
-            from shared.tenancy import store
-            record = store.get_tenant(val)
-            if not record:
-                raise ValueError(f"Unknown tenant for WhatsApp test override: {val}")
-            val = str(record.get("slug") or record.get("id") or val)
-        except ValueError:
-            raise
-        except Exception:
-            pass
-    set_app_setting("active_test_tenant", val)
-    # Clear conversation user states and carts so tester starts completely fresh with greeting/menu
-    try:
-        with get_db_context() as conn:
-            conn.execute("DELETE FROM user_states")
-            conn.execute("DELETE FROM carts")
-            conn.execute("DELETE FROM cart_items")
-    except Exception as e:
-        logger.debug(f"Could not clear user_states: {e}")
-    try:
-        from shared.tenancy import cache as tenancy_cache
-        tenancy_cache.clear()
-    except Exception:
-        pass
-
-
-def _resolve_tenant(tenant_id: str = None) -> str:
-    if str(tenant_id or "").strip():
-        return str(tenant_id).strip()
-    req = get_request_tenant()
-    if req:
-        return str(req).strip()
-    active = get_active_test_tenant()
-    if active:
-        return active
-    try:
-        from shared.tenancy.resolver import resolve_default_tenant
-        return resolve_default_tenant()
-    except Exception:
-        return os.environ.get("DEFAULT_TENANT_ID", "default")
-
-
-def _resolve_tenant_ids(tenant_id: str = None) -> list:
-    """Return matching tenant identifiers (numeric id, slug, raw string) so that
-    queries match rows regardless of whether tenant_id was stored as integer or text."""
-    raw = str(tenant_id or "").strip()
-    if not raw:
-        req = get_request_tenant()
-        raw = str(req or "").strip()
-    if not raw:
-        active = get_active_test_tenant()
-        raw = str(active or "").strip()
-    if not raw:
-        try:
-            from shared.tenancy.resolver import resolve_default_tenant
-            raw = str(resolve_default_tenant() or "").strip()
-        except Exception:
-            raw = os.environ.get("DEFAULT_TENANT_ID", "default")
-
-    candidates = {raw}
-    if raw.isdigit():
-        candidates.add(int(raw))
-
-    try:
-        from shared.tenancy import store
-        rec = store.get_tenant(raw)
-        if rec:
-            if rec.get("id") is not None:
-                candidates.add(rec["id"])
-                candidates.add(str(rec["id"]))
-            if rec.get("slug"):
-                candidates.add(rec["slug"])
-                candidates.add(rec["slug"].lower())
-    except Exception:
-        try:
-            with get_db_context() as conn:
-                row = conn.execute(
-                    "SELECT id, slug FROM tenants WHERE id = ? OR slug = ? OR LOWER(slug) = LOWER(?)",
-                    (raw, raw, raw),
-                ).fetchone()
-                if row:
-                    if row["id"] is not None:
-                        candidates.add(row["id"])
-                        candidates.add(str(row["id"]))
-                    if row["slug"]:
-                        candidates.add(row["slug"])
-                        candidates.add(row["slug"].lower())
-        except Exception:
-            pass
-
-    return list(candidates)
-
-
-def save_product(name: str, slug: str, category: str = "general",
-                 description: str = "", short_description: str = "",
-                 price: str = "", mrp: str = "", unit: str = "piece",
-                 moq: str = "", media_url: str = None, media_type: str = "image",
-                  ingredients: list = None, sort_order: int = 0,
-                 variants_json: list = None,
-                  stock_quantity: int = None, nutritional_facts: str = None,
-                 bulk_discount_tiers: list = None,
-                 attrs_json: dict = None, short_label: str = None,
-                 detail_url: str = None, tenant_id: str = None, 
-                 is_active: int = 1,
-                 actor: dict = None) -> int:
-    with get_db_context() as conn:
-        cur = conn.execute(
-            """INSERT INTO products (name, slug, category, description, short_description,
-               price, mrp, unit, moq, media_url, media_type, ingredients, sort_order, variants_json,
-               stock_quantity, nutritional_facts, bulk_discount_tiers, attrs_json, short_label,
-               detail_url, is_active, tenant_id, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-            (name, slug, category, description, short_description,
-              price, mrp, unit, moq, media_url, media_type, json.dumps(ingredients or []), sort_order,
-             json.dumps(variants_json or []),
-              stock_quantity, nutritional_facts, json.dumps(bulk_discount_tiers or []),
-             json.dumps(attrs_json or {}), short_label, detail_url, int(is_active), _resolve_tenant(tenant_id)),
-        )
-        product_id = cur.lastrowid
-        
-        try:
-            from backend.services.audit_context import actor_from_context
-        except ImportError:
-            try:
-                from services.audit_context import actor_from_context
-            except ImportError:
-                actor_from_context = lambda explicit=None: explicit
-        actor = actor_from_context(actor)
-        # Record audit event for product creation
-        if actor:
-            record_admin_audit_event(
-                conn,
-                action="product_created",
-                actor=actor,
-                resource_type="product",
-                resource_id=product_id,
-                tenant_id=_resolve_tenant(tenant_id),
-                details={
-                    "changed_fields": ["name", "slug", "category", "price"],
-                    "name": name[:120],
-                    "slug": slug[:120],
-                    "category": category[:80],
-                    "has_price": bool(price),
-                }
-            )
-        
-        return product_id
-
-
-def get_product(product_id: int, tenant_id: str = None) -> dict:
-    t_ids = _resolve_tenant_ids(tenant_id)
-    placeholders = ", ".join(["?"] * len(t_ids))
-    with get_db_context() as conn:
-        row = conn.execute(
-            f"SELECT * FROM products WHERE id = ? AND tenant_id IN ({placeholders})",
-            (product_id, *t_ids),
-        ).fetchone()
-    return _deserialize_product(dict(row)) if row else None
-
-
-def get_product_by_slug(slug: str, tenant_id: str = None) -> dict:
-    t_ids = _resolve_tenant_ids(tenant_id)
-    placeholders = ", ".join(["?"] * len(t_ids))
-    with get_db_context() as conn:
-        row = conn.execute(
-            f"SELECT * FROM products WHERE slug = ? AND tenant_id IN ({placeholders})",
-            (slug, *t_ids),
-        ).fetchone()
-    return _deserialize_product(dict(row)) if row else None
-
-
-def product_slug_taken(slug: str) -> bool:
-    """True when ANY row holds this slug.
-
-    products.slug is UNIQUE across the whole table (not per tenant), so a
-    per-tenant lookup is not enough before an INSERT from another tenant's PDF.
-    """
-    with get_db_context() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM products WHERE slug = ? LIMIT 1", (slug,)
-        ).fetchone()
-    return row is not None
-
-
-def list_products(category: str = None, active_only: bool = True, limit: int = 100,
-                  tenant_id: str = None) -> list:
-    t_ids = _resolve_tenant_ids(tenant_id)
-    placeholders = ", ".join(["?"] * len(t_ids))
-    query = f"SELECT * FROM products WHERE tenant_id IN ({placeholders})"
-    params = list(t_ids)
-    if active_only:
-        query += " AND is_active = 1"
-    if category:
-        query += " AND category = ?"
-        params.append(category)
-    query += " ORDER BY sort_order ASC, created_at DESC LIMIT ?"
-    params.append(limit)
-    with get_db_context() as conn:
-        rows = conn.execute(query, params).fetchall()
-    return [_deserialize_product(dict(r)) for r in rows]
-
-
-def count_products(category: str = None, active_only: bool = True, tenant_id: str = None) -> int:
-    t_ids = _resolve_tenant_ids(tenant_id)
-    placeholders = ", ".join(["?"] * len(t_ids))
-    query = f"SELECT COUNT(*) FROM products WHERE tenant_id IN ({placeholders})"
-    params = list(t_ids)
-    if active_only:
-        query += " AND is_active = 1"
-    if category:
-        query += " AND category = ?"
-        params.append(category)
-    with get_db_context() as conn:
-        row = conn.execute(query, params).fetchone()
-        return int(row[0]) if row else 0
-
-
-def list_product_categories(active_only: bool = True, tenant_id: str = None) -> list[str]:
-    t_ids = _resolve_tenant_ids(tenant_id)
-    placeholders = ", ".join(["?"] * len(t_ids))
-    query = f"SELECT DISTINCT category FROM products WHERE tenant_id IN ({placeholders}) AND category IS NOT NULL"
-    params = list(t_ids)
-    if active_only:
-        query += " AND is_active = 1"
-    query += " ORDER BY category ASC"
-    with get_db_context() as conn:
-        rows = conn.execute(query, params).fetchall()
-        return [str(r[0]).strip() for r in rows if r[0] and str(r[0]).strip()]
-
-
-
-def list_staged_products(tenant_id: str = None) -> list:
-    """List draft / unapproved products for a tenant (is_active = 0)."""
-    t_ids = _resolve_tenant_ids(tenant_id)
-    placeholders = ", ".join(["?"] * len(t_ids))
-    query = f"SELECT * FROM products WHERE tenant_id IN ({placeholders}) AND is_active = 0 ORDER BY id DESC"
-    with get_db_context() as conn:
-        rows = conn.execute(query, list(t_ids)).fetchall()
-    return [_deserialize_product(dict(r)) for r in rows]
-
-
-def approve_staged_products(tenant_id: str = None, product_ids: list[int] = None) -> int:
-    """Promote draft products to live catalog (is_active = 1)."""
-    t_ids = _resolve_tenant_ids(tenant_id)
-    t_placeholders = ", ".join(["?"] * len(t_ids))
-    with get_db_context() as conn:
-        if product_ids:
-            p_placeholders = ", ".join(["?"] * len(product_ids))
-            cur = conn.execute(
-                f"""UPDATE products 
-                   SET is_active = 1, updated_at = CURRENT_TIMESTAMP 
-                   WHERE tenant_id IN ({t_placeholders}) AND id IN ({p_placeholders})""",
-                [*list(t_ids), *product_ids],
-            )
-        else:
-            cur = conn.execute(
-                f"""UPDATE products 
-                   SET is_active = 1, updated_at = CURRENT_TIMESTAMP 
-                   WHERE tenant_id IN ({t_placeholders}) AND is_active = 0""",
-                list(t_ids),
-            )
-        return cur.rowcount
-
-
-def delete_staged_products(tenant_id: str = None, product_ids: list[int] = None) -> int:
-    """Delete draft / rejected products."""
-    t_ids = _resolve_tenant_ids(tenant_id)
-    t_placeholders = ", ".join(["?"] * len(t_ids))
-    with get_db_context() as conn:
-        if product_ids:
-            p_placeholders = ", ".join(["?"] * len(product_ids))
-            cur = conn.execute(
-                f"""DELETE FROM products 
-                   WHERE tenant_id IN ({t_placeholders}) AND id IN ({p_placeholders}) AND is_active = 0""",
-                [*list(t_ids), *product_ids],
-            )
-        else:
-            cur = conn.execute(
-                f"""DELETE FROM products 
-                   WHERE tenant_id IN ({t_placeholders}) AND is_active = 0""",
-                list(t_ids),
-            )
-        return cur.rowcount
-
-
-def _row_to_dict(row) -> dict:
-    """sqlite3.Row -> dict, dropping BLOB columns.
-
-    Rows selected with `SELECT *` carry the `embedding` / `embedding_blob`
-    float32 arrays. FastAPI's jsonable_encoder raises UnicodeDecodeError on raw
-    bytes, which turns any endpoint returning these rows into a 500. Consumers
-    that need the vector (the FAISS rebuilds) select it explicitly.
-    """
-    d = dict(row)
-    for blob_col in ("embedding", "embedding_blob"):
-        d.pop(blob_col, None)
-    return d
-
-
-def _deserialize_product(row: dict) -> dict:
-    """JSON-decode list fields on a product row."""
-    row["ingredients"] = _loads_json(row.get("ingredients"), [])
-    row["variants_json"] = _loads_json(row.get("variants_json"), [])
-    row["bulk_discount_tiers"] = _loads_json(row.get("bulk_discount_tiers"), [])
-    row["attrs_json"] = _loads_json(row.get("attrs_json"), {})
-    # Drop the BLOB so this row can be JSON-serialized (see _row_to_dict).
-    row.pop("embedding", None)
-    return row
-
-
-def update_product(product_id: int, tenant_id: str = None, **kwargs) -> bool:
-    allowed = {"name", "slug", "category", "description", "short_description",
-               "price", "mrp", "unit", "moq", "media_url", "media_type",
-               "ingredients", "is_active", "sort_order", "variants_json",
-               "stock_quantity", "nutritional_facts", "bulk_discount_tiers",
-               "attrs_json", "short_label", "detail_url"}
-    updates = {k: v for k, v in kwargs.items() if k in allowed}
-    if not updates:
-        return False
-    for key in ("ingredients", "variants_json", "bulk_discount_tiers", "attrs_json"):
-        if key in updates and isinstance(updates[key], (list, dict)):
-            updates[key] = json.dumps(updates[key])
-    updates["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [product_id, _resolve_tenant(tenant_id)]
-    
-    actor = kwargs.pop("actor", None)
-    try:
-        from backend.services.audit_context import actor_from_context
-    except ImportError:
-        try:
-            from services.audit_context import actor_from_context
-        except ImportError:
-            actor_from_context = lambda explicit=None: explicit
-    actor = actor_from_context(actor)
-
-    with get_db_context() as conn:
-        before = conn.execute(
-            "SELECT name, slug, category, price, is_active, sort_order FROM products WHERE id = ? AND tenant_id = ?",
-            (product_id, _resolve_tenant(tenant_id)),
-        ).fetchone()
-        cursor = conn.execute(
-            f"UPDATE products SET {set_clause} WHERE id = ? AND tenant_id = ?", values
-        )
-
-        # Record field names and a tightly allowlisted before/after summary.
-        if actor and cursor.rowcount:
-            after = conn.execute(
-                "SELECT name, slug, category, price, is_active, sort_order FROM products WHERE id = ? AND tenant_id = ?",
-                (product_id, _resolve_tenant(tenant_id)),
-            ).fetchone()
-            changed = {}
-            if before and after:
-                for key in ("name", "slug", "category", "price", "is_active", "sort_order"):
-                    if before[key] != after[key]:
-                        changed[key] = {"before": before[key], "after": after[key]}
-            record_admin_audit_event(
-                conn,
-                action="product_updated",
-                actor=actor,
-                resource_type="product",
-                resource_id=product_id,
-                tenant_id=_resolve_tenant(tenant_id),
-                details={"changed_fields": sorted(changed), "changes": changed},
-            )
-        
-    return True
-
-
-def delete_product(product_id: int, hard: bool = False, tenant_id: str = None, actor: dict = None) -> bool:
-    try:
-        from backend.services.audit_context import actor_from_context
-    except ImportError:
-        try:
-            from services.audit_context import actor_from_context
-        except ImportError:
-            actor_from_context = lambda explicit=None: explicit
-    actor = actor_from_context(actor)
-    with get_db_context() as conn:
-        # Get product details before deletion for audit logging
-        product_row = conn.execute(
-            "SELECT name, slug, category FROM products WHERE id = ? AND tenant_id = ?",
-            (product_id, _resolve_tenant(tenant_id)),
-        ).fetchone()
-        
-        if hard:
-            conn.execute(
-                "DELETE FROM products WHERE id = ? AND tenant_id = ?",
-                (product_id, _resolve_tenant(tenant_id)),
-            )
-        else:
-            conn.execute(
-                "UPDATE products SET is_active = 0 WHERE id = ? AND tenant_id = ?",
-                (product_id, _resolve_tenant(tenant_id)),
-            )
-        
-        # Record audit event for product deletion
-        if actor:
-            action_type = "product_deleted_hard" if hard else "product_deleted"
-            product_details = dict(product_row) if product_row else {}
-            record_admin_audit_event(
-                conn,
-                action=action_type,
-                actor=actor,
-                resource_type="product",
-                resource_id=product_id,
-                tenant_id=_resolve_tenant(tenant_id),
-                details={
-                    "product_name": product_details.get("name", "")[:120],
-                    "product_slug": product_details.get("slug", "")[:120],
-                    "product_category": product_details.get("category", "")[:80],
-                    "hard_delete": hard,
-                }
-            )
-        
-    return True
-
-
-def search_products(query: str, limit: int = 20, tenant_id: str = None) -> list:
-    import re as _re
-
-    def _words_match(a, b):
-        if a == b:
-            return True
-        if len(a) >= 4 and len(b) >= 4:
-            if a.startswith(b) or b.startswith(a):
-                return True
-            if a in b or b in a:
-                return True
-        return False
-
-    # Every product lookup is scoped to one tenant. None resolves to the
-    # registered default tenant (shared.tenancy), never to "all tenants".
-    try:
-        from shared.tenancy.resolver import resolve_default_tenant
-    except Exception:
-        resolve_default_tenant = lambda: "default"  # noqa: E731
-    tid = str(tenant_id or "").strip() or resolve_default_tenant()
-
-    words = [w for w in _re.findall(r"[a-zA-Z]{2,}", query.lower())]
-    if not words:
-        return []
-
-    # Try FAISS vector search first
-    try:
-        from kb.services.rag import search_products_faiss
-        faiss_results = search_products_faiss(query, limit=limit, tenant_id=tid)
-        if faiss_results:
-            ids = [r["product_id"] for r in faiss_results]
-            placeholders = ",".join("?" * len(ids))
-            with get_db_context() as conn:
-                rows = conn.execute(
-                    f"SELECT * FROM products WHERE id IN ({placeholders}) AND is_active = 1 AND tenant_id = ?",
-                    ids + [tid],
-                ).fetchall()
-            if rows:
-                row_map = {p["id"]: p for p in
-                           (_deserialize_product(dict(x)) for x in rows)}
-                return [row_map[pid] for pid in ids if pid in row_map]
-    except Exception:
-        pass
-
-    # Fallback: keyword search
-    with get_db_context() as conn:
-        rows = conn.execute(
-            """SELECT * FROM products
-                WHERE is_active = 1 AND tenant_id = ?
-                  AND (name LIKE ? OR description LIKE ? OR ingredients LIKE ? OR category LIKE ?)
-               ORDER BY sort_order ASC LIMIT ?""",
-            (tid, f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%", limit),
-        ).fetchall()
-        if rows:
-            return [_deserialize_product(dict(r)) for r in rows]
-        all_rows = conn.execute(
-            "SELECT * FROM products WHERE is_active = 1 AND tenant_id = ?",
-            (tid,),
-        ).fetchall()
-        scored = []
-        for r in all_rows:
-            d = _deserialize_product(dict(r))
-            pname = (d.get("name") or "").lower()
-            _ingredients = d.get("ingredients") or ""
-            if isinstance(_ingredients, list):
-                _ingredients = " ".join(_ingredients)
-            searchable = " ".join([
-                pname,
-                (d.get("description") or "").lower(),
-                _ingredients.lower(),
-                (d.get("category") or "").lower(),
-            ])
-            product_words = [w for w in pname.split() if len(w) > 2]
-            score = 0
-            for w in words:
-                if w in searchable:
-                    score += 2
-                else:
-                    for pw in product_words:
-                        if _words_match(w, pw):
-                            score += 1
-                            break
-            if score > 0:
-                scored.append((score, d))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [d for _, d in scored[:limit]]
-
-
-def get_products_by_category(category: str, limit: int = 50, tenant_id: str = None) -> list:
-    with get_db_context() as conn:
-        rows = conn.execute(
-            """SELECT * FROM products
-               WHERE is_active = 1 AND tenant_id = ? AND category = ?
-               ORDER BY sort_order ASC LIMIT ?""",
-            (_resolve_tenant(tenant_id), category, limit),
-        ).fetchall()
-    return [_deserialize_product(dict(r)) for r in rows]
-
-
-def get_published_products(category: str = None, active_only: bool = True, limit: int = 100,
-                           tenant_id: str = None) -> list:
-    """Return products from the published config snapshot, falling back to DB."""
-    published = get_published_config("products")
-    if published and isinstance(published, dict) and "items" in published:
-        items = published["items"]
-        if active_only:
-            items = [p for p in items if p.get("is_active", True)]
-        if category:
-            items = [p for p in items if p.get("category") == category]
-        items = sorted(
-            items,
-            key=lambda p: (p.get("sort_order", 0), p.get("created_at", "")),
-        )
-        return items[:limit]
-    # Fallback: read directly from DB if nothing is published yet.
-    return list_products(category=category, active_only=active_only, limit=limit,
-                         tenant_id=tenant_id)
-
-
-def build_products_snapshot(category: str = None, active_only: bool = True,
-                            tenant_id: str = None) -> dict:
-    """Build the canonical products snapshot from DB rows."""
-    items = list_products(category=category, active_only=active_only, limit=500,
-                          tenant_id=tenant_id)
-    return {"items": items, "count": len(items), "generated_at": datetime.now().isoformat()}
-
-def get_user_state(wa_id: str) -> dict:
-    with get_db_context() as conn:
-        row = conn.execute(
-            "SELECT * FROM user_states WHERE wa_id = ?",
-            (wa_id,),
-        ).fetchone()
-    if row:
-        result = dict(row)
-        try:
-            result["context_json"] = json.loads(result.get("context_json") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            result["context_json"] = {}
-        return result
-    return {"wa_id": wa_id, "state": "MAIN_MENU", "context_json": {}, "lang": "en"}
-
-
-def set_user_state(wa_id: str, state: str, context: dict = None, lang: str = None) -> bool:
-    with get_db_context() as conn:
-        context_json = json.dumps(context or {})
-        if lang:
-            conn.execute(
-                """INSERT INTO user_states (wa_id, state, context_json, lang)
-                   VALUES (?, ?, ?, ?)
-                   ON CONFLICT(wa_id) DO UPDATE SET
-                     state = ?,
-                     context_json = ?,
-                     lang = ?,
-                     updated_at = CURRENT_TIMESTAMP""",
-                (wa_id, state, context_json, lang, state, context_json, lang),
-            )
-        else:
-            conn.execute(
-                """INSERT INTO user_states (wa_id, state, context_json)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(wa_id) DO UPDATE SET
-                     state = ?,
-                     context_json = ?,
-                     updated_at = CURRENT_TIMESTAMP""",
-                (wa_id, state, context_json, state, context_json),
-            )
-    return True
-
-
-def update_user_context(wa_id: str, context: dict) -> bool:
-    current = get_user_state(wa_id)
-    merged = {**current.get("context_json", {}), **context}
-    return set_user_state(wa_id, current.get("state", "MAIN_MENU"), merged)
-
-
-def clear_user_context(wa_id: str) -> bool:
-    return set_user_state(wa_id, "MAIN_MENU", {})
-
-
-def set_human_handover(wa_id: str, active: bool) -> bool:
-    """Set or clear the human-handover state for a conversation.
-
-    When ``active`` is True the conversation enters the live human inbox and any
-    previous "resolved" marker is cleared. When False the human session is
-    terminated, control returns to the bot, and ``handover_resolved_at`` is
-    stamped so the live inbox stops showing the conversation.
-    """
-    try:
-        with get_db_context() as conn:
-            if active:
-                conn.execute(
-                    """
-                    INSERT INTO user_states (wa_id, human_handover, updated_at, handover_resolved_at)
-                    VALUES (?, 1, CURRENT_TIMESTAMP, NULL)
-                    ON CONFLICT(wa_id) DO UPDATE SET
-                        human_handover = 1,
-                        updated_at = CURRENT_TIMESTAMP,
-                        handover_resolved_at = NULL
-                    """,
-                    (wa_id,),
-                )
-            else:
-                conn.execute(
-                    """
-                    INSERT INTO user_states (wa_id, human_handover, updated_at, handover_resolved_at)
-                    VALUES (?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    ON CONFLICT(wa_id) DO UPDATE SET
-                        human_handover = 0,
-                        updated_at = CURRENT_TIMESTAMP,
-                        handover_resolved_at = CURRENT_TIMESTAMP
-                    """,
-                    (wa_id,),
-                )
-        return True
-    except Exception as e:
-        logger.error(f"set_human_handover failed for {wa_id}: {e}")
-        return False
-
-
-def reopen_conversation_on_inbound(wa_id: str) -> bool:
-    """Clear a stale ``handover_resolved_at`` so a new inbound message puts the
-    conversation back in the live inbox.
-
-    ``resolve_handoff``/``set_human_handover(False)`` stamp ``handover_resolved_at``
-    so the inbox stops showing a conversation. Without this, that stamp was
-    permanent: the customer could write again and the thread stayed hidden
-    (the default inbox query filters on ``handover_resolved_at IS NULL``). A new
-    inbound message from the customer reopens it.
-    """
-    try:
-        with get_db_context() as conn:
-            conn.execute(
-                "UPDATE user_states SET handover_resolved_at = NULL, updated_at = CURRENT_TIMESTAMP "
-                "WHERE wa_id = ? AND handover_resolved_at IS NOT NULL",
-                (wa_id,),
-            )
-        return True
-    except Exception as e:
-        logger.error(f"reopen_conversation_on_inbound failed for {wa_id}: {e}")
-        return False
-
 
 # ── WhatsApp Template helpers ────────────────────────────────────────────
-
-def save_template(name: str, data: dict) -> int:
-    with get_db_context() as conn:
-        existing = conn.execute(
-            "SELECT id FROM whatsapp_templates WHERE name = ?", (name,)
-        ).fetchone()
-        if existing:
-            conn.execute(
-                """UPDATE whatsapp_templates SET
-                    category = ?, subcategory = ?, header_type = ?,
-                    header_text = ?, body_template = ?, footer = ?,
-                    buttons_json = ?, params_json = ?, language = ?,
-                    template_for = ?, status = ?, send2_response = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                   WHERE name = ?""",
-                (
-                    data.get("category", "UTILITY"),
-                    data.get("subcategory", "custom"),
-                    data.get("header_type", "noheader"),
-                    data.get("header_text", ""),
-                    data.get("body_template", ""),
-                    data.get("footer", ""),
-                    json.dumps(data.get("buttons", [])),
-                    json.dumps(data.get("params", [])),
-                    data.get("language", "en"),
-                    data.get("template_for", "sales"),
-                    data.get("status", "registered"),
-                    data.get("send2_response", ""),
-                    name,
-                ),
-            )
-            return existing["id"]
-        else:
-            cur = conn.execute(
-                """INSERT INTO whatsapp_templates
-                    (name, category, subcategory, header_type, header_text,
-                     body_template, footer, buttons_json, params_json,
-                     language, template_for, status, send2_response)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    name,
-                    data.get("category", "UTILITY"),
-                    data.get("subcategory", "custom"),
-                    data.get("header_type", "noheader"),
-                    data.get("header_text", ""),
-                    data.get("body_template", ""),
-                    data.get("footer", ""),
-                    json.dumps(data.get("buttons", [])),
-                    json.dumps(data.get("params", [])),
-                    data.get("language", "en"),
-                    data.get("template_for", "sales"),
-                    data.get("status", "registered"),
-                    data.get("send2_response", ""),
-                ),
-            )
-            return cur.lastrowid
-
-
-def get_template(name: str) -> dict:
-    with get_db_context() as conn:
-        row = conn.execute(
-            "SELECT * FROM whatsapp_templates WHERE name = ?", (name,)
-        ).fetchone()
-    if row:
-        result = dict(row)
-        try:
-            result["buttons_json"] = json.loads(result.get("buttons_json") or "[]")
-        except (json.JSONDecodeError, TypeError):
-            result["buttons_json"] = []
-        try:
-            result["params_json"] = json.loads(result.get("params_json") or "[]")
-        except (json.JSONDecodeError, TypeError):
-            result["params_json"] = []
-        return result
-    return None
-
-
-def list_templates(status: str = None, category: str = None, limit: int = 50) -> list:
-    query = "SELECT * FROM whatsapp_templates WHERE 1=1"
-    params = []
-    if status:
-        query += " AND status = ?"
-        params.append(status)
-    if category:
-        query += " AND category = ?"
-        params.append(category)
-    query += " ORDER BY updated_at DESC LIMIT ?"
-    params.append(limit)
-    with get_db_context() as conn:
-        rows = conn.execute(query, params).fetchall()
-    results = []
-    for r in rows:
-        d = dict(r)
-        try:
-            d["buttons_json"] = json.loads(d.get("buttons_json") or "[]")
-        except (json.JSONDecodeError, TypeError):
-            d["buttons_json"] = []
-        results.append(d)
-    return results
-
-
-def delete_template(name: str) -> bool:
-    with get_db_context() as conn:
-        conn.execute("DELETE FROM whatsapp_templates WHERE name = ?", (name,))
-    return True
 
 
 # ── Session Button helpers ───────────────────────────────────────────────
 
-def save_session_button(button_id: str, wa_id: str = None, session_id: str = None,
-                        button_type: str = "quick", label: str = "",
-                        payload: dict = None, state: str = "MAIN_MENU",
-                        lang: str = "en", expires_at: str = None) -> int:
-    payload_json = json.dumps(payload or {})
-    with get_db_context() as conn:
-        existing = conn.execute(
-            "SELECT id FROM session_buttons WHERE button_id = ?", (button_id,)
-        ).fetchone()
-        if existing:
-            conn.execute(
-                """UPDATE session_buttons SET
-                    wa_id = ?, session_id = ?, button_type = ?, label = ?,
-                    payload_json = ?, state = ?, lang = ?,
-                    expires_at = ?, is_active = 1, triggered_at = NULL
-                   WHERE button_id = ?""",
-                (wa_id, session_id, button_type, label, payload_json,
-                 state, lang, expires_at, button_id),
-            )
-            return existing["id"]
-        else:
-            cur = conn.execute(
-                """INSERT INTO session_buttons
-                    (button_id, wa_id, session_id, button_type, label,
-                     payload_json, state, lang, expires_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (button_id, wa_id, session_id, button_type, label,
-                 payload_json, state, lang, expires_at),
-            )
-            return cur.lastrowid
-
-
-def get_session_button(button_id: str) -> dict:
-    with get_db_context() as conn:
-        row = conn.execute(
-            "SELECT * FROM session_buttons WHERE button_id = ?", (button_id,)
-        ).fetchone()
-    if row:
-        result = dict(row)
-        try:
-            result["payload_json"] = json.loads(result.get("payload_json") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            result["payload_json"] = {}
-        return result
-    return None
-
-
-def list_session_buttons(wa_id: str = None, state: str = None,
-                         is_active: bool = True, limit: int = 50) -> list:
-    query = "SELECT * FROM session_buttons WHERE 1=1"
-    params = []
-    if wa_id:
-        query += " AND wa_id = ?"
-        params.append(wa_id)
-    if state:
-        query += " AND state = ?"
-        params.append(state)
-    if is_active:
-        query += " AND is_active = 1"
-    query += " ORDER BY created_at DESC LIMIT ?"
-    params.append(limit)
-    with get_db_context() as conn:
-        rows = conn.execute(query, params).fetchall()
-    results = []
-    for r in rows:
-        d = dict(r)
-        try:
-            d["payload_json"] = json.loads(d.get("payload_json") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            d["payload_json"] = {}
-        results.append(d)
-    return results
-
-
-def deactivate_session_button(button_id: str) -> bool:
-    with get_db_context() as conn:
-        conn.execute(
-            "UPDATE session_buttons SET is_active = 0 WHERE button_id = ?",
-            (button_id,),
-        )
-    return True
-
-
-def trigger_session_button(button_id: str, wa_id: str) -> bool:
-    with get_db_context() as conn:
-        conn.execute(
-            "UPDATE session_buttons SET triggered_at = CURRENT_TIMESTAMP WHERE button_id = ?",
-            (button_id,),
-        )
-    return True
-
 
 # ── Button Click helpers ─────────────────────────────────────────────────
-
-def log_button_click(button_id: str, wa_id: str, session_id: str = None,
-                     button_type: str = None, label: str = None,
-                     payload: dict = None, source: str = "whatsapp",
-                     metadata: dict = None) -> int:
-    with get_db_context() as conn:
-        cur = conn.execute(
-            """INSERT INTO button_clicks
-                (button_id, wa_id, session_id, button_type, label,
-                 payload_json, source, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (button_id, wa_id, session_id, button_type, label,
-             json.dumps(payload or {}), source, json.dumps(metadata or {})),
-        )
-        return cur.lastrowid
-
-
-def get_button_clicks(button_id: str = None, wa_id: str = None,
-                      limit: int = 50) -> list:
-    query = "SELECT * FROM button_clicks WHERE 1=1"
-    params = []
-    if button_id:
-        query += " AND button_id = ?"
-        params.append(button_id)
-    if wa_id:
-        query += " AND wa_id = ?"
-        params.append(wa_id)
-    query += " ORDER BY created_at DESC LIMIT ?"
-    params.append(limit)
-    with get_db_context() as conn:
-        rows = conn.execute(query, params).fetchall()
-    results = []
-    for r in rows:
-        d = dict(r)
-        try:
-            d["payload_json"] = json.loads(d.get("payload_json") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            d["payload_json"] = {}
-        try:
-            d["metadata_json"] = json.loads(d.get("metadata_json") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            d["metadata_json"] = {}
-        results.append(d)
-    return results
-
-
-def get_button_click_stats(button_id: str = None, wa_id: str = None) -> dict:
-    query = "SELECT COUNT(*) as total, button_id, label FROM button_clicks WHERE 1=1"
-    params = []
-    if button_id:
-        query += " AND button_id = ?"
-        params.append(button_id)
-    if wa_id:
-        query += " AND wa_id = ?"
-        params.append(wa_id)
-    query += " GROUP BY button_id, label ORDER BY total DESC"
-    with get_db_context() as conn:
-        rows = conn.execute(query, params).fetchall()
-    return {"total_clicks": sum(r["total"] for r in rows), "by_button": [dict(r) for r in rows]}
 
 
 # ── Search helpers ───────────────────────────────────────────────────────
 
-def search_faq_db(query: str, limit: int = 5, tenant_id: str = None) -> list:
-    import re as _re
-    words = [w for w in _re.findall(r"[a-zA-Z]{2,}", query.lower())]
-    if not words:
-        return []
-
-    effective_tid = tenant_id or _resolve_tenant()
-    t_id_str = None
-    t_slug = None
-    if effective_tid:
-        try:
-            from shared.tenancy import store
-            rec = store.get_tenant(str(effective_tid))
-            if rec:
-                t_id_str = str(rec.get("id"))
-                t_slug = str(rec.get("slug"))
-            else:
-                t_id_str = str(effective_tid)
-                t_slug = str(effective_tid)
-        except Exception:
-            t_id_str = str(effective_tid)
-            t_slug = str(effective_tid)
-
-    if t_id_str and t_slug and t_id_str != t_slug:
-        tenant_clause = " AND (tenant_id = ? OR tenant_id = ? OR tenant_id = ?)"
-        tenant_params = [t_id_str, int(t_id_str) if t_id_str.isdigit() else t_id_str, t_slug]
-    elif t_id_str:
-        tenant_clause = " AND (tenant_id = ? OR tenant_id = ?)"
-        tenant_params = [t_id_str, int(t_id_str) if t_id_str.isdigit() else t_id_str]
-    else:
-        tenant_clause = ""
-        tenant_params = []
-
-    with get_db_context() as conn:
-        rows = conn.execute(
-            f"""SELECT * FROM faq_dataset
-               WHERE content LIKE ?{tenant_clause}
-               ORDER BY id DESC LIMIT ?""",
-            ([f"%{query}%"] + tenant_params + [limit]),
-        ).fetchall()
-        if rows:
-            return [_row_to_dict(r) for r in rows]
-        all_rows = conn.execute("SELECT * FROM faq_dataset").fetchall()
-        scored = []
-        allowed_tids = {t_id_str, t_slug, str(effective_tid)} if effective_tid else set()
-        for r in all_rows:
-            d = _row_to_dict(r)
-            row_tid = str(d.get("tenant_id") or "")
-            if allowed_tids and row_tid not in allowed_tids:
-                continue
-            searchable = " ".join([
-                (d.get("source_file") or "").lower(),
-                (d.get("content") or "").lower(),
-            ])
-            score = sum(2 for w in words if w in searchable)
-            if score > 0:
-                scored.append((score, d))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [d for _, d in scored[:limit]]
-
-
-def search_knowledge_base_db(query: str, limit: int = 5, tenant_id: str = None) -> list:
-    import re as _re
-    words = [w for w in _re.findall(r"[a-zA-Z]{2,}", query.lower())]
-    if not words:
-        return []
-
-    effective_tid = tenant_id or _resolve_tenant()
-    t_id_str = None
-    t_slug = None
-    if effective_tid:
-        try:
-            from shared.tenancy import store
-            rec = store.get_tenant(str(effective_tid))
-            if rec:
-                t_id_str = str(rec.get("id"))
-                t_slug = str(rec.get("slug"))
-            else:
-                t_id_str = str(effective_tid)
-                t_slug = str(effective_tid)
-        except Exception:
-            t_id_str = str(effective_tid)
-            t_slug = str(effective_tid)
-
-    if t_id_str and t_slug and t_id_str != t_slug:
-        tenant_clause = " AND (tenant_id = ? OR tenant_id = ? OR tenant_id = ?)"
-        tenant_params = [t_id_str, int(t_id_str) if t_id_str.isdigit() else t_id_str, t_slug]
-    elif t_id_str:
-        tenant_clause = " AND (tenant_id = ? OR tenant_id = ?)"
-        tenant_params = [t_id_str, int(t_id_str) if t_id_str.isdigit() else t_id_str]
-    else:
-        tenant_clause = ""
-        tenant_params = []
-
-    with get_db_context() as conn:
-        rows = conn.execute(
-            f"""SELECT * FROM knowledge_base
-               WHERE (title LIKE ? OR content LIKE ? OR tags LIKE ?){tenant_clause}
-               ORDER BY id DESC LIMIT ?""",
-            ([f"%{query}%", f"%{query}%", f"%{query}%"] + tenant_params + [limit]),
-        ).fetchall()
-        if rows:
-            return [_row_to_dict(r) for r in rows]
-        all_rows = conn.execute("SELECT * FROM knowledge_base").fetchall()
-        scored = []
-        allowed_tids = {t_id_str, t_slug, str(effective_tid)} if effective_tid else set()
-        for r in all_rows:
-            d = _row_to_dict(r)
-            row_tid = str(d.get("tenant_id") or "")
-            if allowed_tids and row_tid not in allowed_tids:
-                continue
-            searchable = " ".join([
-                (d.get("title") or "").lower(),
-                (d.get("content") or "").lower(),
-                (d.get("tags") or "").lower(),
-            ])
-            score = sum(2 for w in words if w in searchable)
-            if score > 0:
-                scored.append((score, d))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [d for _, d in scored[:limit]]
-
 
 # ── Admin account helpers ────────────────────────────────────────────────
-
-def count_admins() -> int:
-    with get_db_context() as conn:
-        row = conn.execute("SELECT COUNT(*) as c FROM admins").fetchone()
-    return row["c"] if row else 0
-
-
-def create_admin(username: str, password_hash: str, salt: str = "", role: str = "sub_admin",
-                 permissions: dict = None, recovery_key: str = None, tenant_id: str = None) -> int:
-    with get_db_context() as conn:
-        cur = conn.execute(
-            """INSERT INTO admins (username, password_hash, salt, role, permissions, recovery_key, tenant_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (username, password_hash, salt, role,
-             json.dumps(permissions or {}), recovery_key, tenant_id),
-        )
-        return cur.lastrowid
-
-
-def get_admin_by_username(username: str) -> dict:
-    with get_db_context() as conn:
-        row = conn.execute("SELECT * FROM admins WHERE username = ?", (username,)).fetchone()
-    if not row:
-        return None
-    d = dict(row)
-    d["permissions"] = _loads_json(d.get("permissions"), {})
-    return d
-
-
-def get_admin_by_id(admin_id: int) -> dict:
-    with get_db_context() as conn:
-        row = conn.execute("SELECT * FROM admins WHERE id = ?", (admin_id,)).fetchone()
-    if not row:
-        return None
-    d = dict(row)
-    d["permissions"] = _loads_json(d.get("permissions"), {})
-    return d
-
-
-def list_admins() -> list:
-    with get_db_context() as conn:
-        rows = conn.execute("SELECT * FROM admins ORDER BY created_at ASC").fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["permissions"] = _loads_json(d.get("permissions"), {})
-        result.append(d)
-    return result
-
-
-def update_admin(username: str, **kwargs) -> bool:
-    allowed = {"password_hash", "salt", "role", "permissions", "recovery_key"}
-    updates = {k: v for k, v in kwargs.items() if k in allowed}
-    if not updates:
-        return False
-    if "permissions" in updates and isinstance(updates["permissions"], dict):
-        updates["permissions"] = json.dumps(updates["permissions"])
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [username]
-    with get_db_context() as conn:
-        conn.execute(f"UPDATE admins SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE username = ?", values)
-    return True
-
-
-def delete_admin(username: str) -> bool:
-    with get_db_context() as conn:
-        conn.execute("DELETE FROM admins WHERE username = ?", (username,))
-    return True
-
-
-def count_admins_by_role(role: str) -> int:
-    with get_db_context() as conn:
-        row = conn.execute("SELECT COUNT(*) as cnt FROM admins WHERE role = ?", (role,)).fetchone()
-    return row["cnt"] if row else 0
-
-
-def count_tenant_admins(tenant_id: str, exclude_username: str = None) -> int:
-    """Count admin-role accounts in a tenant (optionally ignoring one username)."""
-    if not tenant_id:
-        return 0
-    query = "SELECT COUNT(*) as cnt FROM admins WHERE role = 'admin' AND tenant_id = ?"
-    params = [tenant_id]
-    if exclude_username:
-        query += " AND username != ?"
-        params.append(exclude_username)
-    with get_db_context() as conn:
-        row = conn.execute(query, params).fetchone()
-    return row["cnt"] if row else 0
-
-
-def get_admin_record(username: str, tenant_id: str = None, *, include_unscoped: bool = True) -> dict:
-    if tenant_id is None and not include_unscoped:
-        return None
-    with get_db_context() as conn:
-        if tenant_id is None:
-            row = conn.execute("SELECT * FROM admins WHERE username = ?", (username,)).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT * FROM admins WHERE username = ? AND tenant_id = ?",
-                (username, tenant_id),
-            ).fetchone()
-    if not row:
-        return None
-    d = dict(row)
-    d["permissions"] = _loads_json(d.get("permissions"), {})
-    return d
-
-
-def list_admin_records(tenant_id: str = None, *, include_all: bool = True) -> list:
-    with get_db_context() as conn:
-        if include_all:
-            rows = conn.execute("SELECT * FROM admins ORDER BY created_at ASC").fetchall()
-        elif not tenant_id:
-            return []
-        else:
-            rows = conn.execute(
-                "SELECT * FROM admins WHERE tenant_id = ? ORDER BY created_at ASC",
-                (tenant_id,),
-            ).fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["permissions"] = _loads_json(d.get("permissions"), {})
-        result.append(d)
-    return result
-
-
-def update_admin_record(username: str, role: str = None, permissions: dict = None, tenant_id: str = None) -> bool:
-    updates = {}
-    if role is not None:
-        updates["role"] = role
-    if permissions is not None:
-        updates["permissions"] = json.dumps(permissions)
-    if tenant_id is not None:
-        updates["tenant_id"] = tenant_id
-    if not updates:
-        return False
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [username]
-    with get_db_context() as conn:
-        conn.execute(f"UPDATE admins SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE username = ?", values)
-    return True
-
-
-def update_admin_email(username: str, email: str = None) -> bool:
-    with get_db_context() as conn:
-        conn.execute("UPDATE admins SET email = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?", (email, username))
-    return True
-
-
-def set_admin_otp(username: str, otp_code: str, expires_at: str) -> bool:
-    with get_db_context() as conn:
-        conn.execute(
-            "INSERT INTO admin_otps (username, otp_code, expires_at) VALUES (?, ?, ?)",
-            (username, otp_code, expires_at),
-        )
-    return True
-
-
-def get_admin_otp(username: str) -> dict:
-    with get_db_context() as conn:
-        row = conn.execute(
-            "SELECT * FROM admin_otps WHERE username = ? ORDER BY id DESC LIMIT 1",
-            (username,),
-        ).fetchone()
-    return dict(row) if row else None
-
-
-def clear_admin_otp(username: str) -> bool:
-    with get_db_context() as conn:
-        conn.execute("DELETE FROM admin_otps WHERE username = ?", (username,))
-    return True
 
 
 # ── Admin uploaded file registry ─────────────────────────────────────────
 
-def save_admin_file(name: str, ext: str, module: str, size: int,
-                    doc_id: int = None, file_path: str = None, url: str = None,
-                    tenant_id: str = None, actor: dict = None,
-                    status: str = "ready", chunks_count: int = 0,
-                    error_message: str = None) -> int:
-    with get_db_context() as conn:
-        effective_tenant = _resolve_tenant(tenant_id) if tenant_id else (get_request_tenant() or tenant_id)
-        cur = conn.execute(
-            """INSERT INTO admin_files (name, ext, module, size, doc_id, file_path, url, tenant_id, status, chunks_count, error_message)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (name, ext, module, size, doc_id, file_path, url, effective_tenant, status, chunks_count, error_message),
-        )
-        file_id = cur.lastrowid
-        
-        # Record audit event for file upload
-        try:
-            from backend.services.audit_context import actor_from_context
-        except ImportError:
-            try:
-                from services.audit_context import actor_from_context
-            except ImportError:
-                actor_from_context = lambda explicit=None: explicit
-        actor = actor_from_context(actor)
-        if actor:
-            record_admin_audit_event(
-                conn,
-                action="file_uploaded",
-                actor=actor,
-                resource_type="file",
-                resource_id=file_id,
-                tenant_id=effective_tenant,
-                actor_kind=actor.get("type"),
-                actor_label=actor.get("label"),
-                details={
-                    "file_name": os.path.basename(name),
-                    "file_ext": ext,
-                    "module": module,
-                    "file_size": size,
-                    "status": status,
-                }
-            )
-        
-        return file_id
-
-
-def update_admin_file_status(
-    name: str,
-    status: str,
-    chunks_count: int = None,
-    error_message: str = None,
-    tenant_id: str = None,
-    bifurcation_stats: dict = None,
-) -> bool:
-    with get_db_context() as conn:
-        effective_tenant = _resolve_tenant(tenant_id) if tenant_id else (get_request_tenant() or tenant_id)
-        updates = ["status = ?"]
-        params = [status]
-        if chunks_count is not None:
-            updates.append("chunks_count = ?")
-            params.append(chunks_count)
-        if error_message is not None:
-            updates.append("error_message = ?")
-            params.append(error_message)
-        if bifurcation_stats is not None:
-            updates.append("bifurcation_stats = ?")
-            params.append(json.dumps(bifurcation_stats))
-
-        where = "name = ?"
-        params.append(name)
-        if effective_tenant:
-            where += " AND tenant_id = ?"
-            params.append(effective_tenant)
-
-        cur = conn.execute(f"UPDATE admin_files SET {', '.join(updates)} WHERE {where}", params)
-        return cur.rowcount > 0
-
-
-def _parse_admin_file_row(row) -> dict:
-    item = dict(row)
-    raw_stats = item.get("bifurcation_stats")
-    if isinstance(raw_stats, str) and raw_stats.strip():
-        try:
-            item["bifurcation_stats"] = json.loads(raw_stats)
-        except Exception:
-            pass
-    return item
-
-
-def list_admin_files(tenant_id: str = None) -> list:
-    with get_db_context() as conn:
-        if tenant_id:
-            rows = conn.execute(
-                "SELECT * FROM admin_files WHERE tenant_id = ? ORDER BY created_at DESC, id DESC",
-                (tenant_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM admin_files ORDER BY created_at DESC, id DESC"
-            ).fetchall()
-    return [_parse_admin_file_row(r) for r in rows]
-
-
-def get_admin_file(name: str, tenant_id: str = None) -> dict:
-    with get_db_context() as conn:
-        if tenant_id:
-            row = conn.execute(
-                "SELECT * FROM admin_files WHERE name = ? AND tenant_id = ? ORDER BY id DESC LIMIT 1",
-                (name, tenant_id),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT * FROM admin_files WHERE name = ? ORDER BY id DESC LIMIT 1",
-                (name,),
-            ).fetchone()
-    return _parse_admin_file_row(row) if row else None
-
-
-def delete_admin_file(name: str, tenant_id: str = None, actor: dict = None) -> bool:
-    with get_db_context() as conn:
-        # Get file details before deletion for audit logging
-        file_row = None
-        if tenant_id:
-            file_row = conn.execute(
-                "SELECT id, module, size, tenant_id FROM admin_files WHERE name = ? AND tenant_id = ? ORDER BY id DESC LIMIT 1",
-                (name, tenant_id),
-            ).fetchone()
-            conn.execute("DELETE FROM admin_files WHERE name = ? AND tenant_id = ?", (name, tenant_id))
-        else:
-            file_row = conn.execute(
-                "SELECT id, module, size, tenant_id FROM admin_files WHERE name = ? ORDER BY id DESC LIMIT 1",
-                (name,),
-            ).fetchone()
-            conn.execute("DELETE FROM admin_files WHERE name = ?", (name,))
-        
-        try:
-            from backend.services.audit_context import actor_from_context
-        except ImportError:
-            try:
-                from services.audit_context import actor_from_context
-            except ImportError:
-                actor_from_context = lambda explicit=None: explicit
-        actor = actor_from_context(actor)
-        # Record audit event for file deletion
-        if actor and file_row:
-            file_details = dict(file_row)
-            record_admin_audit_event(
-                conn,
-                action="file_deleted",
-                actor=actor,
-                resource_type="file",
-                resource_id=file_details.get("id"),
-                tenant_id=tenant_id or file_details.get("tenant_id"),
-                actor_kind=actor.get("type"),
-                actor_label=actor.get("label"),
-                details={
-                    "file_name": os.path.basename(name),
-                    "module": file_details.get("module", ""),
-                    "file_size": file_details.get("size", 0),
-                }
-            )
-        
-    return True
-
 
 # ── Admin-to-admin chat helpers ──────────────────────────────────────────
-
-def save_admin_chat_message(chat_id: str, username: str, message: str,
-                            attachment: dict = None, tenant_id: str = None) -> dict:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with get_db_context() as conn:
-        cur = conn.execute(
-            """INSERT INTO admin_chat_messages (chat_id, sender, username, text, message, attachment_json, created_at, tenant_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (chat_id, username, username, message, message,
-             json.dumps(attachment) if attachment else None, now, tenant_id),
-        )
-        return {"id": cur.lastrowid, "chat_id": chat_id, "username": username,
-                "message": message, "text": message, "created_at": now,
-                "attachment": attachment, "tenant_id": tenant_id}
-
-
-def get_admin_chat_history(chat_id: str, username: str = None, limit: int = 200,
-                           tenant_id: str = None) -> list:
-    cutoff = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d %H:%M:%S")
-    tenant_clause = " AND tenant_id = ?" if tenant_id else ""
-    with get_db_context() as conn:
-        if username:
-            rows = conn.execute(
-                f"""SELECT id, chat_id, COALESCE(sender, username) as username,
-                          COALESCE(text, message) as message, created_at, attachment_json
-                   FROM admin_chat_messages
-                   WHERE chat_id = ? AND created_at >= ?{tenant_clause}
-                     AND id NOT IN (
-                       SELECT message_id FROM deleted_chat_messages WHERE username = ?
-                     )
-                   ORDER BY id DESC LIMIT ?""",
-                ((chat_id, cutoff, tenant_id, username, limit) if tenant_id
-                 else (chat_id, cutoff, username, limit)),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                f"""SELECT id, chat_id, COALESCE(sender, username) as username,
-                          COALESCE(text, message) as message, created_at, attachment_json
-                   FROM admin_chat_messages
-                   WHERE chat_id = ? AND created_at >= ?{tenant_clause}
-                   ORDER BY id DESC LIMIT ?""",
-                ((chat_id, cutoff, tenant_id, limit) if tenant_id
-                 else (chat_id, cutoff, limit)),
-            ).fetchall()
-        result = []
-        for r in reversed(rows):
-            item = dict(r)
-            if item.get("attachment_json"):
-                try:
-                    item["attachment"] = json.loads(item["attachment_json"])
-                except Exception:
-                    item["attachment"] = None
-            else:
-                item["attachment"] = None
-            result.append(item)
-        return result
-
-
-def get_admin_chat_preview(username: str) -> list:
-    with get_db_context() as conn:
-        rows = conn.execute(
-            """SELECT acm.chat_id, COALESCE(acm.text, acm.message) as message,
-                      COALESCE(acm.sender, acm.username) as username, acm.created_at
-               FROM admin_chat_messages acm
-               INNER JOIN (
-                   SELECT chat_id, MAX(id) as max_id FROM admin_chat_messages
-                   WHERE chat_id LIKE ? OR chat_id LIKE ?
-                   GROUP BY chat_id
-               ) latest ON acm.id = latest.max_id
-               ORDER BY acm.created_at DESC""",
-            (f"%|{username}", f"{username}|%"),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def _chat_message_to_dict(row) -> dict:
-    d = dict(row)
-    raw_att = d.pop("attachment_json", None)
-    d["attachment"] = _loads_json(raw_att, None) if raw_att else None
-    d["username"] = d.get("sender") or d.get("username", "")
-    return d
-
-
-def get_chat_history(chat_id: str, limit: int = 200) -> list:
-    with get_db_context() as conn:
-        rows = conn.execute(
-            """SELECT * FROM admin_chat_messages
-               WHERE chat_id = ?
-               ORDER BY id ASC LIMIT ?""",
-            (chat_id, limit),
-        ).fetchall()
-    return [_chat_message_to_dict(r) for r in rows]
-
-
-def get_chat_last_message(chat_id: str) -> dict:
-    with get_db_context() as conn:
-        row = conn.execute(
-            """SELECT * FROM admin_chat_messages
-               WHERE chat_id = ?
-               ORDER BY id DESC LIMIT 1""",
-            (chat_id,),
-        ).fetchone()
-    return _chat_message_to_dict(row) if row else None
-
-
-def save_chat_message(chat_id: str, sender: str, text: str,
-                      attachment: dict = None) -> int:
-    with get_db_context() as conn:
-        cur = conn.execute(
-            """INSERT INTO admin_chat_messages (chat_id, sender, text, attachment_json)
-               VALUES (?, ?, ?, ?)""",
-            (chat_id, sender, text or "", json.dumps(attachment) if attachment else None),
-        )
-        return cur.lastrowid
-
-
-def delete_chat_message(message_id: int) -> bool:
-    with get_db_context() as conn:
-        conn.execute("DELETE FROM admin_chat_messages WHERE id = ?", (message_id,))
-    return True
-
-
-def mark_chat_message_deleted(message_id: int, username: str) -> bool:
-    with get_db_context() as conn:
-        conn.execute(
-            "UPDATE admin_chat_messages SET deleted_for = ? WHERE id = ?",
-            (username, message_id),
-        )
-    return True
-
-
-def delete_admin_chat_message(msg_id: int) -> bool:
-    with get_db_context() as conn:
-        result = conn.execute("DELETE FROM admin_chat_messages WHERE id = ?", (msg_id,))
-        return result.rowcount > 0
-
-
-def soft_delete_message_for_user(msg_id: int, username: str):
-    with get_db_context() as conn:
-        row = conn.execute("SELECT message FROM admin_chat_messages WHERE id = ?", (msg_id,)).fetchone()
-        message = row["message"] if row else None
-        conn.execute(
-            "INSERT OR IGNORE INTO deleted_chat_messages (message_id, username, message) VALUES (?, ?, ?)",
-            (msg_id, username, message),
-        )
-
-
-def soft_delete_message_for_everyone(msg_id: int):
-    with get_db_context() as conn:
-        row = conn.execute("SELECT message FROM admin_chat_messages WHERE id = ?", (msg_id,)).fetchone()
-        message = row["message"] if row else None
-        admins = conn.execute("SELECT username FROM admins").fetchall()
-        for admin in admins:
-            conn.execute(
-                "INSERT OR IGNORE INTO deleted_chat_messages (message_id, username, message) VALUES (?, ?, ?)",
-                (msg_id, admin["username"], message),
-            )
-
-
-def get_all_admins_except(current_username: str, tenant_id: str = None, *, include_all: bool = True) -> list:
-    with get_db_context() as conn:
-        if include_all:
-            rows = conn.execute(
-                "SELECT username FROM admins WHERE username != ? ORDER BY username",
-                (current_username,),
-            ).fetchall()
-        elif not tenant_id:
-            return []
-        else:
-            rows = conn.execute(
-                "SELECT username FROM admins WHERE username != ? AND tenant_id = ? ORDER BY username",
-                (current_username, tenant_id),
-            ).fetchall()
-        return [r["username"] for r in rows]
-
-
-def _init_audit_logs_table(conn):
-    """Initialize the dedicated audit_logs table for Healthy Earth theme."""
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS audit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            actor TEXT NOT NULL,
-            action TEXT NOT NULL,
-            category TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'success' CHECK (status IN ('success', 'failed', 'pending')),
-            description TEXT,
-            metadata TEXT DEFAULT '{}'
-        )"""
-    )
-    
-    # Create indexes for performance
-    conn.execute("CREATE INDEX IF NOT EXISTS ix_audit_logs_created ON audit_logs(created_at DESC)")
-    conn.execute("CREATE INDEX IF NOT EXISTS ix_audit_logs_actor ON audit_logs(actor, created_at DESC)")
-    conn.execute("CREATE INDEX IF NOT EXISTS ix_audit_logs_action ON audit_logs(action, created_at DESC)")
-    conn.execute("CREATE INDEX IF NOT EXISTS ix_audit_logs_category ON audit_logs(category, created_at DESC)")
-    conn.execute("CREATE INDEX IF NOT EXISTS ix_audit_logs_status ON audit_logs(status, created_at DESC)")
-
-
-def record_audit_log_event(
-    conn,
-    actor: str,
-    action: str,
-    category: str,
-    status: str = "success",
-    description: str = "",
-    metadata: dict = None
-):
-    """Record an audit log event for the Healthy Earth audit system."""
-    if status not in ("success", "failed", "pending"):
-        raise ValueError("Status must be success, failed, or pending")
-    
-    import json
-    conn.execute(
-        """INSERT INTO audit_logs 
-           (created_at, actor, action, category, status, description, metadata)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (
-            datetime.now(timezone.utc).isoformat(),
-            actor,
-            action,
-            category,
-            status,
-            description,
-            json.dumps(metadata or {})
-        )
-    )
-    return conn.total_changes
 
 
 # ── Knowledge Gap Analytics ───────────────────────────────────────────────────
 
-def record_unanswered_query(
-    tenant_id: str,
-    query: str,
-    wa_id: str = None,
-    reason: str = "low_confidence",
-    confidence_score: float = 0.0,
-) -> int | None:
-    """Record an unanswered customer query for Knowledge Gap analytics.
-
-    Skips greetings, empty strings, or duplicate queries received within a 10-minute window.
-    """
-    if not query or not query.strip():
-        return None
-    cleaned = query.strip()
-    if len(cleaned) < 3:
-        return None
-    lower = cleaned.lower()
-    # Skip common greetings and generic menu navigation triggers
-    if lower in {"hi", "hello", "hey", "menu", "start", "opt out", "stop", "yes", "no", "ok", "okay"}:
-        return None
-
-    effective_tenant = _resolve_tenant(tenant_id) if tenant_id else (get_request_tenant() or "default")
-
-    with get_db_context() as conn:
-        # Throttle duplicate query within 10 minutes for this tenant
-        recent = conn.execute(
-            """SELECT id FROM unanswered_queries
-               WHERE tenant_id = ? AND LOWER(TRIM(query)) = LOWER(?)
-                 AND created_at >= DATETIME('now', '-10 minutes')
-               LIMIT 1""",
-            (effective_tenant, cleaned),
-        ).fetchone()
-        if recent:
-            return recent[0]
-
-        cur = conn.execute(
-            """INSERT INTO unanswered_queries (tenant_id, wa_id, query, reason, confidence_score)
-               VALUES (?, ?, ?, ?, ?)""",
-            (effective_tenant, wa_id, cleaned, reason, float(confidence_score or 0.0)),
-        )
-        return cur.lastrowid
-
-
-def list_unanswered_queries(
-    tenant_id: str = None,
-    resolved: bool = False,
-    limit: int = 50,
-) -> list[dict]:
-    """Retrieve unanswered customer queries for a tenant."""
-    effective_tenant = _resolve_tenant(tenant_id) if tenant_id else get_request_tenant()
-    with get_db_context() as conn:
-        params = []
-        where_clauses = []
-        if effective_tenant:
-            where_clauses.append("tenant_id = ?")
-            params.append(effective_tenant)
-        if resolved is not None:
-            where_clauses.append("resolved = ?")
-            params.append(1 if resolved else 0)
-
-        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-        query = f"SELECT * FROM unanswered_queries {where_sql} ORDER BY created_at DESC LIMIT ?"
-        params.append(int(limit))
-        rows = conn.execute(query, params).fetchall()
-        return [dict(r) for r in rows]
-
-
-def resolve_unanswered_query(
-    gap_id: int,
-    tenant_id: str = None,
-    resolved_by: str = None,
-    notes: str = None,
-) -> bool:
-    """Mark a knowledge gap as resolved."""
-    effective_tenant = _resolve_tenant(tenant_id) if tenant_id else get_request_tenant()
-    with get_db_context() as conn:
-        params = [resolved_by or "admin", notes or "", gap_id]
-        tenant_clause = ""
-        if effective_tenant:
-            tenant_clause = " AND tenant_id = ?"
-            params.append(effective_tenant)
-
-        cur = conn.execute(
-            f"""UPDATE unanswered_queries
-                SET resolved = 1, resolved_at = CURRENT_TIMESTAMP, resolved_by = ?, resolution_notes = ?
-                WHERE id = ?{tenant_clause}""",
-            params,
-        )
-        return cur.rowcount > 0
-
-
-def get_knowledge_gaps_summary(tenant_id: str = None) -> dict:
-    """Return top recurring unanswered queries and unresolved count for dashboard."""
-    effective_tenant = _resolve_tenant(tenant_id) if tenant_id else get_request_tenant()
-    with get_db_context() as conn:
-        params = [effective_tenant] if effective_tenant else []
-        tenant_sql = "AND tenant_id = ?" if effective_tenant else ""
-        
-        # Total unresolved
-        count_row = conn.execute(
-            f"SELECT COUNT(*) FROM unanswered_queries WHERE resolved = 0 {tenant_sql}",
-            params,
-        ).fetchone()
-        unresolved_count = count_row[0] if count_row else 0
-
-        # Group by query text to find top frequency questions
-        top_rows = conn.execute(
-            f"""SELECT query, COUNT(*) as count, MAX(created_at) as last_asked,
-                       AVG(confidence_score) as avg_score, reason, MAX(id) as sample_id
-                FROM unanswered_queries
-                WHERE resolved = 0 {tenant_sql}
-                GROUP BY LOWER(TRIM(query))
-                ORDER BY count DESC, last_asked DESC
-                LIMIT 10""",
-            params,
-        ).fetchall()
-
-        top_queries = [
-            {
-                "query": r["query"],
-                "count": r["count"],
-                "last_asked": r["last_asked"],
-                "avg_score": round(float(r["avg_score"] or 0.0), 3),
-                "reason": r["reason"],
-                "sample_id": r["sample_id"],
-            }
-            for r in top_rows
-        ]
-
-        return {
-            "total_unresolved": unresolved_count,
-            "top_queries": top_queries,
-        }
-
-
-def add_faq_from_gap(
-    tenant_id: str,
-    gap_id: int,
-    question: str,
-    answer: str,
-    resolved_by: str = None,
-) -> dict:
-    """Convert an unanswered query into a live FAQ entry and rebuild the index."""
-    effective_tenant = _resolve_tenant(tenant_id) if tenant_id else (get_request_tenant() or "default")
-    q = (question or "").strip()
-    a = (answer or "").strip()
-    if not q or not a:
-        raise ValueError("Question and answer are required.")
-
-    formatted_content = f"Question: {q}\nAnswer: {a}"
-    chunk = {
-        "source_file": "Knowledge Gap FAQ",
-        "content_type": "faq",
-        "content": formatted_content,
-        "page_number": 1,
-    }
-
-    # Save to FAQ dataset
-    save_chunks([chunk], module="faq", tenant_id=effective_tenant)
-
-    # Save to knowledge_base table as well for hybrid RAG completeness
-    with get_db_context() as conn:
-        conn.execute(
-            """INSERT INTO knowledge_base (title, category, content, tags, source, chunks_json, embedding_blob, created_at, tenant_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                f"FAQ: {q[:50]}",
-                "faq",
-                formatted_content,
-                json.dumps(["faq", "knowledge_gap"]),
-                "Knowledge Gap FAQ",
-                json.dumps([formatted_content]),
-                None,
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                effective_tenant,
-            ),
-        )
-
-    # Rebuild FAQ index
-    try:
-        from faq.service import faq_index
-        faq_index.build(force=True)
-    except Exception as exc:
-        logging.getLogger("database").warning(f"FAQ index auto-sync failed after add_faq_from_gap: {exc}")
-
-    # Mark the gap as resolved
-    if gap_id:
-        resolve_unanswered_query(
-            gap_id=gap_id,
-            tenant_id=effective_tenant,
-            resolved_by=resolved_by or "admin",
-            notes=f"Answered via Knowledge Gap FAQ: {q[:50]}",
-        )
-
-    return {"status": "ok", "question": q, "answer": a, "tenant_id": effective_tenant}
-
 
 # ── Scheduled website re-crawling ─────────────────────────────────────────
 
-def _crawl_schedule_row(row) -> dict:
-    return {
-        "id": row["id"],
-        "tenant_id": row["tenant_id"],
-        "url": row["url"],
-        "interval_hours": row["interval_hours"],
-        "max_pages": row["max_pages"],
-        "auto_publish": bool(row["auto_publish"]),
-        "is_enabled": bool(row["is_enabled"]),
-        "last_crawled_at": row["last_crawled_at"],
-        "last_status": row["last_status"],
-        "last_error": row["last_error"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
 
-
-def get_crawl_schedule(tenant_id: str) -> dict | None:
-    with get_db_context() as conn:
-        row = conn.execute(
-            "SELECT * FROM tenant_crawl_schedules WHERE tenant_id = ?",
-            (tenant_id,),
-        ).fetchone()
-    return _crawl_schedule_row(row) if row else None
-
-
-def upsert_crawl_schedule(
-    tenant_id: str,
-    url: str,
-    interval_hours: int = 24,
-    max_pages: int = 8,
-    auto_publish: bool = True,
-    is_enabled: bool = True,
-) -> dict:
-    interval_hours = max(1, int(interval_hours or 24))
-    max_pages = max(1, min(int(max_pages or 8), 25))
-    with get_db_context() as conn:
-        conn.execute(
-            """INSERT INTO tenant_crawl_schedules
-                   (tenant_id, url, interval_hours, max_pages, auto_publish, is_enabled)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(tenant_id) DO UPDATE SET
-                   url = excluded.url,
-                   interval_hours = excluded.interval_hours,
-                   max_pages = excluded.max_pages,
-                   auto_publish = excluded.auto_publish,
-                   is_enabled = excluded.is_enabled,
-                   updated_at = CURRENT_TIMESTAMP""",
-            (tenant_id, url, interval_hours, max_pages, 1 if auto_publish else 0, 1 if is_enabled else 0),
-        )
-        row = conn.execute(
-            "SELECT * FROM tenant_crawl_schedules WHERE tenant_id = ?",
-            (tenant_id,),
-        ).fetchone()
-    return _crawl_schedule_row(row)
-
-
-def delete_crawl_schedule(tenant_id: str) -> bool:
-    with get_db_context() as conn:
-        cur = conn.execute(
-            "DELETE FROM tenant_crawl_schedules WHERE tenant_id = ?",
-            (tenant_id,),
-        )
-    return cur.rowcount > 0
-
-
-def list_due_crawl_schedules() -> list:
-    """Enabled schedules whose last crawl is older than their interval (or never crawled)."""
-    with get_db_context() as conn:
-        rows = conn.execute(
-            """SELECT * FROM tenant_crawl_schedules
-               WHERE is_enabled = 1
-                 AND (last_crawled_at IS NULL
-                      OR last_crawled_at <= DATETIME('now', '-' || interval_hours || ' hours'))
-               ORDER BY COALESCE(last_crawled_at, '1970-01-01') ASC""",
-        ).fetchall()
-    return [_crawl_schedule_row(r) for r in rows]
-
-
-def mark_crawl_started(tenant_id: str) -> None:
-    """Stamp the run time up-front so a slow crawl is not picked up twice."""
-    with get_db_context() as conn:
-        conn.execute(
-            """UPDATE tenant_crawl_schedules
-               SET last_crawled_at = CURRENT_TIMESTAMP,
-                   last_status = 'running',
-                   last_error = NULL,
-                   updated_at = CURRENT_TIMESTAMP
-               WHERE tenant_id = ?""",
-            (tenant_id,),
-        )
-
-
-def mark_crawl_finished(tenant_id: str, status: str, error: str = None) -> None:
-    with get_db_context() as conn:
-        conn.execute(
-            """UPDATE tenant_crawl_schedules
-               SET last_status = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP
-               WHERE tenant_id = ?""",
-            (status, error, tenant_id),
-        )

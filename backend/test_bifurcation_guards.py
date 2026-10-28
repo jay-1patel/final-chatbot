@@ -27,8 +27,11 @@ from shared.tenancy.schemas import (  # noqa: E402
 )
 
 try:
+    # Import the helpers through the facade to pin the re-export contract,
+    # but patch product_slug_taken where _ensure_free_slug resolves it —
+    # services.bifurcation_extract (its post-split home).
     from services.auto_bifurcator import _ensure_free_slug, _slugify  # noqa: E402
-    from services import auto_bifurcator as _ab_mod  # noqa: E402
+    from services import bifurcation_extract as _bi_mod  # noqa: E402
 
     HAS_BIFURCATOR = True
 except Exception:  # heavy deps (fitz/docx/openpyxl) missing in test env
@@ -164,32 +167,36 @@ class BrandContactValidationTests(unittest.TestCase):
 class SlugCollisionTests(unittest.TestCase):
     """products.slug is UNIQUE across tenants — inserts must not collide."""
 
-    def test_suffixes_when_taken_globally(self):
-        orig = _ab_mod.product_slug_taken
+    def test_suffixes_when_taken_by_same_tenant(self):
+        orig = _bi_mod.product_slug_taken
         try:
-            _ab_mod.product_slug_taken = lambda s: False
+            _bi_mod.product_slug_taken = lambda s, t=None: False
             used = set()
-            first = _ensure_free_slug(_slugify("Personal Loan"), used)
+            first = _ensure_free_slug(_slugify("Personal Loan"), used, "sbi")
             self.assertEqual(first, "personal-loan")
 
-            # Another tenant already holds the slug in the DB:
-            _ab_mod.product_slug_taken = lambda s: s == "personal-loan"
-            second = _ensure_free_slug(_slugify("Personal Loan"), set())
+            # This tenant's catalog already holds the slug (tenant-scoped
+            # UNIQUE(tenant_id, slug) since the 2026-10 migration):
+            _bi_mod.product_slug_taken = lambda s, t=None: (s, t) == ("personal-loan", "sbi")
+            second = _ensure_free_slug(_slugify("Personal Loan"), set(), "sbi")
             self.assertEqual(second, "personal-loan-2")
+            # Another tenant holding the same slug must NOT force a suffix.
+            third = _ensure_free_slug(_slugify("Personal Loan"), set(), "hdfc")
+            self.assertEqual(third, "personal-loan")
         finally:
-            _ab_mod.product_slug_taken = orig
+            _bi_mod.product_slug_taken = orig
 
     def test_in_batch_duplicates_get_distinct_slugs(self):
-        orig = _ab_mod.product_slug_taken
+        orig = _bi_mod.product_slug_taken
         try:
-            _ab_mod.product_slug_taken = lambda s: False
+            _bi_mod.product_slug_taken = lambda s, t=None: False
             used = set()
-            a = _ensure_free_slug(_slugify("SBI FD"), used)
-            b = _ensure_free_slug(_slugify("SBI-FD"), used)  # same slug after _slugify
+            a = _ensure_free_slug(_slugify("SBI FD"), used, "sbi")
+            b = _ensure_free_slug(_slugify("SBI-FD"), used, "sbi")  # same slug after _slugify
             self.assertEqual(a, "sbi-fd")
             self.assertEqual(b, "sbi-fd-2")
         finally:
-            _ab_mod.product_slug_taken = orig
+            _bi_mod.product_slug_taken = orig
 
 
 if __name__ == "__main__":

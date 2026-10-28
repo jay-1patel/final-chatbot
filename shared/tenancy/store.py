@@ -496,13 +496,20 @@ def _set_current(conn, tenant_id: str, version: int) -> None:
     )
 
 
-def publish_version(tenant_id: str, payload: dict, published_by: str = "", conn=None) -> int:
+def publish_version(tenant_id: str, payload: dict, published_by: str = "", conn=None, validate: bool = True) -> int:
     """Append a new version and make it current. Returns the new version number.
 
-    The caller is responsible for validating the merged profile *before* this —
-    this function only persists an already-validated payload.
+    Validates the payload through the loader (vertical defaults + draft merged
+    into a TenantProfile) before anything is written, so no caller can publish
+    a profile the bot would reject on load — a bad website/phone string used to
+    become the live version and the loader fell back to a skeleton profile.
+    Routes that pre-validate are unaffected (double validation is cheap and
+    read-only). Pass validate=False only for trusted repair scripts.
     """
     tid = str(tenant_id)
+    if validate:
+        from shared.tenancy import loader as _loader  # lazy: loader imports store
+        _loader.validate_merged_profile(tid, payload)
     body = json.dumps(payload, ensure_ascii=False)
     def _publish(connection):
         row = connection.execute(
