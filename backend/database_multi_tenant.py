@@ -115,16 +115,8 @@ def add_tenant_id_to_all_tables():
         # Add tenant_id to existing records (assign to first tenant)
         tenant_check = conn.execute("SELECT COUNT(*) FROM tenants").fetchone()[0]
         if tenant_check == 0:
-            # Create default tenant
-            conn.execute(
-                """INSERT INTO tenants (
-                    company_name, slug, system_prompt, industry_type
-                ) VALUES (?, ?, ?, ?)""",
-                ("Leeway Softech", "leeway-softech", 
-                 "You are the AI assistant for Leeway Softech, a premier IT services company.",
-                 "IT Services")
-            )
-            default_tenant_id = conn.execute("SELECT id FROM tenants ORDER BY id LIMIT 1").fetchone()[0]
+            # No default tenant is seeded; tenants must be registered explicitly.
+            default_tenant_id = None
         else:
             default_tenant_id = conn.execute("SELECT id FROM tenants ORDER BY id LIMIT 1").fetchone()[0]
         
