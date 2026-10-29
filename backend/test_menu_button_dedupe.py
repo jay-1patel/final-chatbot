@@ -26,7 +26,7 @@ from services.auto_bifurcator import (  # noqa: E402
 from shared.tenancy.merge import merge_layers  # noqa: E402
 from shared.tenancy.defaults import get_vertical_defaults  # noqa: E402
 from bots.customer_b2c.menus import get_main_menu  # noqa: E402
-from routes.offerings import _public_media_url  # noqa: E402
+from routes.offerings import _public, _public_media_url  # noqa: E402
 
 
 class MenuButtonDedupeTests(unittest.TestCase):
@@ -37,6 +37,12 @@ class MenuButtonDedupeTests(unittest.TestCase):
             _public_media_url("https://imghipo.com/image.png"),
             "https://imghipo.com/image.png",
         )
+
+    def test_records_keep_legacy_image_url_alias(self):
+        record = _public({"image_url": "https://imghipo.com/image.png"})
+
+        self.assertEqual(record["media_url"], "https://imghipo.com/image.png")
+        self.assertEqual(record["image_url"], record["media_url"])
 
     def test_pdf_embedded_image_is_uploaded_and_attached_to_matching_offering(self):
         pdf = fitz.open()

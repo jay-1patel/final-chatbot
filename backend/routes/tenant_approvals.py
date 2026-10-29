@@ -177,12 +177,21 @@ def _create_change_request(body: TenantChangeCreate, current_admin: dict):
     summary = ""
 
     if body.request_type == "create_tenant":
-        if tenancy_store.get_tenant(tenant_id):
-            raise HTTPException(status_code=409, detail=f"tenant '{tenant_id}' already exists")
+        tenant_fields = body.tenant or {}
+        conflict = tenancy_store.find_registry_conflict(
+            tenant_id, (tenant_fields.get("slug") or tenant_id)
+        )
+        if conflict:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"tenant '{tenant_id}' already exists "
+                    f"(conflicts with '{conflict.get('id')}' / slug '{conflict.get('slug')}')"
+                ),
+            )
 
         from shared.tenancy import loader as _loader
 
-        tenant_fields = body.tenant or {}
         try:
             # Fail before queueing the request if the vertical is unknown.
             _loader.build_profile(tenant_id, db_layer={}, file_layer={}, include_db=False)
@@ -459,12 +468,18 @@ def _apply_request(row: dict) -> int:
     tenant_id = row["tenant_id"]
 
     if row["request_type"] == "create_tenant":
-        if tenancy_store.get_tenant(tenant_id):
+        tenant_fields = payload.get("tenant") or {}
+        conflict = tenancy_store.find_registry_conflict(
+            tenant_id, tenant_fields.get("slug") or tenant_id
+        )
+        if conflict:
             raise HTTPException(
                 status_code=409,
-                detail=f"tenant '{tenant_id}' already exists — reject this request",
+                detail=(
+                    f"tenant '{tenant_id}' already exists — reject this request "
+                    f"(conflicts with '{conflict.get('id')}' / slug '{conflict.get('slug')}')"
+                ),
             )
-        tenant_fields = payload.get("tenant") or {}
         tenancy_store.ensure_tenant(
             tenant_id,
             slug=tenant_fields.get("slug") or tenant_id,

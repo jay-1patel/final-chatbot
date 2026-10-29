@@ -1910,7 +1910,13 @@ def _init_offerings_migration(conn):
         ("short_label", "TEXT"),
         ("detail_url", "TEXT"),
         ("tenant_id", "TEXT"),
+        ("image_url", "TEXT"),
     ])
+    try:
+        conn.execute("UPDATE products SET image_url = media_url WHERE (image_url IS NULL OR image_url = '') AND media_url IS NOT NULL")
+        conn.execute("UPDATE products SET media_url = image_url WHERE (media_url IS NULL OR media_url = '') AND image_url IS NOT NULL")
+    except Exception:
+        pass
     # Price is already a nullable TEXT column, but older rows may hold ''.
     conn.execute("UPDATE products SET price = NULL WHERE TRIM(COALESCE(price, '')) = ''")
     conn.execute("UPDATE products SET attrs_json = '{}' WHERE attrs_json IS NULL")

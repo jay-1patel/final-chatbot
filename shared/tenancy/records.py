@@ -575,11 +575,15 @@ def present(columns: List[Dict[str, Any]], row: Dict[str, Any]) -> Dict[str, Any
     """
     out: Dict[str, Any] = {}
     for column in columns:
-        value = row.get(column["key"])
+        key = column["key"]
+        value = row.get(key)
+        if (value is None or str(value).strip() == ""):
+            if key in ("media_url", "image_url"):
+                value = row.get("image_url") or row.get("media_url")
         if column["type"] == "boolean":
-            out[column["key"]] = None if value is None else bool(value)
+            out[key] = None if value is None else bool(value)
         elif column["type"] in ("number", "integer"):
-            out[column["key"]] = None if value is None else value
+            out[key] = None if value is None else value
         else:
-            out[column["key"]] = value if value is None else str(value)
+            out[key] = value if value is None else str(value)
     return out

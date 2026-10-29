@@ -87,6 +87,7 @@ class OfferingIn(BaseModel):
     price: Optional[str] = None
     detail_url: str = ""
     media_url: str = ""
+    image_url: Optional[str] = None
     media_type: str = "image"
     sort_order: int = 0
     is_active: bool = True
@@ -105,6 +106,7 @@ class OfferingPatch(BaseModel):
     price: Optional[str] = None
     detail_url: Optional[str] = None
     media_url: Optional[str] = None
+    image_url: Optional[str] = None
     media_type: Optional[str] = None
     sort_order: Optional[int] = None
     is_active: Optional[bool] = None
@@ -238,6 +240,7 @@ def _unique_slug(name: str, exclude_id: int = None) -> str:
 
 def _public(item: dict, columns: Optional[List[Dict[str, Any]]] = None) -> dict:
     values = record_schema.present(columns, item) if columns else {}
+    media_url = _public_media_url(item.get("media_url") or item.get("image_url"))
     return {
         "id": item.get("id"),
         "name": item.get("name"),
@@ -248,7 +251,8 @@ def _public(item: dict, columns: Optional[List[Dict[str, Any]]] = None) -> dict:
         "description": item.get("description"),
         "price": item.get("price"),
         "detail_url": item.get("detail_url"),
-        "media_url": _public_media_url(item.get("media_url")),
+        "media_url": media_url,
+        "image_url": media_url,
         "media_type": item.get("media_type"),
         "attrs": item.get("attrs_json") or {},
         "values": values,
@@ -295,6 +299,9 @@ def _cell_values(values: Optional[Dict[str, Any]], body) -> Dict[str, Any]:
         value = getattr(body, field, None)
         if value is not None and field not in merged:
             merged[field] = value
+    image_url = getattr(body, "image_url", None)
+    if image_url is not None and "media_url" not in merged:
+        merged["media_url"] = image_url
     return merged
 
 
@@ -443,7 +450,7 @@ def create_offering(tenant_id: str, body: OfferingIn, principal: dict = Depends(
         description=body.description,
         short_description=body.short_description,
         price=(body.price or "").strip() or None,
-        media_url=_public_media_url(body.media_url),
+        media_url=_public_media_url(body.media_url or body.image_url),
         media_type=body.media_type or "image",
         sort_order=body.sort_order,
         attrs_json=attrs_json,
@@ -468,6 +475,9 @@ def patch_offering(tenant_id: str, offering_id: int, body: OfferingPatch, princi
     updates: Dict[str, Any] = body.model_dump(
         exclude_unset=True, exclude_none=True, exclude={"values", "attrs"}
     )
+    image_url = updates.pop("image_url", None)
+    if image_url is not None and "media_url" not in updates:
+        updates["media_url"] = image_url
     if "name" in updates and updates["name"]:
         updates["name"] = updates["name"].strip()
         updates["slug"] = _unique_slug(updates["name"], exclude_id=offering_id)

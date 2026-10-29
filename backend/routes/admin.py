@@ -1099,7 +1099,7 @@ def delete_product_api(
     return {"status": "ok"}
 
 
-IMGHIPPO_API_KEY = os.environ.get("IMGHIPPO_API_KEY", "d5f26052bf1b041f160e530a28d19cfd")
+IMGHIPPO_API_KEY = os.environ.get("IMGHIPPO_API_KEY", "ih_live_cb94f243b9804ac94df84a9c94ad7f8bc11062deeb406a6c")
 CATBOX_API_URL = "https://catbox.moe/user/api.php"
 
 

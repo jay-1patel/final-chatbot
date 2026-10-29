@@ -8,6 +8,8 @@ import shutil
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
+import io
+import httpx
 import fitz  # PyMuPDF
 import pdfplumber
 import pytesseract
@@ -56,6 +58,9 @@ CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", 150))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(BASE_DIR, "uploaded_files"))
 EXTRACTED_DIR = os.environ.get("EXTRACTED_DIR", os.path.join(UPLOAD_DIR, "extracted"))
+IMGHIPPO_API_URL = os.environ.get("IMGHIPPO_API_URL", "https://api.imghippo.com/v1/upload")
+MIN_IMAGE_WIDTH = 60
+MIN_IMAGE_HEIGHT = 60
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(EXTRACTED_DIR, exist_ok=True)
@@ -160,6 +165,98 @@ def ocr_page(page) -> str:
 # PDF Extraction
 # ----------------------------------------------------------------------
 
+def _upload_image_to_imghippo(content: bytes, filename: str) -> Optional[str]:
+    """Upload image bytes to imghippo and return the public URL."""
+    api_key = (
+        os.environ.get("IMGHIPPO_API_KEY")
+        or getattr(__import__("routing.config", fromlist=["IMGHIPPO_API_KEY"]), "IMGHIPPO_API_KEY", None)
+        or "ih_live_cb94f243b9804ac94df84a9c94ad7f8bc11062deeb406a6c"
+    )
+
+    if not api_key:
+        logger.warning("IMGHIPPO_API_KEY not set - cannot upload extracted image to imghippo.")
+        return None
+
+    upload_bytes = content
+    ext = Path(filename).suffix.lower()
+    mime = "image/png" if ext == ".png" else "image/jpeg"
+    try:
+        from PIL import Image
+        pil_img = Image.open(io.BytesIO(content))
+        if ext in (".jpg", ".jpeg") and pil_img.mode in ("RGBA", "LA", "P"):
+            bg = Image.new("RGB", pil_img.size, (255, 255, 255))
+            if pil_img.mode == "P":
+                pil_img = pil_img.convert("RGBA")
+            bg.paste(pil_img, mask=pil_img.split()[-1] if pil_img.mode == "RGBA" else None)
+            pil_img = bg
+        elif pil_img.mode not in ("RGB", "RGBA") and ext != ".png":
+            pil_img = pil_img.convert("RGB")
+
+        buf = io.BytesIO()
+        save_fmt = "PNG" if ext == ".png" else "JPEG"
+        pil_img.save(buf, format=save_fmt, quality=90)
+        upload_bytes = buf.getvalue()
+    except Exception as img_prep_err:
+        logger.debug("Image normalization skipped: %s", img_prep_err)
+        upload_bytes = content
+
+    try:
+        resp = httpx.post(
+            IMGHIPPO_API_URL,
+            headers={"X-API-Key": api_key},
+            files={"file": (filename, upload_bytes, mime)},
+            timeout=60,
+        )
+        if resp.is_success:
+            data = resp.json()
+            if data.get("success") or data.get("status") == 200:
+                url = (data.get("data") or {}).get("url")
+                if url:
+                    logger.info("IMGHIPPO_UPLOAD_SUCCESS | file=%s | url=%s", filename, url)
+                    return str(url)
+        logger.warning(f"imghippo rejected image upload for {filename}: {resp.status_code} {resp.text[:120]}")
+    except Exception as e:
+        logger.error(f"imghippo upload failed for {filename}: {e}")
+    return None
+
+
+def _extract_page_images(doc, page, page_num: int, stem: str) -> List[Dict[str, Any]]:
+    """Extract embedded raster images from a PDF page and upload them directly to imghippo.
+
+    Images are hosted on imghippo (public URL) instead of local disk.
+    """
+    images: List[Dict[str, Any]] = []
+    try:
+        for img_idx, img_info in enumerate(page.get_images(full=True) or []):
+            xref = img_info[0]
+            base_image = doc.extract_image(xref)
+            if not base_image:
+                continue
+            raw_bytes = base_image.get("image")
+            if not raw_bytes:
+                continue
+            w = int(base_image.get("width", 0) or 0)
+            h = int(base_image.get("height", 0) or 0)
+            if w < MIN_IMAGE_WIDTH or h < MIN_IMAGE_HEIGHT:
+                continue
+            ext = (base_image.get("ext") or "jpg").lower()
+            if ext == "jpeg":
+                ext = "jpg"
+            img_filename = f"{stem}_p{page_num}_{img_idx}.{ext}"
+            img_url = _upload_image_to_imghippo(raw_bytes, img_filename)
+            if img_url:
+                images.append({
+                    "page": page_num,
+                    "filename": img_filename,
+                    "url": img_url,
+                    "width": w,
+                    "height": h,
+                    "size": len(raw_bytes),
+                })
+    except Exception as e:
+        logger.debug("Page image extraction error on page %d: %s", page_num, e)
+    return images
+
 def extract_tables_pdf(filepath: str) -> List[Dict[str, Any]]:
     tables = []
     try:
@@ -186,11 +283,13 @@ def extract_tables_pdf(filepath: str) -> List[Dict[str, Any]]:
 
 
 def extract_pdf(filepath: str) -> Dict[str, Any]:
-    results = {"file": os.path.basename(filepath), "type": "pdf", "pages": [], "tables": []}
+    results = {"file": os.path.basename(filepath), "type": "pdf", "pages": [], "tables": [], "images": []}
 
     tables = extract_tables_pdf(filepath)
     results["tables"] = tables
     table_pages = {t["page"] for t in tables}
+
+    stem = Path(filepath).stem
 
     try:
         doc = fitz.open(filepath)
@@ -206,6 +305,14 @@ def extract_pdf(filepath: str) -> Dict[str, Any]:
             except Exception as e:
                 logger.warning(f"Text extraction failed on page {page_num}: {e}")
                 text = ""
+
+            # Extract embedded images and host directly on imghippo
+            page_images = _extract_page_images(doc, page, page_num, stem)
+            results["images"].extend(page_images)
+
+            if page_images:
+                img_notes = " ".join(f"[IMAGE_URL: {im['url']}]" for im in page_images)
+                text = f"{text}\nPage Images: {img_notes}" if text else f"Page Images: {img_notes}"
 
             if not text and page_num not in table_pages:
                 ocr_text = ocr_page(page)
