@@ -68,6 +68,16 @@ function displayCell(value: string | number | boolean | null): string {
   return String(value)
 }
 
+function publicImageUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null
+  try {
+    const url = new URL(value.trim())
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * The tenant's records, as a table whose columns the admin owns.
  *
@@ -108,6 +118,7 @@ export function RecordsPanel({ tenantId }: { tenantId: string }) {
   const [creating, setCreating] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
   const [columnForm, setColumnForm] = useState<{ column: RecordColumn | null } | null>(null)
+  const [uploadingImageFor, setUploadingImageFor] = useState<number | null>(null)
 
   const categories = useMemo(
     () => [...new Set(rows.map((r) => r.category).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
@@ -132,6 +143,30 @@ export function RecordsPanel({ tenantId }: { tenantId: string }) {
   }, [rows, search, category])
 
   const reload = state.reload
+
+  const uploadImageForRow = async (row: Offering, file?: File) => {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      toast.push('Only image files (PNG, JPG, WebP…) can be uploaded.', 'error')
+      return
+    }
+
+    setUploadingImageFor(row.id)
+    try {
+      const url = await uploadRecordImage(tenantId, file)
+      const updated = await action.run(() =>
+        offeringsApi.update(tenantId, row.id, { media_url: url, media_type: 'image' }),
+      )
+      if (updated) {
+        reload()
+        toast.push(`Image saved for ${row.name}`)
+      }
+    } catch (err) {
+      toast.push(err instanceof Error ? err.message : 'The image upload failed.', 'error')
+    } finally {
+      setUploadingImageFor(null)
+    }
+  }
 
   const removeRow = async (id: number, hard: boolean) => {
     const result = await action.run(() => offeringsApi.remove(tenantId, id, hard))
@@ -363,22 +398,73 @@ export function RecordsPanel({ tenantId }: { tenantId: string }) {
               <tbody className="divide-y divide-surface-line">
                 {filtered.map((row) => (
                   <tr key={row.id} className="align-top">
-                    {columns.map((column) => (
-                      <td key={column.key} className="px-4 py-3 text-slate-200">
-                        {column.key === 'name' ? (
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium text-slate-100">{row.name}</span>
-                            {!row.is_active && <Badge tone="neutral">removed</Badge>}
-                          </div>
-                        ) : column.key === 'short_label' && row.short_label ? (
-                          <Badge tone="accent">{row.short_label}</Badge>
-                        ) : (
-                          <span className={cn(column.type === 'long_text' && 'block max-w-xs truncate')}>
-                            {displayCell(cellValue(row, column))}
-                          </span>
-                        )}
-                      </td>
-                    ))}
+                    {columns.map((column) => {
+                      const imageUrl =
+                        column.key === 'media_url' ? publicImageUrl(cellValue(row, column)) : null
+                      return (
+                        <td key={column.key} className="px-4 py-3 text-slate-200">
+                          {column.key === 'name' ? (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium text-slate-100">{row.name}</span>
+                              {!row.is_active && <Badge tone="neutral">removed</Badge>}
+                            </div>
+                          ) : column.key === 'short_label' && row.short_label ? (
+                            <Badge tone="accent">{row.short_label}</Badge>
+                          ) : column.key === 'media_url' ? (
+                            <div className="flex min-w-36 items-center gap-2">
+                              {imageUrl ? (
+                                <a
+                                  href={imageUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title={imageUrl}
+                                  className="flex min-w-0 items-center gap-2 text-accent-700 hover:underline"
+                                >
+                                  <img
+                                    src={imageUrl}
+                                    alt=""
+                                    className="h-8 w-8 shrink-0 rounded object-cover ring-1 ring-inset ring-surface-line"
+                                  />
+                                  <span className="max-w-40 truncate text-xs">{imageUrl}</span>
+                                </a>
+                              ) : (
+                                <span className="text-slate-500">—</span>
+                              )}
+                              {canEditRow && (
+                                <label
+                                  className={`inline-flex cursor-pointer items-center gap-1 whitespace-nowrap rounded px-2 py-1 text-xs text-accent-700 hover:bg-accent-50 ${
+                                    uploadingImageFor === row.id ? 'pointer-events-none opacity-60' : ''
+                                  }`}
+                                  title={imageUrl ? 'Replace image' : 'Add image'}
+                                >
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="sr-only"
+                                    disabled={uploadingImageFor === row.id}
+                                    onChange={(event) => {
+                                      const file = event.target.files?.[0]
+                                      event.target.value = ''
+                                      void uploadImageForRow(row, file)
+                                    }}
+                                  />
+                                  <Upload className="h-3.5 w-3.5" />
+                                  {uploadingImageFor === row.id
+                                    ? 'Uploading…'
+                                    : imageUrl
+                                      ? 'Replace'
+                                      : 'Add image'}
+                                </label>
+                              )}
+                            </div>
+                          ) : (
+                            <span className={cn(column.type === 'long_text' && 'block max-w-xs truncate')}>
+                              {displayCell(cellValue(row, column))}
+                            </span>
+                          )}
+                        </td>
+                      )
+                    })}
                     <td className="px-4 py-3">
                       {(canEditRow || canRemove) && (
                         <div className="flex shrink-0 items-center justify-end gap-2">
@@ -583,7 +669,12 @@ function initialCells(columns: RecordColumn[], row?: Offering): Cells {
       cells[column.key] = Boolean(row ? cellValue(row, column) : column.key === 'is_active')
     } else {
       const value = row ? cellValue(row, column) : null
-      cells[column.key] = value === null || value === undefined ? '' : String(value)
+      cells[column.key] =
+        column.key === 'media_url'
+          ? publicImageUrl(value) ?? ''
+          : value === null || value === undefined
+            ? ''
+            : String(value)
     }
   }
   return cells

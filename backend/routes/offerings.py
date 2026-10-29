@@ -27,6 +27,7 @@ to the default tenant.
 import logging
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request, File, UploadFile, Form
 from fastapi.security import HTTPAuthorizationCredentials
@@ -55,6 +56,24 @@ try:
     from services.audit_context import set_audit_actor
 except ImportError:
     from backend.services.audit_context import set_audit_actor
+
+
+def _public_media_url(value: Any) -> Optional[str]:
+    """Keep only absolute public HTTP(S) media URLs, not pasted placeholders."""
+    url = str(value or "").strip()
+    if not url:
+        return None
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.lower() not in ("http", "https")
+        or not parsed.hostname
+        or any(char.isspace() for char in parsed.netloc)
+    ):
+        return None
+    return url
 
 
 # ── request models ────────────────────────────────────────────────────────
@@ -229,7 +248,7 @@ def _public(item: dict, columns: Optional[List[Dict[str, Any]]] = None) -> dict:
         "description": item.get("description"),
         "price": item.get("price"),
         "detail_url": item.get("detail_url"),
-        "media_url": item.get("media_url"),
+        "media_url": _public_media_url(item.get("media_url")),
         "media_type": item.get("media_type"),
         "attrs": item.get("attrs_json") or {},
         "values": values,
@@ -424,7 +443,7 @@ def create_offering(tenant_id: str, body: OfferingIn, principal: dict = Depends(
         description=body.description,
         short_description=body.short_description,
         price=(body.price or "").strip() or None,
-        media_url=body.media_url or None,
+        media_url=_public_media_url(body.media_url),
         media_type=body.media_type or "image",
         sort_order=body.sort_order,
         attrs_json=attrs_json,
@@ -456,8 +475,8 @@ def patch_offering(tenant_id: str, offering_id: int, body: OfferingPatch, princi
         updates["is_active"] = 1 if updates["is_active"] else 0
     if "price" in updates and not str(updates["price"]).strip():
         updates["price"] = None
-    if "media_url" in updates and not str(updates["media_url"]).strip():
-        updates["media_url"] = None
+    if "media_url" in updates:
+        updates["media_url"] = _public_media_url(updates["media_url"])
 
     if body.values is not None or body.attrs is not None:
         clean, attrs_json = _prepare_values(columns, _cell_values(body.values, body), body.attrs or {})

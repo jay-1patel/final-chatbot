@@ -64,7 +64,7 @@ SYSTEM_COLUMNS: List[Dict[str, Any]] = [
 SHARED_PRESENTATION_COLUMNS: List[Dict[str, Any]] = [
     {"key": "price", "label": "Price", "type": "text", "help": "Free text so a currency symbol is preserved. Blank when there is no price."},
     {"key": "detail_url", "label": "Link", "type": "text", "help": "Where the customer can see it."},
-    {"key": "media_url", "label": "Image URL", "type": "text", "help": "Shown on the product page."},
+    {"key": "media_url", "label": "Image URL", "type": "text", "help": "Upload an image to host it and save its public URL."},
 ]
 
 _SYSTEM_KEYS = {c["key"] for c in SYSTEM_COLUMNS}
@@ -583,4 +583,3 @@ def present(columns: List[Dict[str, Any]], row: Dict[str, Any]) -> Dict[str, Any
         else:
             out[column["key"]] = value if value is None else str(value)
     return out
-

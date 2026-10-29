@@ -648,8 +648,8 @@ export function MenuEditor({ tenantId, focusId }: { tenantId: string; focusId?: 
                                 {button.intent && <Badge tone="neutral">intent: {button.intent}</Badge>}
                                 {button.out_of_hours_only && <Badge tone="warning">out of hours only</Badge>}
                                 {!button.enabled && <Badge tone="muted">disabled</Badge>}
-                                {button.requires_feature && (
-                                  <Badge tone={gated ? 'danger' : 'muted'}>
+                                {button.requires_feature && gated && (
+                                  <Badge tone="danger">
                                     needs {FEATURE_LABELS[button.requires_feature as FeatureFlag]?.label}
                                   </Badge>
                                 )}

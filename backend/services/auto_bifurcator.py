@@ -155,6 +155,141 @@ from services.bifurcation_extract import (  # noqa: E402,F401
     merge_bifurcation_results,
 )
 
+
+def _menu_replacement_tombstones(
+    menu_buttons: List[Dict[str, Any]],
+    previous_buttons: List[Dict[str, Any]],
+    defaults: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Remove stale menu entries when an uploaded menu adds PDF-specific options."""
+    default_ids = {
+        _normalize_menu_button_key(str(button.get("id") or ""))
+        for button in defaults
+        if isinstance(button, dict) and button.get("id")
+    }
+    default_titles = {
+        _normalize_menu_button_key(str(button.get("title") or ""))
+        for button in defaults
+        if isinstance(button, dict) and button.get("title")
+    }
+    has_pdf_specific_options = any(
+        _normalize_menu_button_key(str(button.get("id") or "")) not in default_ids
+        and _normalize_menu_button_key(str(button.get("title") or "")) not in default_titles
+        for button in menu_buttons
+        if isinstance(button, dict)
+    )
+    if not has_pdf_specific_options:
+        return []
+
+    active_ids = {
+        _normalize_menu_button_key(str(button.get("id") or ""))
+        for button in menu_buttons
+        if isinstance(button, dict) and button.get("id")
+    }
+    removals: List[Dict[str, Any]] = []
+    seen_ids = set(active_ids)
+    for button in [*defaults, *previous_buttons]:
+        if not isinstance(button, dict):
+            continue
+        button_id = str(button.get("id") or "").strip()
+        normalized_id = _normalize_menu_button_key(button_id)
+        if not button_id or normalized_id in seen_ids:
+            continue
+        seen_ids.add(normalized_id)
+        removals.append({"id": button_id, "__remove__": True})
+    return removals
+
+
+def _attach_pdf_images_to_offerings(
+    offerings: List[Dict[str, Any]],
+    extracted_docs: List[Dict[str, Any]],
+) -> None:
+    """Host embedded PDF product images and attach unambiguous matches to records."""
+    if not offerings:
+        return
+    from routes.chat import _upload_to_imghippo
+
+    for source in extracted_docs:
+        content = source.get("_content")
+        if not content or str(source.get("ext") or "").lower() not in (".pdf", "pdf"):
+            continue
+
+        doc = fitz.open(stream=content, filetype="pdf")
+        uploaded_by_xref: Dict[int, str] = {}
+        try:
+            for page_number, page in enumerate(doc, start=1):
+                page_text = (page.get_text("text") or "").casefold()
+                page_offerings = [
+                    offering
+                    for offering in offerings
+                    if isinstance(offering, dict)
+                    and str(offering.get("name") or "").strip()
+                    and str(offering["name"]).strip().casefold() in page_text
+                ]
+                page_offerings.sort(
+                    key=lambda offering: page_text.find(
+                        str(offering.get("name") or "").strip().casefold()
+                    )
+                )
+                if not page_offerings:
+                    continue
+
+                page_images = []
+                seen_xrefs = set()
+                for image_index, image_info in enumerate(page.get_images(full=True)):
+                    xref = int(image_info[0])
+                    if xref in seen_xrefs:
+                        continue
+                    seen_xrefs.add(xref)
+                    extracted = doc.extract_image(xref)
+                    if not extracted:
+                        continue
+                    if int(extracted.get("width") or 0) < 120 or int(extracted.get("height") or 0) < 120:
+                        continue
+                    page_images.append((xref, image_index, extracted))
+
+                if not page_images:
+                    continue
+                if len(page_offerings) == 1 and len(page_images) == 1:
+                    matches = [(page_offerings[0], page_images[0])]
+                else:
+                    logger.warning(
+                        "PDF_IMAGE_MATCH_SKIPPED | file=%s | page=%d | images=%d | products=%d",
+                        source.get("filename"),
+                        page_number,
+                        len(page_images),
+                        len(page_offerings),
+                    )
+                    continue
+
+                for offering, (xref, image_index, extracted) in matches:
+                    current_url = str(offering.get("media_url") or "").strip()
+                    if current_url.startswith(("http://", "https://")):
+                        continue
+                    url = uploaded_by_xref.get(xref)
+                    if not url:
+                        extension = str(extracted.get("ext") or "jpg").lower()
+                        if extension == "jpeg":
+                            extension = "jpg"
+                        filename = (
+                            f"{Path(str(source.get('filename') or 'document')).stem}"
+                            f"_p{page_number}_{image_index}.{extension}"
+                        )
+                        uploaded_url = _upload_to_imghippo(extracted["image"], filename)
+                        url = tenancy_schemas.extract_first_url(uploaded_url or "")
+                        if not url:
+                            raise RuntimeError(
+                                f"Could not get a public URL for extracted PDF image '{filename}' "
+                                "from ImageHipo. "
+                                "Check the ImageHipo API key and try again."
+                            )
+                        uploaded_by_xref[xref] = url
+                    offering["media_url"] = url
+                    offering["media_type"] = "image"
+        finally:
+            doc.close()
+
+
 class AutoBifurcator:
     """Core auto-bifurcation and auto-configuration pipeline."""
 
@@ -660,6 +795,41 @@ class AutoBifurcator:
 
                     continue
 
+                section_tag = None
+                for table_row in tbl:
+                    for cell in table_row:
+                        section_match = re.search(
+                            r"\[SECTION:\s*([^\]]+)\]",
+                            str(cell or ""),
+                            re.IGNORECASE,
+                        )
+                        if section_match:
+                            section_tag = section_match.group(1).upper()
+                            break
+                    if section_tag:
+                        break
+
+                if section_tag:
+                    if "BRAND" in section_tag:
+                        target_section = "brand"
+                    elif "OPERATION" in section_tag or "DOMAIN" in section_tag:
+                        target_section = "operations"
+                    elif "MENU" in section_tag or "WHATSAPP" in section_tag:
+                        target_section = "menu"
+                    elif "CATALOG" in section_tag or "OFFERING" in section_tag:
+                        target_section = "catalog"
+                    elif "FAQ" in section_tag or "POLIC" in section_tag:
+                        target_section = "faqs"
+                    elif "INFO PAGE" in section_tag or "INTENT" in section_tag:
+                        target_section = "info_pages"
+                    elif "PERSONA" in section_tag or "GUARD" in section_tag:
+                        target_section = "guardrails"
+                    else:
+                        target_section = None
+                    if target_section:
+                        sections[target_section]["tables"].append(tbl)
+                        continue
+
                 first_row_str = " ".join(str(c).lower() for c in tbl[0])
 
                 if any(k in first_row_str for k in ("domain field", "why we need it", "your answer")) and (
@@ -875,16 +1045,35 @@ class AutoBifurcator:
                 for row in tbl[1:]:
 
                     if not row or not row[0].strip():
+                        continue
 
+                    row_header = " ".join(str(cell or "") for cell in row).casefold()
+                    if "[section:" in row_header or (
+                        "button title" in row_header
+                        or ("description" in row_header and "section" in row_header and "action" in row_header)
+                    ):
                         continue
 
                     title = row[0].strip()[:24]
-
                     desc = (row[1].strip() if len(row) > 1 else title)[:72]
-
                     sec = (row[2].strip() if len(row) > 2 else "Explore")[:24]
-
-                    action = (row[3].strip() if len(row) > 3 else "offerings").lower()
+                    raw_action = (row[3].strip() if len(row) > 3 else "offerings")
+                    id_part = re.split(r"\b(?:intent|flow)\s*:", raw_action, maxsplit=1, flags=re.IGNORECASE)[0]
+                    id_match = re.search(
+                        r"\bmenu(?:[_\s-]+[a-z0-9]+)+",
+                        id_part,
+                        flags=re.IGNORECASE,
+                    )
+                    action_match = re.search(
+                        r"\b(intent|flow)\s*:\s*([a-z][a-z0-9 _-]*)",
+                        raw_action,
+                        flags=re.IGNORECASE,
+                    )
+                    action = (
+                        re.sub(r"[-\s]+", "_", action_match.group(2)).strip("_").lower()
+                        if action_match
+                        else raw_action.lower()
+                    )
                     action = action.replace(" ", "_").replace("-", "_")
 
                     # Preserve IT info-page intents and known flows; don't collapse them to offerings
@@ -923,14 +1112,16 @@ class AutoBifurcator:
                         action = "benefits"
                     elif "detail" in action:
                         action = "offering_details"
+                    elif action_match and action_match.group(1).lower() == "intent":
+                        pass
                     else:
                         action = "offerings"
 
 
 
-                    menu_items.append({
+                    menu_item = {
 
-                        "id": _menu_button_id(title),
+                        "id": _menu_button_id(id_match.group(0)) if id_match else _menu_button_id(title),
 
                         "title": title,
 
@@ -940,7 +1131,10 @@ class AutoBifurcator:
 
                         "action": action,
 
-                    })
+                    }
+                    if action_match:
+                        menu_item[action_match.group(1).lower()] = action
+                    menu_items.append(menu_item)
 
 
 
@@ -1033,10 +1227,10 @@ class AutoBifurcator:
                         kl = key.lower()
                         if any(tok in kl for tok in ("image url", "image", "media url", "media_url", "photo", "thumbnail")):
                             v = (val or "").strip()
-                            if v and not v.startswith("[") and ("http://" in v.lower() or "https://" in v.lower()):
-                                return v
                             if v and not v.startswith("["):
-                                return v
+                                url = tenancy_schemas.extract_first_url(v)
+                                if url:
+                                    return url
                     return ""
 
 
@@ -1596,6 +1790,7 @@ class AutoBifurcator:
         if len(menu_items) < 3:
             menu_items = self.extract_menu_section({"text": "", "tables": []}, vertical=vertical)
         offerings = draft.get("offerings") or []
+        _attach_pdf_images_to_offerings(offerings, extracted_docs)
         faqs = draft.get("faqs") or []
         articles = draft.get("knowledge_articles") or []
         intents = draft.get("intents") or []
@@ -1655,7 +1850,10 @@ class AutoBifurcator:
             if isinstance(content, str):
                 import base64
                 content = base64.b64decode(content)
-            extracted_docs.append(self.extract_file_content(fname, content))
+            extracted = self.extract_file_content(fname, content)
+            if Path(fname).suffix.lower() == ".pdf":
+                extracted["_content"] = content
+            extracted_docs.append(extracted)
 
         combined_text = "\n\n".join(d.get("text") or "" for d in extracted_docs)
         presence = self._kit_section_presence(combined_text)
@@ -1771,6 +1969,7 @@ class AutoBifurcator:
         intents = self._enrich_intents_with_offerings(
             intents, offerings, brand.get("name") or ""
         )
+        _attach_pdf_images_to_offerings(offerings, extracted_docs)
 
         return {
             "status": "staged",
@@ -1989,13 +2188,27 @@ class AutoBifurcator:
             # (or caller opted into a full non-careful reconfigure).
             if has_real_menu or (not careful_brand_merge and not draft.get("menu")):
                 brand_for_menu = draft.get("brand") or clean_brand
+                previous_menu = draft.get("menu") or {}
+                previous_buttons = (
+                    previous_menu.get("buttons") or []
+                    if isinstance(previous_menu, dict)
+                    else []
+                )
+                vertical_menu_defaults = (
+                    (get_vertical_defaults(vertical) or {}).get("menu", {}).get("buttons") or []
+                )
+                menu_removals = _menu_replacement_tombstones(
+                    menu_buttons,
+                    previous_buttons if isinstance(previous_buttons, list) else [],
+                    vertical_menu_defaults if isinstance(vertical_menu_defaults, list) else [],
+                )
                 draft["menu"] = {
                     "key": "kb_main",
                     "header": brand_for_menu.get("name") or clean_brand["name"],
                     "body": "Welcome! How can we assist you today?",
                     "footer": "Select an option or type your query directly",
                     "button_text": "Select Option",
-                    "buttons": menu_buttons,
+                    "buttons": menu_buttons + menu_removals,
                 }
 
             # Company info-page intents (technologies/projects/careers/benefits)
@@ -2007,7 +2220,6 @@ class AutoBifurcator:
             }
             _IT_INFO = ("technologies", "projects", "careers", "benefits")
             try:
-                from shared.tenancy.defaults import get_vertical_defaults
                 if vertical == "it_software":
                     for di in (get_vertical_defaults(vertical).get("intents") or []):
                         name = di.get("name")
@@ -2403,7 +2615,13 @@ class AutoBifurcator:
     ) -> Dict[str, Any]:
         """Extract + bifurcate a single already-saved upload for this tenant."""
         doc_data = self.extract_file_content(filename, content)
+        if Path(filename).suffix.lower() == ".pdf":
+            doc_data["_content"] = content
         bifurcation = self.bifurcate_with_llm([doc_data])
+        _attach_pdf_images_to_offerings(
+            bifurcation.get("offerings") or [],
+            [doc_data],
+        )
         locked_vertical = resolve_locked_vertical(
             self.tenant_id, bifurcation.get("vertical") or "generic"
         )
@@ -2473,10 +2691,16 @@ class AutoBifurcator:
 
             # Extract content
             doc_data = self.extract_file_content(filename, content)
+            if Path(filename).suffix.lower() == ".pdf":
+                doc_data["_content"] = content
             extracted_docs.append(doc_data)
 
         # Run LLM semantic bifurcation
         bifurcation = self.bifurcate_with_llm(extracted_docs)
+        _attach_pdf_images_to_offerings(
+            bifurcation.get("offerings") or [],
+            extracted_docs,
+        )
         locked_vertical = resolve_locked_vertical(
             self.tenant_id, bifurcation.get("vertical") or "generic"
         )

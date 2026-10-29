@@ -1,4 +1,4 @@
-# Frequently Asked Questions — Stay Safe Block lost cards immediately via the menu, SMS BLOCK to 567676 or 1800
+# Frequently Asked Questions — State Bank of India (SBI)
 
 ### Q: How do I immediately block a lost or stolen card?
 **A:** Tap Block Lost Card and confirm the last 4 digits, SMS BLOCK <last 4 digits> to 567676 from your registered mobile, or call 1800 1234 (24x7) and press 0 then 1.

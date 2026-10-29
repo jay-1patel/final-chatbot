@@ -6,6 +6,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import fitz
+
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
 if BACKEND_DIR not in sys.path:
@@ -15,16 +17,157 @@ if PROJECT_ROOT not in sys.path:
 
 from services.auto_bifurcator import (  # noqa: E402
     AutoBifurcator,
+    _attach_pdf_images_to_offerings,
     _menu_button_id,
+    _menu_replacement_tombstones,
     _normalize_menu_button_key,
     _sanitize_menu_buttons,
 )
 from shared.tenancy.merge import merge_layers  # noqa: E402
 from shared.tenancy.defaults import get_vertical_defaults  # noqa: E402
 from bots.customer_b2c.menus import get_main_menu  # noqa: E402
+from routes.offerings import _public_media_url  # noqa: E402
 
 
 class MenuButtonDedupeTests(unittest.TestCase):
+    def test_records_only_expose_public_http_image_urls(self):
+        self.assertIsNone(_public_media_url("paste https image URL"))
+        self.assertIsNone(_public_media_url("/uploaded_files/image.png"))
+        self.assertEqual(
+            _public_media_url("https://imghipo.com/image.png"),
+            "https://imghipo.com/image.png",
+        )
+
+    def test_pdf_embedded_image_is_uploaded_and_attached_to_matching_offering(self):
+        pdf = fitz.open()
+        page = pdf.new_page()
+        page.insert_text((72, 72), "Platinum Credit Card")
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 200), False)
+        pixmap.clear_with(240)
+        page.insert_image(
+            fitz.Rect(72, 100, 272, 300),
+            stream=pixmap.tobytes("png"),
+        )
+        content = pdf.tobytes()
+        pdf.close()
+
+        offering = {"name": "Platinum Credit Card"}
+        with patch(
+            "routes.chat._upload_to_imghippo",
+            return_value="https://imghipo.com/platinum-card.png",
+        ) as upload:
+            _attach_pdf_images_to_offerings(
+                [offering],
+                [{"filename": "catalog.pdf", "ext": ".pdf", "_content": content}],
+            )
+
+        self.assertEqual(offering["media_url"], "https://imghipo.com/platinum-card.png")
+        self.assertEqual(offering["media_type"], "image")
+        upload.assert_called_once()
+
+    def test_staged_pdf_offering_keeps_its_public_image_url(self):
+        pdf = fitz.open()
+        page = pdf.new_page()
+        page.insert_text((72, 72), "Platinum Credit Card")
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 200), False)
+        pixmap.clear_with(240)
+        page.insert_image(
+            fitz.Rect(72, 100, 272, 300),
+            stream=pixmap.tobytes("png"),
+        )
+        content = pdf.tobytes()
+        pdf.close()
+
+        bifurcator = AutoBifurcator("state-bank-of-india")
+        with (
+            patch.object(
+                bifurcator,
+                "bifurcate_with_llm",
+                return_value={
+                    "brand": {"name": "State Bank of India"},
+                    "vertical": "banking",
+                    "offerings": [{"name": "Platinum Credit Card"}],
+                },
+            ),
+            patch(
+                "routes.chat._upload_to_imghippo",
+                return_value="https://imghipo.com/platinum-card.png",
+            ),
+        ):
+            staged = bifurcator.stage_files(
+                [{"filename": "catalog.pdf", "content": content}]
+            )
+
+        self.assertEqual(
+            staged["offerings"][0]["media_url"],
+            "https://imghipo.com/platinum-card.png",
+        )
+
+    def test_pdf_image_is_not_uploaded_when_product_match_is_ambiguous(self):
+        pdf = fitz.open()
+        page = pdf.new_page()
+        page.insert_text((72, 72), "Platinum Credit Card")
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 200), False)
+        pixmap.clear_with(240)
+        image_bytes = pixmap.tobytes("png")
+        page.insert_image(fitz.Rect(72, 100, 272, 300), stream=image_bytes)
+        second_pixmap = fitz.Pixmap(
+            fitz.csRGB,
+            fitz.IRect(0, 0, 200, 200),
+            False,
+        )
+        second_pixmap.clear_with(220)
+        page.insert_image(
+            fitz.Rect(300, 100, 500, 300),
+            stream=second_pixmap.tobytes("png"),
+        )
+        content = pdf.tobytes()
+        pdf.close()
+
+        offering = {"name": "Platinum Credit Card"}
+        with patch("routes.chat._upload_to_imghippo") as upload:
+            _attach_pdf_images_to_offerings(
+                [offering],
+                [{"filename": "catalog.pdf", "ext": ".pdf", "_content": content}],
+            )
+
+        self.assertNotIn("media_url", offering)
+        upload.assert_not_called()
+
+    def test_pdf_image_upload_failure_is_reported(self):
+        pdf = fitz.open()
+        page = pdf.new_page()
+        page.insert_text((72, 72), "Platinum Credit Card")
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 200), False)
+        pixmap.clear_with(240)
+        page.insert_image(
+            fitz.Rect(72, 100, 272, 300),
+            stream=pixmap.tobytes("png"),
+        )
+        content = pdf.tobytes()
+        pdf.close()
+
+        with patch("routes.chat._upload_to_imghippo", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "public URL.*ImageHipo"):
+                _attach_pdf_images_to_offerings(
+                    [{"name": "Platinum Credit Card"}],
+                    [{"filename": "catalog.pdf", "ext": ".pdf", "_content": content}],
+                )
+
+    def test_catalog_discards_placeholder_image_url_text(self):
+        items = AutoBifurcator("state-bank-of-india").extract_catalog_section(
+            {
+                "tables": [[
+                    ["Service / Offering", "Image URL"],
+                    ["Platinum Credit Card", "paste https image URL"],
+                ]]
+            },
+            vertical="banking",
+        )
+
+        self.assertEqual(len(items), 1)
+        self.assertNotIn("media_url", items[0])
+
     def test_pdf_extractor_keeps_all_ten_menu_items(self):
         rows = [["Title", "Description", "Section", "Action"]]
         rows.extend(
@@ -39,6 +182,51 @@ class MenuButtonDedupeTests(unittest.TestCase):
 
         self.assertEqual(len(items), 10)
         self.assertEqual(items[-1]["title"], "Banking option 10")
+
+    def test_pdf_menu_table_with_leading_section_marker_keeps_all_ten_items(self):
+        rows = [
+            ["[SECTION: WHATSAPP MENU]", "", "", ""],
+            ["Button Title (<=24ch)", "Description (<=72ch)", "Section", "Action"],
+            ["Banking Products", "Accounts, cards & loans", "Banking Products", "menu_products _ intent: menu_products _"],
+            ["Cards", "Credit & debit card help", "Banking Products", "menu_cards _ intent: offerings"],
+            ["Loans", "Personal, home & business loans", "Banking Products", "menu_loans _ intent: offerings"],
+            ["Deposits & FDs", "Savings, fixed & recurring deposit rates", "Banking Products", "menu_deposits _ intent: offerings"],
+            ["Check Eligibility", "Get a quick check", "Talk To Us", "menu_eligibility _ flow: book callback _"],
+            ["Request a Callback", "Have us call you back", "Talk To Us", "menu_callback _ flow: book callback _"],
+            ["Raise a Complaint", "Register a grievance", "Support", "menu_grievance _ flow: raise ticket _"],
+            ["Branch & Support", "Find us / contact support", "Support", "menu_branch _ intent: branch locator _"],
+            ["Talk to Human", "Chat with our team", "Support", "menu_human _ flow: book callback _"],
+            ["Block Lost Card", "Instantly block lost or stolen card", "Support", "menu_block_card _ _ flow: raise ticket _"],
+        ]
+        bifurcator = AutoBifurcator("state-bank-of-india")
+
+        sections = bifurcator.partition_sections(
+            [{"text": "[SECTION: WHATSAPP MENU]", "tables": [rows]}]
+        )
+        items = bifurcator.extract_menu_section(sections["menu"], vertical="banking")
+        buttons = _sanitize_menu_buttons(items, vertical="banking")
+
+        self.assertEqual(len(sections["menu"]["tables"]), 1)
+        self.assertEqual(len(items), 10)
+        self.assertEqual(
+            [item["title"] for item in items],
+            [
+                "Banking Products",
+                "Cards",
+                "Loans",
+                "Deposits & FDs",
+                "Check Eligibility",
+                "Request a Callback",
+                "Raise a Complaint",
+                "Branch & Support",
+                "Talk to Human",
+                "Block Lost Card",
+            ],
+        )
+        self.assertEqual(buttons[0]["id"], "menu_products")
+        self.assertEqual(buttons[0]["intent"], "menu_products")
+        self.assertEqual(buttons[7]["intent"], "branch_locator")
+        self.assertEqual(buttons[-1]["flow"], "raise_ticket")
 
     def test_ten_extracted_menu_items_render_as_ten_whatsapp_rows(self):
         rows = [["Title", "Description", "Section", "Action"]]
@@ -84,6 +272,64 @@ class MenuButtonDedupeTests(unittest.TestCase):
         ]
         self.assertEqual(len(rendered_rows), 10)
         self.assertEqual(rendered_rows[-1]["title"], "Banking option 10")
+
+    def test_pdf_menu_replaces_vertical_defaults_and_previous_custom_buttons(self):
+        rows = [["Title", "Description", "Section", "Action"]]
+        rows.extend(
+            [f"Banking option {index}", f"Description {index}", "Banking", "faq"]
+            for index in range(1, 11)
+        )
+        extracted = AutoBifurcator("state-bank-of-india").extract_menu_section(
+            {"tables": [rows]},
+            vertical="banking",
+        )
+        buttons = _sanitize_menu_buttons(extracted, vertical="banking")
+        defaults = get_vertical_defaults("banking")
+        default_buttons = defaults["menu"]["buttons"]
+        previous_custom = {
+            "id": "previous_custom_option",
+            "title": "Old option",
+            "description": "No longer in the PDF",
+            "section": "Banking",
+        }
+        removals = _menu_replacement_tombstones(
+            buttons,
+            [*default_buttons, previous_custom],
+            default_buttons,
+        )
+
+        published = merge_layers(
+            merge_layers(
+                defaults,
+                {"menu": {"buttons": [*default_buttons, previous_custom]}},
+            ),
+            {"menu": {"buttons": [*buttons, *removals]}},
+        )
+
+        published_buttons = published["menu"]["buttons"]
+        self.assertEqual(len(published_buttons), 10)
+        self.assertEqual(
+            [button["title"] for button in published_buttons],
+            [f"Banking option {index}" for index in range(1, 11)],
+        )
+
+    def test_vertical_defaults_are_kept_when_extract_has_no_custom_options(self):
+        defaults = get_vertical_defaults("banking")
+        default_buttons = defaults["menu"]["buttons"]
+
+        removals = _menu_replacement_tombstones(
+            default_buttons,
+            default_buttons,
+            default_buttons,
+        )
+
+        self.assertEqual(removals, [])
+
+    def test_publish_does_not_shadow_vertical_defaults_import(self):
+        self.assertNotIn(
+            "get_vertical_defaults",
+            AutoBifurcator.apply_bifurcation.__code__.co_varnames,
+        )
 
     def test_menu_button_id_uses_underscores(self):
         self.assertEqual(_menu_button_id("menu-products"), "menu_products")
