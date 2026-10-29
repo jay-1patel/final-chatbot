@@ -63,6 +63,7 @@ from .schemas import (
 from .store import (
     create_tenant_token,
     ensure_tenant,
+    find_registry_conflict,
     get_tenant,
     get_tenant_token,
     list_tenant_tokens,
@@ -91,8 +92,9 @@ __all__ = [
     # defaults
     "VERTICAL_DEFAULTS", "get_vertical_defaults", "list_verticals", "DEFAULT_TENANT_ID",
     # store
-    "ensure_tenant", "get_tenant", "list_tenants", "create_tenant_token",
-    "get_tenant_token", "list_tenant_tokens", "revoke_tenant_token",
+    "ensure_tenant", "find_registry_conflict", "get_tenant", "list_tenants",
+    "create_tenant_token", "get_tenant_token", "list_tenant_tokens",
+    "revoke_tenant_token",
     # records
     "COLUMN_TYPES", "DEFAULT_COLUMNS", "SYSTEM_COLUMNS", "ColumnError",
     "default_columns_for", "sync_columns",

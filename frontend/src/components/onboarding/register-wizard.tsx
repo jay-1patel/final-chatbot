@@ -89,7 +89,26 @@ export function RegisterWizard({ onSubmitted }: { onSubmitted?: () => void } = {
 
   const patch = (values: Partial<WizardDraft>) => setDraft((d) => ({ ...d, ...values }))
 
-  const tenantIdTaken = tenants.some((t) => t.id === draft.tenantId.trim())
+  // Match registry id/slug only (same rules as backend find_registry_conflict).
+  // Do not treat another tenant's display name as "this id is taken".
+  const tenantIdTaken = (() => {
+    const id = draft.tenantId.trim()
+    if (!id) return false
+    const norm = (v: string) => v.toLowerCase().replace(/[-_\s]/g, '')
+    const n = norm(id)
+    return tenants.some((t) => {
+      const tid = String(t.id || '')
+      const slug = String(t.slug || '')
+      return (
+        tid === id ||
+        slug === id ||
+        tid.toLowerCase() === id.toLowerCase() ||
+        slug.toLowerCase() === id.toLowerCase() ||
+        norm(tid) === n ||
+        norm(slug) === n
+      )
+    })
+  })()
   const error = useMemo(
     () => validationError(stepId, draft, tenantIdTaken, Boolean(draft.tenantId.trim())),
     [stepId, draft, tenantIdTaken],

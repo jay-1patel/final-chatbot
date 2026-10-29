@@ -293,8 +293,18 @@ def create_tenant(
     tid = str(body.tenant_id or "").strip()
     if not tid:
         raise HTTPException(status_code=400, detail="tenant_id is required")
-    if tenancy_store.get_tenant(tid):
-        raise HTTPException(status_code=409, detail=f"tenant '{tid}' already exists")
+    # Registry id/slug only — do not use get_tenant() here; that also matches
+    # display_name aliases and falsely reports "already exists".
+    slug = (body.slug or tid).strip() or tid
+    conflict = tenancy_store.find_registry_conflict(tid, slug)
+    if conflict:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"tenant '{tid}' already exists "
+                f"(conflicts with '{conflict.get('id')}' / slug '{conflict.get('slug')}')"
+            ),
+        )
 
     from shared.tenancy import loader as _loader
 
@@ -306,11 +316,11 @@ def create_tenant(
 
     website_clean = (body.website or "").strip()
     with get_db_context() as conn:
-        if conn.execute("SELECT 1 FROM tenants WHERE id = ?", (tid,)).fetchone():
+        if tenancy_store.find_registry_conflict(tid, slug):
             raise HTTPException(status_code=409, detail=f"tenant '{tid}' already exists")
         tenancy_store.ensure_tenant(
             tid,
-            slug=body.slug or tid,
+            slug=slug,
             vertical=body.vertical,
             waba_phone_id=body.waba_phone_id,
             display_name=body.display_name,

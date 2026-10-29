@@ -119,14 +119,64 @@ def ensure_tenant(tenant_id: str, *, slug: str = "", vertical: str = "generic",
     return True
 
 
+def _normalize_tenant_key(value: str) -> str:
+    """Collapse id/slug punctuation so ``leeway-softech`` == ``leewaysoftech``."""
+    return str(value or "").replace("-", "").replace("_", "").replace(" ", "").lower()
+
+
+def find_registry_conflict(tenant_id: str, slug: str = "") -> Optional[dict]:
+    """Return a tenant that already owns this registry id/slug.
+
+    Used by create-tenant / approval flows. Matches id and slug only
+    (exact + case-insensitive + punctuation-normalized). Does **not** match
+    ``display_name`` / ``company_name`` — those aliases are for inbound
+    resolution via ``get_tenant``, and treating them as id conflicts falsely
+    blocks registering ``leeway-softech`` when another row is merely *named*
+    "Leeway Softech".
+    """
+    tid = str(tenant_id or "").strip()
+    slug_v = str(slug or tid).strip() or tid
+    if not tid:
+        return None
+    norms = {_normalize_tenant_key(tid), _normalize_tenant_key(slug_v)}
+    norms.discard("")
+    if not norms:
+        return None
+    placeholders = ", ".join("?" for _ in norms)
+    norm_params = tuple(norms)
+    with _db().get_db_context() as conn:
+        try:
+            row = conn.execute(
+                f"""SELECT * FROM tenants WHERE
+                       id = ? OR id = ?
+                       OR LOWER(COALESCE(slug, '')) = LOWER(?)
+                       OR LOWER(COALESCE(slug, '')) = LOWER(?)
+                       OR LOWER(REPLACE(REPLACE(REPLACE(COALESCE(id, ''), '-', ''), '_', ''), ' ', ''))
+                            IN ({placeholders})
+                       OR LOWER(REPLACE(REPLACE(REPLACE(COALESCE(slug, ''), '-', ''), '_', ''), ' ', ''))
+                            IN ({placeholders})
+                    LIMIT 1""",
+                (tid, slug_v, tid, slug_v) + norm_params + norm_params,
+            ).fetchone()
+        except Exception as exc:
+            logger.warning(
+                "Could not check tenant registry conflict for %s: %s", tenant_id, exc
+            )
+            return None
+    return dict(row) if row else None
+
+
 def get_tenant(tenant_id: str) -> Optional[dict]:
     with _db().get_db_context() as conn:
         try:
             tid_str = str(tenant_id or "").strip()
-            norm = tid_str.replace("-", "").replace("_", "").replace(" ", "").lower()
+            norm = _normalize_tenant_key(tid_str)
             cols = {c[1] for c in conn.execute("PRAGMA table_info(tenants)").fetchall()}
-            # Exact matches only. Prefix LIKE ("l%" → leeway-softech / ltfinance)
-            # caused cross-tenant profile loads and mixed WhatsApp greetings.
+            # Resolve by id/slug (exact + normalized). Also accept display_name /
+            # company_name aliases for inbound routing — e.g. a user types the
+            # brand name. Prefix LIKE ("l%" → leeway-softech / ltfinance) is
+            # intentionally avoided; it caused cross-tenant profile loads.
+            # Create/register must NOT use this helper — see find_registry_conflict.
             where_clauses = [
                 "id = ?",
                 "slug = ?",
