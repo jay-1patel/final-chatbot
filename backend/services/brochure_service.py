@@ -284,6 +284,37 @@ class BrochureService:
                 except Exception as exc:
                     logger.debug(f"profile brochure fallback failed: {exc}")
 
+            # Fallback: active product rows tagged as catalogue / brochure PDFs.
+            # Tenants that only stored the catalogue on a product media_url still
+            # need "send catalogue" to deliver the document.
+            if not brochures and tenant_id:
+                try:
+                    import database as db
+                    products = db.list_products(active_only=True, limit=50, tenant_id=tenant_id)
+                    for prod in products or []:
+                        media = str(prod.get("media_url") or "").strip()
+                        media_type = str(prod.get("media_type") or "").strip().lower()
+                        category = str(prod.get("category") or "").strip().lower()
+                        is_catalogish = category in {
+                            "catalogue", "catalog", "brochure", "brochures", "price list",
+                        } or media_type in {"pdf", "document"} or media.lower().endswith(".pdf")
+                        if not media or not is_catalogish:
+                            continue
+                        if not media.startswith(("http://", "https://", "/uploaded_files/", "/api/")):
+                            continue
+                        name = str(prod.get("name") or "Catalogue").strip() or "Catalogue"
+                        filename = name if name.lower().endswith(".pdf") else f"{name}.pdf"
+                        brochures.append(Brochure(
+                            file_id=int(prod.get("id") or 0),
+                            tenant_id=tenant_id,
+                            module="catalogue",
+                            name=name,
+                            filename=filename,
+                            url=media,
+                        ))
+                except Exception as exc:
+                    logger.debug("product catalogue fallback failed: %s", exc)
+
             # Cache the result
             self.brochure_cache[cache_key] = brochures
             return brochures
@@ -609,19 +640,42 @@ def send_relevant_brochure(wa_id: str, query: str = None, tenant_id: str = None,
     Returns True if brochure was sent successfully.
     """
     brochure = get_relevant_brochure(query, tenant_id, button_id)
+
+    # Last-resort fallback used by older catalogue helpers.
+    if (not brochure or not brochure.url) and tenant_id:
+        try:
+            from kb.services.whatsapp import get_catalogue_doc
+            doc = get_catalogue_doc(tenant_id=tenant_id)
+            if doc and doc.get("url"):
+                brochure = Brochure(
+                    file_id=0,
+                    tenant_id=tenant_id,
+                    module="catalogue",
+                    name=doc.get("filename") or "Catalogue.pdf",
+                    filename=doc.get("filename") or "Catalogue.pdf",
+                    url=doc["url"],
+                )
+        except Exception as exc:
+            logger.debug("get_catalogue_doc fallback failed: %s", exc)
     
     if brochure and brochure.url:
         try:
             from kb.services.whatsapp import send_document_with_caption
-            caption = f"Here is the {brochure.name or 'requested brochure'} based on your query."
-            return send_document_with_caption(
+            caption = f"Here is the {brochure.name or 'requested brochure'}."
+            ok = send_document_with_caption(
                 to=wa_id,
                 document_url=brochure.url,
                 filename=brochure.filename,
                 caption=caption
             )
+            logger.info(
+                "BROCHURE_SENT | wa_id=%s | tenant=%s | file=%s | ok=%s",
+                wa_id, tenant_id, brochure.filename, ok,
+            )
+            return bool(ok)
         except Exception as e:
             logger.error(f"Failed to send brochure to {wa_id}: {e}")
             return False
     
+    logger.warning("BROCHURE_NOT_FOUND | wa_id=%s | tenant=%s | query=%r", wa_id, tenant_id, query)
     return False

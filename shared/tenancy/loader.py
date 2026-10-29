@@ -21,6 +21,7 @@ from .defaults import (
     DEFAULT_TENANT_ID,
     get_vertical_defaults,
     scrub_company_info_pages,
+    scrub_foreign_vertical_artifacts,
     vertical_has_company_info_pages,
 )
 from .merge import collect_strings, merge_layers
@@ -137,6 +138,10 @@ def build_profile(tenant_id: str, *, db_layer: Optional[Dict[str, Any]] = None,
     # older publish or kit left them in the DB layer.
     if not vertical_has_company_info_pages(vertical):
         scrub_company_info_pages(merged)
+
+    # Keyed menu/intent merge can leave another vertical's kit rows on this
+    # tenant after a bad bifurcate/publish (e.g. Leeway Technologies on MMT).
+    scrub_foreign_vertical_artifacts(merged, vertical)
 
     try:
         return TenantProfile(**merged)

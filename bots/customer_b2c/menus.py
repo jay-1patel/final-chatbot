@@ -64,8 +64,15 @@ def get_main_menu(wa_id: str = "", tenant_id: Optional[str] = None) -> dict:
 
     # Fallback to code defaults if tenant has no buttons
     if not items:
-        items = get_kb_main_menu(wa_id)
+        items = get_kb_main_menu(wa_id, tenant_id=resolved_tid)
         header_title = personalize_header(wa_id, user_type="b2c")
+
+    logger.info(
+        "MAIN_MENU | tenant=%s | n=%d | titles=%s",
+        resolved_tid,
+        len(items),
+        [it.title for it in items[:10]],
+    )
 
     # 3. Smart Switch
     # When 1 to 3 items exist, send high-conversion single-tap Quick Reply buttons

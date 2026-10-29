@@ -37,9 +37,10 @@ def clear_webhook_logs():
 
 @router.get("/status")
 def webhook_status():
+    """Public status endpoint — never leaks secrets (see BUG-06 / M6)."""
     return {
         "webhook_url": "/webhook",
-        "verify_token": WHATSAPP_VERIFY_TOKEN,
+        "verify_token_set": bool(WHATSAPP_VERIFY_TOKEN),
         "api_provider": "send2.digital",
         "send2_config": {
             "username_set": bool(SEND2_USERNAME),

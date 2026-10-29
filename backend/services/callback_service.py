@@ -659,7 +659,7 @@ class GoogleMeetService:
         end_time: str = "",
         attendees: Optional[List[Dict[str, str]]] = None,
         timezone: str = "Asia/Kolkata",
-        tenant_id: str = "leewaysoftech",
+        tenant_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a Google Calendar event with Meet link using tenant OAuth tokens."""
         from services.google_meet_service import create_meeting_sync as gmeet_create_sync
@@ -683,7 +683,7 @@ class GoogleMeetService:
         end_time: str = "",
         attendees: Optional[List[Dict[str, str]]] = None,
         timezone: str = "Asia/Kolkata",
-        tenant_id: str = "leewaysoftech",
+        tenant_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Async wrapper using tenant OAuth tokens."""
         from services.google_meet_service import create_meeting as gmeet_create_async
@@ -708,7 +708,7 @@ class GoogleMeetService:
         """Get calendar events to check for conflicts."""
         return {"ok": True, "events": []}
 
-    async def delete_event(self, calendar_id: str, event_id: str, tenant_id: str = "leewaysoftech") -> bool:
+    async def delete_event(self, calendar_id: str, event_id: str, tenant_id: Optional[str] = None) -> bool:
         """Delete a calendar event using stored OAuth tokens."""
         from services.google_meet_service import delete_event as gmeet_delete_async
         return await gmeet_delete_async(event_id=event_id, tenant_id=tenant_id, calendar_id=calendar_id)

@@ -104,7 +104,7 @@ async def google_oauth_callback(
     error: Optional[str] = Query(None),
 ):
     """Handle the OAuth 2.0 redirect from Google."""
-    effective_tenant = tenant_id or state or "leewaysoftech"
+    effective_tenant = tenant_id or state or ""
 
     if error:
         logger.error(f"Google OAuth authorization error for tenant {effective_tenant}: {error}")

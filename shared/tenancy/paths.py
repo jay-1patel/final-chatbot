@@ -46,13 +46,8 @@ def client_dir(tenant_id: str) -> Path:
     except Exception:
         pass
 
-    # Only remap known Leeway slug aliases — never map "default" / bare "1" /
-    # unrelated tenants onto clients/leewaysoftech (that mixed Brand headers).
-    if tid.lower() in ("leeway-softech", "leewaysoftech", "leeway"):
-        if (CLIENTS_DIR / "leewaysoftech").exists() and (
-            CLIENTS_DIR / "leewaysoftech" / "config.json"
-        ).exists():
-            return CLIENTS_DIR / "leewaysoftech"
+    # No default/leeway tenant mapping: every tenant must resolve to its own
+    # client pack (or none). Never remap onto the leewaysoftech pack.
 
     primary = CLIENTS_DIR / tid
     if primary.exists() and (primary / "config.json").exists():

@@ -342,6 +342,9 @@ class PackageBrowsingTests(unittest.TestCase):
 
         # The conversation floats to the top of the admin live inbox.
         self.assertEqual(database.get_user_state(WA).get("human_handover"), 1)
+        # While waiting for an agent, the customer can type hi to keep using the bot.
+        final_text = self._outcome_text(final)
+        self.assertIn("Type *hi*", final_text)
 
     def test_specific_question_about_package_falls_through_and_remembers_package(self):
         result = self._run(

@@ -159,11 +159,7 @@ def get_valid_access_token_sync(tenant_id: str) -> Optional[str]:
     """Get a valid access token for the tenant, refreshing if needed."""
     token_info = get_token(tenant_id)
     if not token_info:
-        # Fallback to leewaysoftech if tenant not explicitly matched
-        if tenant_id != "leewaysoftech":
-            token_info = get_token("leewaysoftech")
-        if not token_info:
-            return None
+        return None
 
     access_token = token_info.get("access_token")
     expires_at = token_info.get("expires_at", 0)
@@ -298,7 +294,7 @@ def _create_via_service_account(
 
 
 def create_meeting_sync(
-    tenant_id: str = "leewaysoftech",
+    tenant_id: Optional[str] = None,
     calendar_id: str = "primary",
     title: str = "Callback Meeting",
     description: str = "",
@@ -407,7 +403,7 @@ def create_meeting_sync(
 
 
 async def create_meeting(
-    tenant_id: str = "leewaysoftech",
+    tenant_id: Optional[str] = None,
     calendar_id: str = "primary",
     title: str = "Callback Meeting",
     description: str = "",
@@ -502,7 +498,7 @@ async def create_meeting(
     }
 
 
-def delete_event_sync(event_id: str, tenant_id: str = "leewaysoftech", calendar_id: str = "primary") -> bool:
+def delete_event_sync(event_id: str, tenant_id: Optional[str] = None, calendar_id: str = "primary") -> bool:
     """Synchronously delete an event from Google Calendar."""
     access_token = get_valid_access_token_sync(tenant_id)
     if not access_token:
@@ -518,7 +514,7 @@ def delete_event_sync(event_id: str, tenant_id: str = "leewaysoftech", calendar_
         return False
 
 
-async def delete_event(event_id: str, tenant_id: str = "leewaysoftech", calendar_id: str = "primary") -> bool:
+async def delete_event(event_id: str, tenant_id: Optional[str] = None, calendar_id: str = "primary") -> bool:
     """Asynchronously delete an event from Google Calendar."""
     access_token = await get_valid_access_token_async(tenant_id)
     if not access_token:

@@ -65,12 +65,16 @@ SEND2_POLLER_ENABLED = read_poller_enabled()
 # In-memory dedup fast path (the durable record lives in SQLite). Keep bounded.
 _processed_message_ids: set = set()
 _MAX_PROCESSED_IDS = 5000
+# Log-only: unrouted ids we already warned about this process (never treat as processed).
+_unrouted_warned_ids: set = set()
 
 
 def _cleanup_processed_ids() -> None:
     """Keep the processed-IDs set bounded."""
     if len(_processed_message_ids) > _MAX_PROCESSED_IDS:
         _processed_message_ids.clear()
+    if len(_unrouted_warned_ids) > _MAX_PROCESSED_IDS:
+        _unrouted_warned_ids.clear()
 
 
 def _record_processed(message_id: str, wa_id: str) -> None:
@@ -116,12 +120,19 @@ def _claim_inbound(message_id: str, wa_id: str) -> bool:
 
 
 def _is_duplicate_content(wa_id: str, text: str) -> bool:
+    """Content fingerprint for the poller path.
+
+    Uses the full poll window (not the short webhook race TTL) so historical
+    rows Send2 re-returns every 5s stay quiet without re-answering ``Hi``.
+    """
     try:
         try:
             from services.dedup import is_duplicate_content
         except ImportError:
             from backend.services.dedup import is_duplicate_content
-        return is_duplicate_content(wa_id, text)
+        return is_duplicate_content(
+            wa_id, text, window_seconds=max(60, POLL_WINDOW_MINUTES * 60)
+        )
     except Exception as e:
         logger.debug(f"content dedup unavailable: {e}")
         return False
@@ -381,6 +392,7 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                     continue
 
                 # Process each new message.
+                skipped_known = 0
                 for msg in messages:
                     message_id = msg.get("messageid", "")
                     wa_id = str(msg.get("Number", "")).strip()
@@ -401,25 +413,17 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                     ):
                         continue
 
-                    # The polling API does not include Meta's inbound
-                    # phone_number_id on each message. Route using this
-                    # configured business number's tenant binding; never use
-                    # a global/default tenant or a stale customer stamp.
+                    # Single-number testing: Active Test Tenant from the admin
+                    # console always wins over a stale SEND2 phone binding so
+                    # switching tenants in the UI immediately changes the bot.
+                    # When no override is set, fall back to the phone binding.
                     try:
                         from shared.tenancy.resolver import resolve_tenant_for_phone
 
                         tenant_id = resolve_tenant_for_phone(
                             SEND2_NUMBER or "",
-                            allow_test_override=False,
+                            allow_test_override=True,
                         )
-                        if not tenant_id:
-                            try:
-                                from shared.tenancy.resolver import _active_test_override, _registered_active_tenant
-                                _ov = _active_test_override()
-                                if _ov:
-                                    tenant_id = _registered_active_tenant(_ov)
-                            except Exception:
-                                tenant_id = tenant_id or None
                     except Exception as exc:
                         logger.error(
                             "Could not resolve configured Send2 business number; "
@@ -429,24 +433,45 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                         )
                         tenant_id = None
                     if not tenant_id:
-                        logger.warning(
-                            "POLL_UNROUTED | message_id=%s | configured business number "
-                            "has no active tenant binding",
-                            message_id,
-                        )
-                        _record_processed(message_id, wa_id)
+                        # Do NOT mark processed: once a tenant/active-test binding
+                        # appears, the same message id must still be answerable.
+                        # Only suppress log spam for ids we keep seeing unrouted.
+                        if message_id not in _unrouted_warned_ids:
+                            logger.warning(
+                                "POLL_UNROUTED | message_id=%s | no Active Test Tenant and "
+                                "SEND2_NUMBER has no tenant binding — pick a tenant in "
+                                "the admin Tenants page (WhatsApp test bot)",
+                                message_id,
+                            )
+                            _unrouted_warned_ids.add(message_id)
+                        continue
+
+                    # Already handled (or burned by an older bug) — check BEFORE
+                    # content dedup, otherwise a dead id still consumes the
+                    # short "hi" content window and blocks a fresh greeting.
+                    if _was_processed(message_id):
+                        skipped_known += 1
                         continue
 
                     # Claim content first (cross-channel), then message id.
+                    # Routine skips stay at DEBUG — Send2 re-lists the same
+                    # 15-minute inbox every poll, which used to flood INFO logs
+                    # with Hi / Careers / Technologies for every old row.
                     if text and _is_duplicate_content(wa_id, text):
-                        logger.info(
+                        logger.debug(
                             "Skipping duplicate content from poller %s: %s",
                             wa_id, text[:40],
                         )
                         _record_processed(message_id, wa_id)
+                        skipped_known += 1
                         continue
 
-                    if _was_processed(message_id) or not _claim_inbound(message_id, wa_id):
+                    if not _claim_inbound(message_id, wa_id):
+                        logger.debug(
+                            "Skipping already-claimed inbound id from poller %s: %s",
+                            wa_id, message_id[:24],
+                        )
+                        skipped_known += 1
                         continue
 
                     if not text:
@@ -508,6 +533,12 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
 
                     except Exception as e:
                         logger.error(f"Failed to process message from {wa_id}: {e}", exc_info=True)
+
+                if skipped_known:
+                    logger.debug(
+                        "Poll skipped %d already-seen inbound row(s) in the %d-minute window",
+                        skipped_known, POLL_WINDOW_MINUTES,
+                    )
 
                 # Periodic cleanup of the processed-IDs set.
                 _cleanup_processed_ids()

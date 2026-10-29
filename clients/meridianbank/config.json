@@ -306,6 +306,7 @@
           "id": "handoff",
           "type": "handoff",
           "handoff_reason": "support_ticket",
+          "escalate": true,
           "store_context": true,
           "next": "done"
         },

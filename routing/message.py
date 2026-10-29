@@ -178,7 +178,9 @@ def _wants_catalogue_pdf(text) -> bool:
 # DIRECT_MEDIA_KEYWORDS (e.g. "menu", "new arrival") should not trigger a PDF.
 _CATALOGUE_REQUEST_WORDS = (
     "catalogue", "catalog", "brochure", "product list", "price list",
-    "product lineup", "product range",
+    "product lineup", "product range", "send catalogue", "send catalog",
+    "send brochure", "full catalogue", "full catalog", "product brochure",
+    "company brochure", "e brochure", "ebrochure",
 )
 
 

@@ -19,6 +19,16 @@ _l1_cache: dict = {}
 _content_cache: dict = {}
 
 
+def clear_ephemeral_caches() -> None:
+    """Drop in-memory dedup after Active Test Tenant switches.
+
+    Lets the next ``hi`` / menu tap through instead of being treated as a
+    cross-channel duplicate from the previous tenant session.
+    """
+    _l1_cache.clear()
+    _content_cache.clear()
+
+
 def _l1_check_and_set(message_id: str) -> bool:
     """True if already seen in THIS worker."""
     now = time.time()
@@ -133,7 +143,9 @@ def is_duplicate_content(wa_id: str, text: str, window_seconds: int = _CONTENT_T
     for k in expired:
         del _content_cache[k]
     if key in _content_cache:
-        logger.info(f"Dedup content hit: wa_id={wa_id} text={text[:40]!r}")
+        # Refresh so a long poll window does not re-open mid-session.
+        _content_cache[key] = now + ttl
+        logger.debug("Dedup content hit: wa_id=%s text=%r", wa_id, text[:40])
         return True
 
     try:
@@ -155,7 +167,9 @@ def is_duplicate_content(wa_id: str, text: str, window_seconds: int = _CONTENT_T
                         age = 0
                 if age is not None and age < ttl:
                     _content_cache[key] = now + (ttl - max(0, age))
-                    logger.info(f"Dedup content L2 hit: wa_id={wa_id} text={text[:40]!r}")
+                    logger.debug(
+                        "Dedup content L2 hit: wa_id=%s text=%r", wa_id, text[:40]
+                    )
                     return True
                 conn.execute("DELETE FROM webhook_dedup WHERE message_id = ?", (key,))
             cur = conn.execute(
@@ -165,7 +179,9 @@ def is_duplicate_content(wa_id: str, text: str, window_seconds: int = _CONTENT_T
             )
             if cur.rowcount == 0:
                 _content_cache[key] = now + ttl
-                logger.info(f"Dedup content L2 race: wa_id={wa_id} text={text[:40]!r}")
+                logger.debug(
+                    "Dedup content L2 race: wa_id=%s text=%r", wa_id, text[:40]
+                )
                 return True
     except Exception as e:
         logger.debug(f"content dedup DB skip: {e}")
