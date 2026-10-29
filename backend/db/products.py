@@ -15,44 +15,52 @@ from .core import (
     get_request_tenant
 )
 
-from .settings import get_active_test_tenant
 from .config_drafts import get_published_config
 from .audit import record_admin_audit_event
 
 
 def _resolve_tenant(tenant_id: str = None) -> str:
+    """Resolve the effective tenant using the same chain as WhatsApp routing.
+
+    Resolution order:
+      1. Explicit ``tenant_id`` argument
+      2. Request-scoped tenant (set by auth / route layer)
+      3. Active test tenant (single-number testing mode)
+      4. Single active tenant or DEFAULT_TENANT_ID — never falls back to a
+         synthetic "default" when multiple tenants exist.
+
+    Returns an empty string when no tenant can be resolved (never returns
+    a stale test-override value from DB).
+    """
     if str(tenant_id or "").strip():
         return str(tenant_id).strip()
-    req = get_request_tenant()
-    if req:
-        return str(req).strip()
-    active = get_active_test_tenant()
-    if active:
-        return active
+    # Defer to the central resolver which handles request-scope + test
+    # override + single-active-all-in-one.
     try:
         from shared.tenancy.resolver import resolve_default_tenant
         val = resolve_default_tenant()
         return str(val).strip() if val else ""
     except Exception:
-        return os.environ.get("DEFAULT_TENANT_ID", "default") or ""
+        return os.environ.get("DEFAULT_TENANT_ID", "") or ""
 
 
 def _resolve_tenant_ids(tenant_id: str = None) -> list:
     """Return matching tenant identifiers (numeric id, slug, raw string) so that
-    queries match rows regardless of whether tenant_id was stored as integer or text."""
+    queries match rows regardless of whether tenant_id was stored as integer or text.
+
+    Resolves the effective tenant through the central resolver instead of
+    calling :func:`~.settings.get_active_test_tenant` directly, keeping this
+    module in sync with WhatsApp routing logic.
+    """
     raw = str(tenant_id or "").strip()
-    if not raw:
-        req = get_request_tenant()
-        raw = str(req or "").strip()
-    if not raw:
-        active = get_active_test_tenant()
-        raw = str(active or "").strip()
     if not raw:
         try:
             from shared.tenancy.resolver import resolve_default_tenant
-            raw = str(resolve_default_tenant() or "").strip()
+            val = resolve_default_tenant()
+            if val:
+                raw = str(val).strip()
         except Exception:
-            raw = os.environ.get("DEFAULT_TENANT_ID", "default")
+            raw = os.environ.get("DEFAULT_TENANT_ID", "") or ""
 
     candidates = {raw}
     if raw.isdigit():

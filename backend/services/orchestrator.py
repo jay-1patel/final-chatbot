@@ -69,18 +69,55 @@ async def _send_b2c_menu(wa_id: str, tenant_id: str = None):
 
 
 async def _process_captured_message(wa_id: str, message: str, tenant_id: str = None) -> dict:
+    # 1. Human handover must run before tenant routing. Otherwise a missing
+    # tenant short-circuits with "ignored" and typing *hi* never resumes the bot.
+    with get_db_context() as conn:
+        user_state = conn.execute(
+            "SELECT state, context_json, human_handover FROM user_states WHERE wa_id=?",
+            (wa_id,),
+        ).fetchone()
+
+    if user_state and user_state[2] == 1:  # human_handover is True
+        try:
+            from shared.handover import HANDOVER_BOT_RESUME, wants_bot_resume
+        except ImportError:  # pragma: no cover
+            from handover import HANDOVER_BOT_RESUME, wants_bot_resume  # type: ignore
+
+        if wants_bot_resume(message):
+            try:
+                from database import set_human_handover
+                set_human_handover(wa_id, False)
+            except Exception as exc:
+                logger.error(f"Failed to clear handover for {wa_id}: {exc}")
+            try:
+                from services.whatsapp_sender import send_text_message
+                await send_text_message(wa_id, HANDOVER_BOT_RESUME)
+            except Exception as exc:
+                logger.debug(f"Could not send handover resume ack: {exc}")
+            logger.info(f"HANDOVER_RESUMED | {wa_id} | user requested bot resume")
+            # Fall through to normal bot processing below.
+        else:
+            # Waiting for a human agent — stay silent (save happens at webhook).
+            return {
+                "messages": [],
+                "new_state": None,
+                "human_handover": True,
+                "user_type": None,
+                "status": "ignored",
+                "error": None,
+            }
+
     # Customer directory: whoever talks to the bot gets a record on their very
     # first message, whichever channel delivered it (Meta webhook, send2 push,
     # or the send2 poller). Keyed on (tenant_id, wa_id) so nobody is duplicated
-    # and later messages only refresh the row. Runs before the handover early
-    # return below, so an agent-handled chat still registers the contact.
+    # and later messages only refresh the row.
     try:
         from shared.tenancy.resolver import resolve_effective_tenant_id
 
         effective_tenant = resolve_effective_tenant_id(
             wa_id,
             tenant_id,
-            allow_test_override=True,
+            allow_test_override=not bool(tenant_id),
         )
     except Exception as exc:
         logger.exception("ORCH_TENANT_RESOLUTION_FAILED | wa_id=%s", wa_id)
@@ -130,24 +167,6 @@ async def _process_captured_message(wa_id: str, message: str, tenant_id: str = N
         reopen_conversation_on_inbound(wa_id)
     except Exception as exc:
         logger.debug(f"Could not reopen conversation for {wa_id}: {exc}")
-
-    with get_db_context() as conn:
-        # 1. Check Human Handover first (Global rule)
-        user_state = conn.execute(
-            "SELECT state, context_json, human_handover FROM user_states WHERE wa_id=?",
-            (wa_id,),
-        ).fetchone()
-
-    if user_state and user_state[2] == 1:  # human_handover is True
-        # Admin is handling it in the React UI; do nothing.
-        return {
-            "messages": [],
-            "new_state": None,
-            "human_handover": True,
-            "user_type": None,
-            "status": "ignored",
-            "error": None,
-        }
 
     # 1b. Check Tenant Profile Intents, Flows, and Services
     try:

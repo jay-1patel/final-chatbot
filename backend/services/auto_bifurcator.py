@@ -358,6 +358,24 @@ class AutoBifurcator:
 
         except Exception as exc:
             logger.error("Failed extracting %s: %s", filename, exc)
+            # Distinguish password-protected files from other errors so callers
+            # can give a clear user-facing message instead of silently feeding
+            # "[Text extraction error: …]" into LLM bifurcation.
+            low_exc = str(exc).lower()
+            if ext == ".pdf" and any(kw in low_exc for kw in ("encrypt", "password", "security")):
+                return {
+                    "filename": filename,
+                    "ext": ext,
+                    "size": len(content),
+                    "char_count": 0,
+                    "text": "",
+                    "tables": [],
+                    "has_tables": False,
+                    "images": [],
+                    "status": "error",
+                    "error_type": "password_protected",
+                    "error_message": "This PDF is password-protected and cannot be opened without credentials.",
+                }
             extracted_text = f"[Text extraction error: {exc}]"
 
         extracted_text = _clean_text(extracted_text)
@@ -369,7 +387,6 @@ class AutoBifurcator:
             "text": extracted_text,
             "tables": tables_found,
             "has_tables": len(tables_found) > 0,
-            "images": images_found if ext == ".pdf" else [],
             "images": images_found if ext == ".pdf" else [],
         }
 

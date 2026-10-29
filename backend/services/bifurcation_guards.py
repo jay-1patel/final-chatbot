@@ -57,11 +57,77 @@ _VERTICAL_OFFERING_HINTS: Dict[str, Tuple[str, ...]] = {
     ),
 }
 
-_JUNK_NAMES = {
+_JUNK_NAMES = frozenset({
+    # Generic filler words that convey zero product information
     "item", "product", "products", "n/a", "na", "none", "test", "untitled",
     "name", "category", "service", "services", "offering", "offerings",
     "package", "packages", "title", "description",
-}
+    # Legal / policy headings — NEVER offerings
+    "terms & conditions",
+    "privacy policy",
+    "data protection policy",
+    "cookie policy",
+    "refund policy",
+    "cancellation policy",
+    "disclaimer",
+    # Structural noise: section markers, TOC, pagination, annexures
+    "table of contents",
+    "page 1", "page 2", "page 3", "page 4", "page 5",
+    "page 6", "page 7", "page 8", "page 9", "page 10",
+    "section 1", "section 2", "section 3",
+    "appendix", "annexure",
+    "note:", "note :",
+    "price list notes",
+    # FAQ-like and checklist noise from PDF extractions
+    "frequently asked questions",
+    "faqs",
+    "booking checklist",
+    "checklist",
+})
+
+
+def _is_junk_start(name: str) -> bool:
+    """Return True when *name* begins with a junk heading pattern.
+
+    Catches cases like ``"Terms & Conditions of Service"`` or
+    ``"Booking Checklist Confirm …"`` that don't exactly match
+    :data:`_JUNK_NAMES`.
+    """
+    stripped = name.strip().lstrip("─-•·*•–").strip()
+    if not stripped:
+        return False
+    low = stripped.lower()
+    junk_prefixes = (
+        "terms", "terms &", "terms of", "privacy",
+        "faq", "frequently asked",
+        "checklist", "booking checklist",
+        "disclaimer", "section ", "page ",
+        "appendix", "annexure",
+        "note:", "note :", "note.",
+        "table of contents",
+        "price list", "important notes",
+    )
+    return any(low.startswith(p) for p in junk_prefixes)
+
+
+def _looks_like_sentence(text: str) -> bool:
+    """Heuristic: a string is likely a sentence/paragraph rather than a name.
+
+    Brand names and offering titles are short phrases; they rarely contain
+    three-or-more function words ("and", "for", "the", "with", "or", "in",
+    "to") scattered through the text.  Names longer than 25 chars should also
+    be suspicious when combined with functional-word density.
+    """
+    STOP_WORDS = {"and", "for", "the", "with", "or", "in", "to", "of", "a",
+                  "an", "on", "at", "by", "from", "as", "is", "was", "are",
+                  "were", "been", "being", "have", "has", "had", "not", "no"}
+    words = set(re.findall(r"\b[a-z]{2,}\b", text.lower()))
+    if not words:
+        return False
+    func_count = len(words & STOP_WORDS)
+    if func_count >= 3 and len(text) > 25:
+        return True
+    return False
 
 
 def resolve_locked_vertical(
@@ -112,18 +178,37 @@ def resolve_locked_vertical(
 
 
 def is_junk_offering_name(name: str) -> bool:
-    """Reject numeric / placeholder catalog names (e.g. \"1\", \"Item\")."""
+    """Reject placeholders, junk headings and sentence-like blobs from becoming offerings.
+
+    Three layers of defence:
+    1. Exact-set lookup (_JUNK_NAMES — O(1))
+    2. Prefix-based junk heading detection ("Terms …", "FAQ …")
+    3. Length guard for long noise strings that slipped through
+    """
     n = (name or "").strip()
     if len(n) < 3:
         return True
+    # Numeric-only or numeric-wrapped noise → junk
     if re.fullmatch(r"\d{1,4}", n):
         return True
     if re.fullmatch(r"[\d\W_]+", n):
         return True
+    # Exact set match (canonical junk list)
     if n.casefold() in _JUNK_NAMES:
         return True
     # "Product 1", "Item 2" style noise
     if re.fullmatch(r"(product|item|offering|package)\s*\d+", n, flags=re.I):
+        return True
+    # Prefix guard: catches "Terms & Conditions of Service",
+    # "Booking Checklist Confirm …", "FAQ section header" etc.
+    if _is_junk_start(n):
+        return True
+    # Offerings longer than ~50 chars are suspicious (real product names
+    # are short phrases; anything longer is usually section text).
+    if len(n) > 50:
+        return True
+    # Sentence-level noise with moderate functional-word density
+    if _looks_like_sentence(n):
         return True
     return False
 
@@ -236,6 +321,20 @@ def is_placeholder_brand_value(key: str, value: Any, tenant_id: str = "") -> boo
             return True
     if key == "support_phone" and re.fullmatch(r"[\s+0-9-]{8,}", raw) and set(re.sub(r"\D", "", raw)) <= {"0", "9"}:
         return True
+
+    # ── Brand-name corruption guards (key=="name"): stop PDF-section text from
+    #    becoming a real tenant's display / company name. ──────────────────────
+    if key == "name":
+        # Too long for a brand/company name (real names rarely exceed 40 chars)
+        if len(raw) > 40:
+            return True
+        # Starts with known junk heading patterns ("Terms …", "FAQ …", etc.)
+        if _is_junk_start(raw):
+            return True
+        # Reads like a paragraph/sentence rather than a proper name
+        if _looks_like_sentence(raw):
+            return True
+
     return False
 
 
