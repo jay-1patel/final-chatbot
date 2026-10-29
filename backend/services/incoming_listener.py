@@ -412,6 +412,14 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                             SEND2_NUMBER or "",
                             allow_test_override=False,
                         )
+                        if not tenant_id:
+                            try:
+                                from shared.tenancy.resolver import _active_test_override, _registered_active_tenant
+                                _ov = _active_test_override()
+                                if _ov:
+                                    tenant_id = _registered_active_tenant(_ov)
+                            except Exception:
+                                tenant_id = tenant_id or None
                     except Exception as exc:
                         logger.error(
                             "Could not resolve configured Send2 business number; "

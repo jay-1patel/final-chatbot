@@ -525,7 +525,7 @@ async def process_message(user_text: str, wa_id: str = None, raw_message: dict =
         tenant_id = resolve_effective_tenant_id(
             wa_id or "",
             tenant_id,
-            allow_test_override=not bool(tenant_id),
+            allow_test_override=True,
         )
         if not tenant_id:
             logger.warning("No active tenant resolved for message from %s", wa_id or "?")

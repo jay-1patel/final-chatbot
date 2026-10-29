@@ -125,9 +125,10 @@ def is_likely_question_or_intent(text: str, tenant_id=None) -> bool:
 
 def _profile(tenant_id=None, wa_id=None):
     from shared.tenancy.loader import get_tenant_profile
-    from shared.tenancy.resolver import resolve_tenant_for_user
+    from shared.tenancy.resolver import resolve_effective_tenant_id
 
-    return get_tenant_profile(tenant_id or resolve_tenant_for_user(wa_id or ""))
+    resolved = resolve_effective_tenant_id(wa_id or "", tenant_id, allow_test_override=True)
+    return get_tenant_profile(resolved or tenant_id)
 
 
 def _db():

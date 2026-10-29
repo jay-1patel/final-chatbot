@@ -99,7 +99,10 @@ def _profile_brand(field: str):
         from shared.tenancy import loader
         from shared.tenancy.resolver import resolve_default_tenant
 
-        brand = loader.get_tenant_profile(resolve_default_tenant()).brand
+        default_tenant = resolve_default_tenant()
+        if not default_tenant:
+            return None
+        brand = loader.get_tenant_profile(default_tenant).brand
         return getattr(brand, field, None) or None
     except Exception:
         return None

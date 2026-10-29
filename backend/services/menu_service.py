@@ -284,7 +284,7 @@ def get_greeting_menu(wa_id: str, tenant_id: str = None) -> Dict[str, Any]:
 
     from .menu_catalog import get_kb_main_menu, get_profile_for
 
-    items = get_kb_main_menu(wa_id, user_type="b2c")
+    items = get_kb_main_menu(wa_id, user_type="b2c", tenant_id=tenant_id)
     header = personalize_header(wa_id, "b2c")
     body = "What would you like to explore today?"
     try:
@@ -294,7 +294,7 @@ def get_greeting_menu(wa_id: str, tenant_id: str = None) -> Dict[str, Any]:
     except Exception:
         button_text = "Show Options"
 
-    profile = get_profile_for(wa_id)
+    profile = get_profile_for(wa_id, tenant_id=tenant_id)
     if profile is not None:
         menu = profile.menu
         if menu.body:

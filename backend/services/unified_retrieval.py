@@ -242,7 +242,8 @@ async def build_grounded_context(
     if not tid:
         try:
             from shared.tenancy.resolver import resolve_default_tenant
-            tid = str(resolve_default_tenant())
+            _default = resolve_default_tenant()
+            tid = str(_default).strip() if _default else ""
         except Exception:
             return "", {"sources": [], "tenant_id": ""}
 
