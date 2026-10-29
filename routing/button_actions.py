@@ -79,6 +79,14 @@ BUTTONS: dict[str, str] = {
     "menu_specialities": "🏥 Specialities",
     "menu_appointment": "📅 Book Appointment",
     "menu_offerings": "📋 Offerings",
+    # Real Estate
+    "ongoing-projects": "🏗️ Ongoing Projects",
+    "explore-properties": "🏙️ Explore Properties",
+    "schedule-visit": "📅 Schedule Visit",
+    "price-payment": "💳 Pricing & Plans",
+    "rera-legal": "⚖️ RERA & Approvals",
+    "menu_properties": "🏙️ Properties",
+    "menu_projects": "📁 Projects",
     # Banking
     "menu_products": "🏦 Banking Products",
     "menu_cards": "💳 Cards",
@@ -676,6 +684,25 @@ def get_contextual_buttons(
                 picked_ids.append("menu_human")
         else:
             picked_ids = ["menu_services", "menu_proposal", "menu_callback"]
+        picked_ids.append("main_menu")
+
+    # Real Estate Vertical
+    elif vertical in ("real_estate", "construction"):
+        if any(k in q for k in ("project", "ongoing", "property", "properties", "apartment", "villa", "plot", "residence", "flat")):
+            picked_ids.append("ongoing-projects")
+            picked_ids.append("explore-properties")
+            picked_ids.append("schedule-visit")
+        elif any(k in q for k in ("visit", "site visit", "tour", "schedule", "book", "inspect")):
+            picked_ids.append("schedule-visit")
+            picked_ids.append("ongoing-projects")
+        elif any(k in q for k in ("price", "cost", "payment", "emi", "plan", "scheme", "advance")):
+            picked_ids.append("price-payment")
+            picked_ids.append("ongoing-projects")
+        elif any(k in q for k in ("rera", "legal", "approval", "sanction", "title")):
+            picked_ids.append("rera-legal")
+            picked_ids.append("ongoing-projects")
+        else:
+            picked_ids = ["ongoing-projects", "explore-properties", "schedule-visit"]
         picked_ids.append("main_menu")
 
     # 4. Tours & Travel Vertical

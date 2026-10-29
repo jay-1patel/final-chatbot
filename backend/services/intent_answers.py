@@ -66,6 +66,25 @@ def _clean_title(text: str) -> str:
     return " ".join(words)
 
 
+_INTENT_ALIASES: dict[str, list[str]] = {
+    "offerings": ["property_listings", "project_details", "projects", "service_enquiry", "product_details", "package_details"],
+    "ongoing-projects": ["property_listings", "project_details", "projects", "offerings"],
+    "ongoing_projects": ["property_listings", "project_details", "projects", "offerings"],
+    "explore-properties": ["property_listings", "project_details", "projects", "offerings"],
+    "explore_properties": ["property_listings", "project_details", "projects", "offerings"],
+    "properties": ["property_listings", "project_details", "projects", "offerings"],
+    "property_listings": ["projects", "project_details", "offerings"],
+    "projects": ["property_listings", "project_details", "offerings"],
+    "project_details": ["property_listings", "projects", "offerings"],
+    "services": ["service_enquiry", "offerings", "product_details"],
+    "service_enquiry": ["offerings", "services"],
+    "rera-legal": ["rera_legal", "legal"],
+    "rera_legal": ["rera-legal", "legal"],
+    "price-payment": ["pricing_plan", "pricing"],
+    "pricing_plan": ["price-payment", "pricing"],
+}
+
+
 def answer_for_button(wa_id: str, button_id: str, tenant_id=None) -> str | None:
     """Answer text for a tapped profile menu row, or None.
 
@@ -79,12 +98,27 @@ def answer_for_button(wa_id: str, button_id: str, tenant_id=None) -> str | None:
     clean_id = raw_id.replace("intent:", "").replace("menu_", "").strip()
     for b in profile.menu.buttons:
         if b.id == raw_id and getattr(b, "intent", None):
-            return answer_for_intent(wa_id, b.intent, tenant_id=tenant_id or profile.tenant_id)
+            ans = answer_for_intent(wa_id, b.intent, tenant_id=tenant_id or profile.tenant_id)
+            if ans:
+                return ans
     # Direct intent lookup (e.g. careers, technologies, projects, benefits)
     ans = answer_for_intent(wa_id, clean_id, tenant_id=tenant_id or profile.tenant_id)
     if ans:
         return ans
-    return answer_for_intent(wa_id, raw_id, tenant_id=tenant_id or profile.tenant_id)
+    ans = answer_for_intent(wa_id, raw_id, tenant_id=tenant_id or profile.tenant_id)
+    if ans:
+        return ans
+    # Service / offerings fallback
+    try:
+        from services import service_answers
+        for b in profile.menu.buttons:
+            if b.id == raw_id and getattr(b, "title", None):
+                ans = service_answers.answer_for_text(wa_id, b.title, tenant_id=tenant_id or profile.tenant_id)
+                if ans:
+                    return ans
+    except Exception:
+        pass
+    return None
 
 
 def answer_for_menu_title(wa_id: str, text: str, tenant_id=None) -> str | None:
@@ -122,7 +156,17 @@ def answer_for_menu_title(wa_id: str, text: str, tenant_id=None) -> str | None:
             ans = answer_for_intent(wa_id, intent, tenant_id=tenant_id or profile.tenant_id)
             if ans:
                 return ans
-        return answer_for_button(wa_id, b.id, tenant_id=tenant_id or profile.tenant_id)
+        ans = answer_for_button(wa_id, b.id, tenant_id=tenant_id or profile.tenant_id)
+        if ans:
+            return ans
+        # Offerings / products fallback
+        try:
+            from services import service_answers
+            ans = service_answers.answer_for_text(wa_id, b.title, tenant_id=tenant_id or profile.tenant_id)
+            if ans:
+                return ans
+        except Exception:
+            pass
     return None
 
 
@@ -180,6 +224,15 @@ def answer_for_intent(wa_id: str, intent_name: str, tenant_id=None) -> str | Non
         if intent.name == intent_name:
             raw_answer = intent.answer.strip()
             return _format_nice_answer(raw_answer, intent_name)
+    # Check aliases if direct intent was not found or had no answer
+    aliases = _INTENT_ALIASES.get(intent_name, [])
+    if not aliases and "-" in intent_name:
+        aliases = _INTENT_ALIASES.get(intent_name.replace("-", "_"), [])
+    for alias in aliases:
+        for intent in _answered_intents(profile):
+            if intent.name == alias:
+                raw_answer = intent.answer.strip()
+                return _format_nice_answer(raw_answer, alias)
     return None
 
 
@@ -593,12 +646,18 @@ def answer_for_text(wa_id: str, text: str, tenant_id=None) -> str | None:
         if not candidates:
             return None
         matched = match_by_rules(text, candidates)
-        if not matched:
-            return None
-        intent_name, score = matched
-        for intent in candidates:
-            if intent.name == intent_name:
-                return intent.answer.strip()
+        if matched:
+            intent_name, score = matched
+            for intent in candidates:
+                if intent.name == intent_name:
+                    return intent.answer.strip()
+        # Fallback for broad real estate project queries
+        if getattr(profile, "vertical", "") in ("real_estate", "construction"):
+            t_lower = text.lower().strip()
+            if any(p in t_lower for p in ("ongoing project", "ongoing projects", "explore properties", "projects", "properties", "property")):
+                for intent in candidates:
+                    if intent.name in ("property_listings", "project_details"):
+                        return intent.answer.strip()
     except Exception as exc:
         logger.debug("intent_answers: text match failed (%s)", exc)
     return None

@@ -649,15 +649,14 @@ class TestQuestion(BaseModel):
 
 
 @router.post("/{tenant_id}/test-question")
-def test_question(
+async def test_question(
     tenant_id: str,
     body: TestQuestion,
     principal: dict = Depends(require_tenant_access()),
 ):
     """The admin 'test a question' box: run one utterance through this
-    tenant's live intent matcher (rules then embeddings — the same tiers
-    eval/run.py drives), so an editor can see routing change as they tune
-    the profile without waiting for a real customer to ask."""
+    tenant's live intent matcher and orchestrator simulation so an editor can see
+    both the intent match and the actual bot reply (text, buttons, or list menu)."""
     if not tenancy_store.get_tenant(tenant_id):
         raise HTTPException(status_code=404, detail="tenant not found")
 
@@ -666,6 +665,54 @@ def test_question(
     profile = tenancy_loader.get_tenant_profile(tenant_id)
     intent, score, tier = match_intent(body.message.strip(), profile)
     matched = profile.intent(intent) if intent else None
+
+    # Simulate the real chatbot orchestrator for this specific tenant
+    messages = []
+    reply_text = ""
+    try:
+        from database import get_db_context, set_request_tenant
+        from services import flow_runner
+        from services.orchestrator import process_incoming_message
+
+        # Dedicated simulator ID that resolver maps straight to tenant_id
+        sim_wa_id = f"sim_{tenant_id}"
+
+        # Clean any in-flight flow state so single queries start fresh
+        flow_runner.clear_flow(sim_wa_id)
+        with get_db_context() as conn:
+            conn.execute(
+                """INSERT INTO user_states (wa_id, state, context_json, tenant_id)
+                   VALUES (?, 'B2C_MAIN_MENU', '{}', ?)
+                   ON CONFLICT(wa_id) DO UPDATE SET tenant_id = excluded.tenant_id, state = 'B2C_MAIN_MENU', context_json = '{}'""",
+                (sim_wa_id, tenant_id),
+            )
+        set_request_tenant(tenant_id)
+
+        orch_res = await process_incoming_message(sim_wa_id, body.message.strip(), capture_only=True)
+        messages = orch_res.get("messages", [])
+
+        # Build readable reply text
+        parts = []
+        for m in messages:
+            if m.get("type") == "text" and m.get("text"):
+                parts.append(m["text"])
+            elif m.get("type") == "buttons":
+                b_text = m.get("text", "")
+                btn_titles = []
+                for b in m.get("buttons", []):
+                    title = b.get("title") or b.get("reply", {}).get("title", "")
+                    if title:
+                        btn_titles.append(title)
+                btn_str = " | ".join(btn_titles)
+                parts.append(f"{b_text}\n[Buttons: {btn_str}]" if btn_str else b_text)
+            elif m.get("type") == "list":
+                header = m.get("header", "")
+                body_str = m.get("body", "")
+                parts.append(f"*{header}*\n{body_str}" if header else body_str)
+        reply_text = "\n\n".join(parts)
+    except Exception as exc:
+        logger.warning(f"Could not generate live reply in test-question: {exc}")
+
     return {
         "tenant_id": tenant_id,
         "message": body.message,
@@ -674,6 +721,8 @@ def test_question(
         "tier": tier,
         "flow": matched.flow if matched else None,
         "active_intents": profile.active_intent_names(),
+        "messages": messages,
+        "reply_text": reply_text,
     }
 
 

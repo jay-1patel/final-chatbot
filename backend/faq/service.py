@@ -649,9 +649,11 @@ class FAQIndex:
                 })
 
                 if row["embedding"]:
-                    all_embeddings.append(
-                        np.frombuffer(row["embedding"], dtype=np.float32)
-                    )
+                    emb = np.frombuffer(row["embedding"], dtype=np.float32)
+                    if emb.shape[0] == EMBEDDING_DIM:
+                        all_embeddings.append(emb)
+                    else:
+                        missing.append((len(chunks) - 1, row["id"], row["content"]))
                 else:
                     missing.append((len(chunks) - 1, row["id"], row["content"]))
 
@@ -1311,7 +1313,7 @@ async def handle_faq_query(payload: dict) -> dict:
             )
         except Exception:
             pass
-        return {"answer": _append_signature("", tenant_id)}
+        return {"answer": ""}
 
     logger.info(f"Top 20 QA matches for user question: '{message}'")
     for rank, (chunk_text, metadata, score) in enumerate(results, start=1):

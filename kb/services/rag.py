@@ -590,22 +590,35 @@ def search_products_faiss(query: str, limit: int = 5, tenant_id: str = None) -> 
     query_emb = model.encode([query], normalize_embeddings=True).astype("float32")
     faiss.normalize_L2(query_emb)
 
+    allowed_tids = {str(tid), int(tid) if str(tid).isdigit() else tid}
+    try:
+        from shared.tenancy import store
+        rec = store.get_tenant(tid)
+        if rec:
+            allowed_tids.add(rec.get("id"))
+            allowed_tids.add(str(rec.get("id")))
+            allowed_tids.add(rec.get("slug"))
+    except Exception:
+        pass
+
     # 1. Prefer dedicated per-tenant index
-    if _product_tenant_indexes and tid in _product_tenant_indexes:
-        t_index, t_ids = _product_tenant_indexes[tid]
-        if t_index.ntotal > 0:
-            fetch_k = min(limit, t_index.ntotal)
-            scores, indices = t_index.search(query_emb, fetch_k)
-            results = []
-            for score, idx in zip(scores[0], indices[0]):
-                if idx < 0 or idx >= len(t_ids):
-                    continue
-                product_id, _ = t_ids[idx]
-                results.append({
-                    "product_id": product_id,
-                    "score": float(score),
-                })
-            return results
+    if _product_tenant_indexes:
+        for candidate_key in allowed_tids:
+            if candidate_key in _product_tenant_indexes:
+                t_index, t_ids = _product_tenant_indexes[candidate_key]
+                if t_index.ntotal > 0:
+                    fetch_k = min(limit, t_index.ntotal)
+                    scores, indices = t_index.search(query_emb, fetch_k)
+                    results = []
+                    for score, idx in zip(scores[0], indices[0]):
+                        if idx < 0 or idx >= len(t_ids):
+                            continue
+                        product_id, _ = t_ids[idx]
+                        results.append({
+                            "product_id": product_id,
+                            "score": float(score),
+                        })
+                    return results
 
     # 2. Fall back to global index with tenant filter
     if _product_faiss_index is None or not _product_faiss_ids:
@@ -617,7 +630,7 @@ def search_products_faiss(query: str, limit: int = 5, tenant_id: str = None) -> 
         if idx < 0 or idx >= len(_product_faiss_ids):
             continue
         product_id, product_tenant = _product_faiss_ids[idx]
-        if product_tenant != tid:
+        if product_tenant not in allowed_tids and str(product_tenant) not in allowed_tids:
             continue
         results.append({
             "product_id": product_id,

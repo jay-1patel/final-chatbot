@@ -184,6 +184,18 @@ export function OfferingsPanel({ tenantId }: { tenantId: string }) {
                 <div className="divide-y divide-surface-line rounded-lg ring-1 ring-surface-line">
                   {items.map((item) => (
                     <div key={item.id} className="flex flex-wrap items-start gap-3 px-4 py-3">
+                      {item.media_url && (
+                        <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md border border-surface-line bg-slate-900">
+                          <img
+                            src={item.media_url}
+                            alt={item.name}
+                            className="h-full w-full object-cover"
+                            onError={(e) => {
+                              ;(e.target as HTMLElement).style.display = 'none'
+                            }}
+                          />
+                        </div>
+                      )}
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-medium text-slate-100">{item.name}</span>
@@ -284,6 +296,7 @@ type FormShape = {
   description: string
   price: string
   detail_url: string
+  media_url: string
   attrs: Record<string, string>
   is_active: boolean
 }
@@ -297,6 +310,7 @@ function toShape(item?: Offering, defaults: string[] = []): FormShape {
     description: item?.description ?? '',
     price: item?.price ?? '',
     detail_url: item?.detail_url ?? '',
+    media_url: item?.media_url ?? '',
     attrs: { ...(item?.attrs ?? {}) },
     is_active: item?.is_active ?? true,
   }
@@ -336,7 +350,7 @@ function OfferingForm({
       description: form.description.trim(),
       price: form.price.trim() || null,
       detail_url: form.detail_url.trim(),
-      media_url: '',
+      media_url: form.media_url.trim(),
       media_type: 'image',
       attrs,
       sort_order: initial?.sort_order ?? 0,
@@ -417,7 +431,7 @@ function OfferingForm({
           hint="The detail the bot reads out when a customer asks for more."
         />
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-3">
           {content.priceLabel && (
             <Input
               label={content.priceLabel}
@@ -439,6 +453,29 @@ function OfferingForm({
             onChange={(e) => set('detail_url', e.target.value)}
             placeholder="https://…"
           />
+        </div>
+
+        <div>
+          <Input
+            label="Image URL"
+            value={form.media_url}
+            onChange={(e) => set('media_url', e.target.value)}
+            placeholder="https://images.unsplash.com/... or public image link"
+            hint="Public photo link. Displayed on console and sent as rich photo cards in WhatsApp."
+          />
+          {form.media_url && (
+            <div className="mt-2 flex items-center gap-3 rounded-md bg-surface-panel p-2 ring-1 ring-surface-line">
+              <img
+                src={form.media_url}
+                alt="Preview"
+                className="h-12 w-12 rounded object-cover"
+                onError={(e) => {
+                  ;(e.target as HTMLElement).style.display = 'none'
+                }}
+              />
+              <span className="text-2xs text-slate-400 truncate">{form.media_url}</span>
+            </div>
+          )}
         </div>
 
         {content.extraFields.length > 0 && (

@@ -72,6 +72,14 @@ def write_client_config_file(tenant_id: str, layer: Dict[str, Any]) -> Optional[
     path = client_config_path(tenant_id)
     existing = _strip_wrapper(load_file_layer(tenant_id))
     merged = merge_layers(existing, layer or {})
+    if layer and "menu" in layer and isinstance(layer["menu"], dict) and "buttons" in layer["menu"]:
+        merged.setdefault("menu", {})["buttons"] = [
+            b for b in layer["menu"]["buttons"] if not b.get("__remove__")
+        ]
+    if layer and "intents" in layer and isinstance(layer["intents"], list):
+        merged["intents"] = [
+            i for i in layer["intents"] if not i.get("__remove__")
+        ]
     tmp = path.with_name(path.name + ".tmp")
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(merged, fh, ensure_ascii=False, indent=2)

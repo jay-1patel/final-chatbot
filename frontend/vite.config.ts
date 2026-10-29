@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
 
-const BACKEND = process.env.BACKEND_ORIGIN || 'http://localhost:9000'
+const BACKEND = process.env.BACKEND_ORIGIN || 'http://127.0.0.1:9000'
 
 export default defineConfig({
   plugins: [react()],

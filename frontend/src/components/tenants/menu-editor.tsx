@@ -34,6 +34,7 @@ const blankButton = (index: number): ButtonDraft => ({
   description: '',
   section: 'General',
   icon: '',
+  image_url: null,
   sort_order: index,
   enabled: true,
   requires_feature: null,
@@ -467,13 +468,41 @@ export function MenuEditor({ tenantId, focusId }: { tenantId: string; focusId?: 
                       />
                     )}
                   </div>
-                  <Input
-                    label="Icon"
-                    value={draft.icon}
-                    onChange={(e) => setDraft({ ...draft, icon: e.target.value })}
-                    placeholder="🛠️"
-                    hint="An emoji. Shown in section headers."
-                  />
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input
+                        label="Icon / Emoji"
+                        value={draft.icon}
+                        onChange={(e) => setDraft({ ...draft, icon: e.target.value })}
+                        placeholder="🏢"
+                        hint="Emoji for WhatsApp & list header."
+                      />
+                      <Input
+                        label="Image URL (optional)"
+                        value={draft.image_url ?? ''}
+                        onChange={(e) => setDraft({ ...draft, image_url: e.target.value || null })}
+                        placeholder="https://..."
+                        hint="Small thumbnail image."
+                      />
+                    </div>
+                    {(draft.image_url || draft.icon) && (
+                      <div className="flex items-center gap-2 rounded border border-surface-line bg-surface-raised px-2.5 py-1.5 text-xs">
+                        <span className="text-slate-400">Preview:</span>
+                        {draft.image_url ? (
+                          <img
+                            src={draft.image_url}
+                            alt=""
+                            className="h-6 w-6 rounded object-cover border border-white/10"
+                            onError={(e) => {
+                              ;(e.currentTarget as HTMLElement).style.display = 'none'
+                            }}
+                          />
+                        ) : null}
+                        {draft.icon ? <span className="text-base">{draft.icon}</span> : null}
+                        <span className="font-medium text-slate-200">{draft.title || 'Option Title'}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <Textarea
                   label="Description"
@@ -639,7 +668,18 @@ export function MenuEditor({ tenantId, focusId }: { tenantId: string; focusId?: 
                           <div className="flex flex-wrap items-start gap-3">
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-2">
-                                {button.icon && <span className="text-sm">{button.icon}</span>}
+                                {button.image_url ? (
+                                  <img
+                                    src={button.image_url}
+                                    alt=""
+                                    className="h-6 w-6 rounded object-cover border border-white/10 shrink-0"
+                                    onError={(e) => {
+                                      ;(e.currentTarget as HTMLElement).style.display = 'none'
+                                    }}
+                                  />
+                                ) : button.icon ? (
+                                  <span className="text-base">{button.icon}</span>
+                                ) : null}
                                 <span className="text-sm font-medium text-slate-100">{button.title}</span>
                                 <code className="rounded bg-surface-raised px-1.5 py-0.5 font-mono text-xs text-slate-500 ring-1 ring-surface-line">
                                   {button.id}
@@ -722,16 +762,30 @@ export function MenuEditor({ tenantId, focusId }: { tenantId: string; focusId?: 
 
 /** `effective.menu` is a partial layer on the wire; fill the gaps the schema defaults. */
 function normaliseMenu(menu: NonNullable<ProfileSnapshot['menu']>): MenuSpec {
+  const seenIds = new Set<string>()
+  const seenTitles = new Set<string>()
+  const dedupedButtons: MenuButton[] = []
+
+  for (const button of menu.buttons ?? []) {
+    const id = (button.id || '').trim()
+    const cleanTitle = (button.title || '').trim().toLowerCase()
+    if (id && seenIds.has(id)) continue
+    if (cleanTitle && seenTitles.has(cleanTitle)) continue
+    if (id) seenIds.add(id)
+    if (cleanTitle) seenTitles.add(cleanTitle)
+    dedupedButtons.push({
+      ...blankButton(dedupedButtons.length),
+      ...button,
+    } as MenuButton)
+  }
+
   return {
     key: menu.key ?? 'kb_main',
     header: menu.header ?? '',
     body: menu.body ?? 'What would you like help with?',
     footer: menu.footer ?? '',
     button_text: menu.button_text ?? 'Show Options',
-    buttons: (menu.buttons ?? []).map((button) => ({
-      ...blankButton(0),
-      ...button,
-    })) as MenuButton[],
+    buttons: dedupedButtons,
   }
 }
 
@@ -769,6 +823,9 @@ function validateButton(button: ButtonDraft, others: ButtonDraft[]): string | nu
   if (!/^[a-z0-9_]+$/.test(button.id.trim())) return 'Ids must be lowercase letters, digits and underscores.'
   if (others.some((o) => o.id === button.id)) return `The id "${button.id}" is already used by another option.`
   if (!button.title.trim()) return 'Every menu option needs a title.'
+  if (others.some((o) => o.title.trim().toLowerCase() === button.title.trim().toLowerCase())) {
+    return `An option titled "${button.title.trim()}" already exists. Menu option titles must be unique.`
+  }
   if (button.intent === NEW_INTENT) return 'Finish the new page first — give it an id, then save the option.'
   return null
 }

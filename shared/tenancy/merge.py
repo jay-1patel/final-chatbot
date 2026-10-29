@@ -64,32 +64,81 @@ def _is_named(items: List[Any], key_field: str) -> bool:
     return all(isinstance(i, Mapping) and key_field in i for i in items)
 
 
+def _clean_title(text: str) -> str:
+    import re
+    cleaned = re.sub(r"[^\w\s]", " ", str(text or "")).strip().lower()
+    return " ".join(cleaned.split())
+
+
 def _merge_named(base: List[Any], override: List[Any], key_field: str, path: tuple) -> List[Any]:
     """Per-item override by name. Base order is preserved, new items appended."""
     merged: List[Any] = []
     index: Dict[str, int] = {}
+    title_index: Dict[str, int] = {}
+    is_buttons = (path == ("menu", "buttons"))
 
     for item in base:
         name = str(item.get(key_field, ""))
         if item.get(REMOVE_KEY):
             continue
-        index[name] = len(merged)
+        idx = len(merged)
+        index[name] = idx
+        if is_buttons and item.get("title"):
+            ct = _clean_title(item["title"])
+            if ct:
+                title_index[ct] = idx
         merged.append(_strip_remove(item))
 
+    # Phase 1: Apply all tombstones from override (by exact key_field ID only)
     for item in override:
-        name = str(item.get(key_field, ""))
         if item.get(REMOVE_KEY):
+            name = str(item.get(key_field, ""))
             if name in index:
-                merged[index[name]] = None  # tombstone
+                merged[index[name]] = None
+
+    # Phase 2: Apply active (non-tombstone) overrides
+    for item in override:
+        if item.get(REMOVE_KEY):
             continue
-        if name in index:
-            current = merged[index[name]]
-            merged[index[name]] = deep_merge(current, item, path) if current else _strip_remove(item)
+        name = str(item.get(key_field, ""))
+        title = item.get("title", "") if is_buttons else ""
+        clean_t = _clean_title(title) if is_buttons and title else ""
+
+        # Match by id first, or by normalized title if base item was not tombstoned
+        matched_idx = index.get(name)
+        if matched_idx is None and is_buttons and clean_t and clean_t in title_index:
+            candidate_idx = title_index[clean_t]
+            if merged[candidate_idx] is not None:
+                matched_idx = candidate_idx
+
+        if matched_idx is not None and merged[matched_idx] is not None:
+            current = merged[matched_idx]
+            merged[matched_idx] = deep_merge(current, item, path)
         else:
-            index[name] = len(merged)
+            new_idx = len(merged)
+            index[name] = new_idx
+            if is_buttons and clean_t:
+                title_index[clean_t] = new_idx
             merged.append(_strip_remove(item))
 
-    return [i for i in merged if i is not None]
+    final_items = [i for i in merged if i is not None]
+    if is_buttons:
+        seen_ids = set()
+        seen_titles = set()
+        deduped = []
+        for b in reversed(final_items):
+            b_id = str(b.get("id", ""))
+            b_t = _clean_title(b.get("title", ""))
+            if (b_id and b_id in seen_ids) or (b_t and b_t in seen_titles):
+                continue
+            if b_id:
+                seen_ids.add(b_id)
+            if b_t:
+                seen_titles.add(b_t)
+            deduped.append(b)
+        return list(reversed(deduped))
+
+    return final_items
 
 
 def _strip_remove(item: Mapping) -> Dict[str, Any]:
@@ -144,27 +193,71 @@ def _merge_named_drafts(base: List[Any], override: List[Any], key_field: str, pa
     """Keyed merge for the draft layer, with tombstone preservation."""
     out: List[Any] = []
     index: Dict[str, int] = {}
+    title_index: Dict[str, int] = {}
+    is_buttons = (path == ("menu", "buttons"))
+
     for item in base:
         name = str(item.get(key_field, ""))
-        index[name] = len(out)
+        idx = len(out)
+        index[name] = idx
+        if is_buttons and item.get("title") and not item.get(REMOVE_KEY):
+            ct = _clean_title(item["title"])
+            if ct:
+                title_index[ct] = idx
         out.append(dict(item))
 
     for item in override:
         name = str(item.get(key_field, ""))
+        title = item.get("title", "") if is_buttons else ""
+        clean_t = _clean_title(title) if is_buttons and title else ""
         marker = bool(item.get(REMOVE_KEY))
-        if name in index:
-            current = out[index[name]]
+
+        # Tombstones match ONLY by exact name (id), never by title
+        if marker:
+            matched_idx = index.get(name)
+        else:
+            matched_idx = index.get(name)
+            if matched_idx is None and is_buttons and clean_t and clean_t in title_index:
+                matched_idx = title_index[clean_t]
+
+        if matched_idx is not None:
+            current = out[matched_idx]
             # A marker replaces the pending item; re-adding a tombstoned id
             # replaces the marker. Neither case can deep-merge the two.
             if marker or current.get(REMOVE_KEY):
-                out[index[name]] = dict(item)
+                out[matched_idx] = dict(item)
             else:
-                out[index[name]] = merge_drafts(current, item, path)
+                out[matched_idx] = merge_drafts(current, item, path)
         else:
             # A tombstone for a name the draft never carried must persist too —
             # it is what deletes the *default* at publish time.
-            index[name] = len(out)
+            new_idx = len(out)
+            index[name] = new_idx
+            if is_buttons and clean_t and not marker:
+                title_index[clean_t] = new_idx
             out.append(dict(item))
+
+    if is_buttons:
+        seen_ids = set()
+        seen_titles = set()
+        deduped = []
+        for b in reversed(out):
+            b_id = str(b.get("id", ""))
+            b_t = _clean_title(b.get("title", ""))
+            if b.get(REMOVE_KEY):
+                if b_id and b_id not in seen_ids:
+                    seen_ids.add(b_id)
+                    deduped.append(b)
+                continue
+            if (b_id and b_id in seen_ids) or (b_t and b_t in seen_titles):
+                continue
+            if b_id:
+                seen_ids.add(b_id)
+            if b_t:
+                seen_titles.add(b_t)
+            deduped.append(b)
+        return list(reversed(deduped))
+
     return out
 
 

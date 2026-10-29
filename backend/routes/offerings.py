@@ -386,12 +386,22 @@ def list_offerings(
     limit: int = 200,
     principal: dict = Depends(read_access),
 ):
+    vert = _vertical(tenant_id)
     items = list_products(
         category=category,
         active_only=not include_inactive,
         limit=max(1, min(limit, 500)),
         tenant_id=tenant_id,
     )
+    try:
+        from services.auto_bifurcator import _is_offering_relevant_to_vertical
+        items = [
+            i for i in items
+            if _is_offering_relevant_to_vertical(i.get("name", ""), i.get("category", ""), vert)
+        ]
+    except Exception as filter_err:
+        logger.debug("Relevance filter check error: %s", filter_err)
+
     columns = _columns(tenant_id)
     return {"count": len(items), "columns": columns, "offerings": [_public(i, columns) for i in items]}
 
@@ -410,6 +420,20 @@ def list_offering_categories(tenant_id: str, principal: dict = Depends(read_acce
 
 @router.post("/offerings")
 def create_offering(tenant_id: str, body: OfferingIn, principal: dict = Depends(_require_write_access("create"))):
+    vert = _vertical(tenant_id)
+    try:
+        from services.auto_bifurcator import _is_offering_relevant_to_vertical
+        clean_name = body.name.strip()
+        if not _is_offering_relevant_to_vertical(clean_name, body.category, vert):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Offering '{clean_name}' does not match the subject of this {vert.replace('_', ' ')} project or contains invalid noise.",
+            )
+    except HTTPException:
+        raise
+    except Exception as filter_err:
+        logger.debug("Relevance validation check error: %s", filter_err)
+
     columns = _columns(tenant_id)
     clean, attrs_json = _prepare_values(columns, _cell_values(body.values, body), body.attrs)
 

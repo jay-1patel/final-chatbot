@@ -1401,10 +1401,16 @@ def download_media(media_id: str, mime_type: str = None) -> str:
                     tmp.write(chunk)
                 tmp_path = tmp.name
             try:
-                import pytesseract
                 from PIL import Image
                 img = Image.open(tmp_path)
-                text = pytesseract.image_to_string(img)
+                text = ""
+                try:
+                    from backend.extract import ocr_image
+                    text = ocr_image(img)
+                except Exception as ex:
+                    logger.warning(f"Failed to use backend ocr_image: {ex}, attempting pytesseract direct")
+                    import pytesseract
+                    text = pytesseract.image_to_string(img)
                 return text.strip() if text else "[OCR: No text found]"
             except Exception as e:
                 logger.error(f"OCR failed: {e}")

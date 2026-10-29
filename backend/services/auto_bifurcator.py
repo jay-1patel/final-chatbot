@@ -28,6 +28,7 @@ from docx import Document
 import openpyxl
 
 from database import (
+    delete_product,
     get_db_context,
     list_products,
     record_admin_audit_event,
@@ -66,6 +67,395 @@ def _slugify(text: str) -> str:
     return text.strip("-") or "item"
 
 
+def _assign_button_icon(title: str, action: str = "", vertical: str = "") -> str:
+    """Derive a context-aware emoji icon for a WhatsApp menu button based on vertical and content."""
+    t = (title or "").lower().strip()
+    a = (action or "").lower().strip()
+    v = (vertical or "").lower().strip()
+
+    # Generic action matches
+    if any(k in t for k in ["callback", "call", "advisor", "expert", "talk to", "contact", "speak", "phone", "helpline", "human"]):
+        return "📞"
+    if any(k in t for k in ["support", "help", "ticket", "complaint", "issue", "care"]):
+        return "🆘" if ("urgent" in t or "sos" in t) else "💬"
+    if any(k in t for k in ["quote", "estimate", "pricing", "plans", "cost", "fee", "rate"]):
+        return "💰"
+    if any(k in t for k in ["brochure", "download", "pdf", "document", "spec", "terms", "rules"]):
+        return "📄"
+    if any(k in t for k in ["visit", "schedule", "book", "appointment", "calendar"]):
+        return "📅"
+
+    # Vertical-specific matches
+    if "estate" in v or "property" in v:
+        if any(k in t for k in ["villa", "plot", "land"]):
+            return "🏡"
+        if any(k in t for k in ["apartment", "flat", "residence", "commercial", "project", "ongoing", "property", "properties", "explore", "offerings"]):
+            return "🏢"
+        if any(k in t for k in ["rera", "legal", "sanction", "approval"]):
+            return "⚖️"
+        if any(k in t for k in ["loan", "emi", "bank", "payment"]):
+            return "💳"
+        return "🏢"
+
+    if "bank" in v or "finance" in v:
+        if any(k in t for k in ["account", "savings", "current", "deposit", "fd", "rd"]):
+            return "🏦"
+        if any(k in t for k in ["loan", "credit", "mortgage", "emi", "borrow"]):
+            return "💳"
+        if any(k in t for k in ["invest", "mutual fund", "stock", "wealth", "portfolio"]):
+            return "📈"
+        if any(k in t for k in ["fraud", "security", "block", "alert"]):
+            return "🔒"
+        return "🏦"
+
+    if "travel" in v or "tour" in v:
+        if any(k in t for k in ["destination", "place", "explore", "city"]):
+            return "🗺️"
+        if any(k in t for k in ["package", "holiday", "tour", "trip", "vacation"]):
+            return "🌴"
+        if any(k in t for k in ["itinerary", "custom", "plan"]):
+            return "🧭"
+        if any(k in t for k in ["visa", "passport", "immigration"]):
+            return "🛂"
+        if any(k in t for k in ["flight", "hotel", "cruise", "ticket"]):
+            return "✈️"
+        if any(k in t for k in ["policy", "cancellation", "refund"]):
+            return "📋"
+        return "🌴"
+
+    if "software" in v or "it" in v:
+        if any(k in t for k in ["service", "offering", "solution"]):
+            return "💻"
+        if any(k in t for k in ["tech", "stack", "tool", "framework"]):
+            return "⚙️"
+        if any(k in t for k in ["project", "portfolio", "case study", "client"]):
+            return "🚀"
+        if any(k in t for k in ["career", "job", "hiring", "role"]):
+            return "💼"
+        if any(k in t for k in ["benefit", "why", "choose"]):
+            return "🌟"
+        return "💻"
+
+    if "ecom" in v or "retail" in v:
+        if any(k in t for k in ["deal", "offer", "discount", "sale"]):
+            return "🏷️"
+        if any(k in t for k in ["cart", "checkout", "buy"]):
+            return "🛒"
+        if any(k in t for k in ["track", "order", "delivery", "shipping"]):
+            return "📦"
+        return "🛍️"
+
+    if "health" in v or "clinic" in v:
+        if any(k in t for k in ["doctor", "specialist", "physician"]):
+            return "🩺"
+        if any(k in t for k in ["test", "lab", "diagnostic"]):
+            return "🔬"
+        if any(k in t for k in ["medicine", "pharmacy", "drug"]):
+            return "💊"
+        return "🏥"
+
+    return "✨"
+
+
+def _is_offering_relevant_to_vertical(name: str, category: str = "", vertical: str = "generic") -> bool:
+    """Validate that an offering is strictly relevant to the tenant's subject / vertical and not template noise.
+
+    Prevents:
+    1. Cross-vertical contamination (e.g. software/IT offerings appearing on a real estate tenant).
+    2. Instruction text / template banner lines (e.g. 'paste a public https photo link per item').
+    3. Truncated or noisy labels starting with punctuation or table dividers.
+    """
+    n = (name or "").strip().lower()
+    c = (category or "").strip().lower()
+    v = (vertical or "generic").strip().lower()
+
+    if not n or len(n) < 3:
+        return False
+
+    # Discard table headers, instruction text, and parsing noise
+    instruction_noise = [
+        "paste a public", "stored on the offering", "image url",
+        "service / offering", "service/offering", "project / property", "project/property",
+        "scope & deliverables", "typical timeline", "tech stack", "model & tools",
+        "configuration & sizes", "amenities & usps", "location / possession",
+        "starting price", "confidential", "fill & upload", "customer question",
+        "official verified answer", "knowledge article title", "category article content"
+    ]
+    if any(noise in n for noise in instruction_noise):
+        return False
+    if n.startswith(":") or n.startswith("·") or n.startswith("-") or n.startswith("*") or n.startswith("/"):
+        return False
+
+    # Real Estate subject guardrail
+    if "estate" in v or "property" in v:
+        banned_real_estate = [
+            "full-stack", "mobile app", "ai chatbot", "cloud & dedicated",
+            "cloud and dedicated", "devops", "software development", "custom software",
+            "web app", "engineering pod", "react", "python", "flutter", "aws",
+            "docker", "kubernetes", "fastapi", "next.js", "chikki", "jaggery",
+            "peanut", "cart", "checkout", "return policy", "t-shirt", "shirt",
+            "shoe", "flight booking", "holiday package", "savings account", "fixed deposit",
+            "credit card", "air cargo", "ocean freight", "customs brokerage"
+        ]
+        if any(b in n or b in c for b in banned_real_estate):
+            return False
+
+    # IT / Software subject guardrail
+    if "software" in v or "it" in v:
+        banned_it = [
+            "bhk", "villa plot", "sq.ft", "carpet area", "gated villa",
+            "apartment for sale", "chikki", "jaggery", "flight booking",
+            "savings account", "fixed deposit", "credit card", "home loan",
+            "interest rate", "deposits", "scheme", "minimum balance",
+            "tour package", "desert circuit", "backwaters", "honeymoon",
+            "air cargo", "ocean freight", "customs brokerage", "warehousing",
+            "plots", "apartments", "residence", "commercial office"
+        ]
+        if any(b in n or b in c for b in banned_it):
+            return False
+
+    # Banking / Finance subject guardrail
+    if "bank" in v or "finance" in v:
+        banned_banking = [
+            "bhk", "villa plot", "sq.ft", "carpet area", "gated villa",
+            "full-stack", "mobile app", "software development", "web app",
+            "flight booking", "holiday package", "tour package", "cargo", "freight"
+        ]
+        if any(b in n or b in c for b in banned_banking):
+            return False
+
+    # Tours & Travel subject guardrail
+    if "travel" in v or "tour" in v:
+        banned_travel = [
+            "bhk", "villa plot", "sq.ft", "carpet area", "gated villa",
+            "full-stack", "mobile app", "software development",
+            "savings account", "fixed deposit", "credit card", "home loan"
+        ]
+        if any(b in n or b in c for b in banned_travel):
+            return False
+
+    # Healthcare subject guardrail
+    if "health" in v or "clinic" in v:
+        banned_health = [
+            "full-stack", "mobile app", "villa plot", "bhk", "apartment for sale",
+            "savings account", "fixed deposit", "credit card", "home loan"
+        ]
+        if any(b in n or b in c for b in banned_health):
+            return False
+
+    return True
+
+
+def _canonicalize_and_deduplicate_intents(
+    raw_intents: List[Dict[str, Any]],
+    vertical: str = "generic",
+    menu_buttons: List[Dict[str, Any]] = None,
+    max_intents: int = 7,
+) -> List[Dict[str, Any]]:
+    """Deduplicate, canonicalize, and limit intents to ONLY project-relevant topics.
+
+    1. Discard template artifacts, generic keywords, or irrelevant cross-vertical topics.
+    2. Cluster synonyms (e.g. 4 pricing variations -> 1 'pricing_plan', 3 site visit variations -> 1 'site_visit').
+    3. Merge examples, keywords, and answers across duplicate topics.
+    4. Ensure alignment with active menu buttons.
+    5. Cap active intents at 4-7 strictly relevant to the project.
+    """
+    v = (vertical or "generic").lower()
+    menu_buttons = menu_buttons or []
+
+    junk_slugs = {
+        "populates", "page", "page-name", "intent", "parameter", "section",
+        "sample", "test", "note", "tip", "instruction", "template", "default",
+        "overview", "undefined", "custom-intent", "item", "welcome", "greeting"
+    }
+
+    # Cross-vertical filters: if tenant is real estate, filter out IT/tech/e-com artifacts
+    real_estate_banned = {
+        "technologies", "careers", "benefits", "software", "devops", "coding",
+        "web-apps", "products-schemes", "cart", "track-order", "checkout"
+    }
+
+    canonical_topics = [
+        {
+            "canonical": "site_visit" if ("estate" in v or "property" in v) else "book_appointment",
+            "matches": ["site-visit", "site_visit", "visit", "tour", "appointment", "schedule-tour", "book-visit"],
+            "default_flow": "book_callback",
+            "default_examples": ["I want to schedule a site visit", "Can I view the property this weekend?", "Book a guided tour"],
+            "default_keywords": ["site visit", "visit", "tour", "schedule", "appointment"],
+        },
+        {
+            "canonical": "pricing_plan",
+            "matches": ["pricing", "payment-plan", "price-quote", "quote", "cost", "cost-sheet", "booking-advance", "advance-payment", "rate", "emi", "payment"],
+            "default_flow": "get_quote",
+            "default_examples": ["What is the price?", "Send me the cost sheet", "What are the payment plans and EMI options?"],
+            "default_keywords": ["price", "cost", "pricing", "payment plan", "quote", "rates"],
+        },
+        {
+            "canonical": "brochure_request",
+            "matches": ["brochure", "catalogue", "catalog", "floor-plan", "master-plan", "layout", "specifications", "spec", "download-brochure"],
+            "default_flow": None,
+            "default_examples": ["Send me the project brochure", "Download floor plans", "Can I see the master layout PDF?"],
+            "default_keywords": ["brochure", "floor plan", "master plan", "pdf", "layout", "specifications"],
+        },
+        {
+            "canonical": "property_listings" if ("estate" in v or "property" in v) else "explore_offerings",
+            "matches": ["property", "properties", "flat", "flats", "apartment", "apartments", "villa", "villas", "unit", "units", "explore-offering", "offering", "offerings", "residence", "penthouse", "commercial"],
+            "default_flow": None,
+            "default_examples": ["Show me available properties", "What apartments do you have?", "Tell me about luxury villas"],
+            "default_keywords": ["property", "flat", "apartment", "villa", "bhk", "residence", "commercial"],
+        },
+        {
+            "canonical": "project_details",
+            "matches": ["project-detail", "view-project", "location", "highlights", "connectivity", "specifications", "project"],
+            "default_flow": None,
+            "default_examples": ["Where is the project located?", "What are the key connectivity highlights?", "When is the possession date?"],
+            "default_keywords": ["project", "location", "connectivity", "possession", "highlights"],
+        },
+        {
+            "canonical": "rera_legal",
+            "matches": ["rera", "legal", "sanction", "approval", "approvals", "clear-title", "title", "stamp-duty", "registration", "certification"],
+            "default_flow": None,
+            "default_examples": ["Is the project RERA approved?", "What is the RERA registration number?", "Are all legal clearances in place?"],
+            "default_keywords": ["rera", "legal", "approval", "registration", "sanction", "clear title"],
+        },
+        {
+            "canonical": "amenities",
+            "matches": ["amenities", "amenity", "facility", "facilities", "clubhouse", "swimming-pool", "gym", "sports"],
+            "default_flow": None,
+            "default_examples": ["What amenities are provided?", "Is there a clubhouse and swimming pool?", "Gym and sports facilities"],
+            "default_keywords": ["amenities", "clubhouse", "pool", "gym", "facilities", "sports", "park"],
+        },
+        {
+            "canonical": "home_loans",
+            "matches": ["home-loan", "loan", "loans", "bank-loan", "emi", "mortgage", "financing"],
+            "default_flow": None,
+            "default_examples": ["Do you provide home loan assistance?", "Which banks have approved this project?", "What are the loan EMI options?"],
+            "default_keywords": ["home loan", "loan", "bank", "emi", "interest rate", "financing"],
+        },
+        {
+            "canonical": "nri_desk",
+            "matches": ["nri", "overseas", "international-buyer", "nri-purchase"],
+            "default_flow": None,
+            "default_examples": ["Can NRIs purchase property here?", "What documents are required for NRI purchase?", "NRI investment guidance"],
+            "default_keywords": ["nri", "overseas", "international", "purchase", "repatriation"],
+        },
+        {
+            "canonical": "possession_handover",
+            "matches": ["possession", "handover", "handover-kit", "keys", "upgrade-unit"],
+            "default_flow": None,
+            "default_examples": ["When is the possession date?", "What is included in the handover kit?", "Key handover process"],
+            "default_keywords": ["possession", "handover", "keys", "inspection"],
+        },
+        {
+            "canonical": "customer_support",
+            "matches": ["support", "complaint", "ticket", "human", "advisor", "contact", "agent", "post-sales", "help"],
+            "default_flow": "raise_ticket",
+            "default_examples": ["I need customer support", "Raise a complaint", "Speak to a human advisor"],
+            "default_keywords": ["support", "help", "ticket", "complaint", "human", "contact", "advisor"],
+        },
+    ]
+
+    canonical_map: Dict[str, Dict[str, Any]] = {}
+
+    for raw in raw_intents:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        slug = _slugify(name)
+        if not slug or slug in junk_slugs or len(slug) < 3:
+            continue
+        if ("estate" in v or "property" in v) and slug in real_estate_banned:
+            continue
+
+        # Find matching canonical topic
+        matched_canonical = None
+        for topic in canonical_topics:
+            if any(m in slug for m in topic["matches"]) or any(m in name.lower() for m in topic["matches"]):
+                matched_canonical = topic
+                break
+
+        canonical_name = matched_canonical["canonical"] if matched_canonical else slug
+        target_flow = raw.get("flow") or (matched_canonical.get("default_flow") if matched_canonical else None)
+
+        examples = [ex.strip() for ex in raw.get("examples", []) if isinstance(ex, str) and ex.strip()]
+        keywords = [kw.strip().lower() for kw in raw.get("keywords", []) if isinstance(kw, str) and kw.strip()]
+        answer = raw.get("answer")
+
+        if canonical_name in canonical_map:
+            # Merge with existing canonical intent
+            entry = canonical_map[canonical_name]
+            combined_ex = list(dict.fromkeys(entry.get("examples", []) + examples))
+            entry["examples"] = combined_ex[:5]
+            combined_kw = list(dict.fromkeys(entry.get("keywords", []) + keywords))
+            entry["keywords"] = combined_kw[:10]
+            if target_flow and not entry.get("flow"):
+                entry["flow"] = target_flow
+            if answer and (not entry.get("answer") or len(str(answer)) > len(str(entry.get("answer")))):
+                entry["answer"] = answer
+        else:
+            if matched_canonical and not examples:
+                examples = list(matched_canonical.get("default_examples", []))
+            if matched_canonical and not keywords:
+                keywords = list(matched_canonical.get("default_keywords", []))
+            entry = {
+                "name": canonical_name,
+                "examples": examples[:5],
+                "keywords": keywords[:10],
+                "flow": target_flow,
+                "enabled": True,
+            }
+            if answer:
+                entry["answer"] = answer
+            canonical_map[canonical_name] = entry
+
+    # Ensure intents for active menu buttons exist
+    for btn in menu_buttons:
+        if not isinstance(btn, dict) or btn.get("__remove__"):
+            continue
+        btn_flow = btn.get("flow")
+        btn_action = btn.get("action")
+        btn_title = (btn.get("title") or "").lower()
+
+        target_name = None
+        if btn_flow == "book_callback" or "visit" in btn_title or "consult" in btn_title:
+            target_name = "site_visit" if ("estate" in v or "property" in v) else "book_appointment"
+        elif btn_flow == "get_quote" or "price" in btn_title or "quote" in btn_title or "plan" in btn_title:
+            target_name = "pricing_plan"
+        elif btn_flow == "raise_ticket" or "support" in btn_title or "help" in btn_title:
+            target_name = "customer_support"
+        elif "brochure" in btn_title:
+            target_name = "brochure_request"
+        elif "properties" in btn_title or "explore" in btn_title or "projects" in btn_title:
+            target_name = "property_listings" if ("estate" in v or "property" in v) else "explore_offerings"
+
+        if target_name and target_name not in canonical_map:
+            # Find default template for this canonical topic
+            for topic in canonical_topics:
+                if topic["canonical"] == target_name:
+                    canonical_map[target_name] = {
+                        "name": target_name,
+                        "examples": list(topic.get("default_examples", []))[:5],
+                        "keywords": list(topic.get("default_keywords", []))[:10],
+                        "flow": topic.get("default_flow"),
+                        "enabled": True,
+                    }
+                    break
+
+    # Prioritize and cap intents to max_intents
+    def _intent_priority(item: Dict[str, Any]) -> int:
+        score = 0
+        if item.get("flow"):
+            score += 10
+        if item.get("answer"):
+            score += 5
+        if item["name"] in {"property_listings", "site_visit", "pricing_plan", "explore_offerings", "customer_support"}:
+            score += 8
+        return score
+
+    sorted_intents = sorted(canonical_map.values(), key=_intent_priority, reverse=True)
+    return sorted_intents[:max_intents]
+
+
 class AutoBifurcator:
     """Core auto-bifurcation and auto-configuration pipeline."""
 
@@ -94,6 +484,14 @@ class AutoBifurcator:
                 for pno in range(len(doc)):
                     page = doc[pno]
                     txt = page.get_text("text") or ""
+                    if len(txt.strip()) < 50:
+                        try:
+                            from backend.extract import ocr_page
+                            ocr_txt = ocr_page(page)
+                            if ocr_txt and ocr_txt.strip():
+                                txt = ocr_txt
+                        except Exception as ocr_err:
+                            logger.debug("PDF OCR page %d fallback error: %s", pno + 1, ocr_err)
                     if txt.strip():
                         pages_text.append(f"--- Page {pno + 1} ---\n{txt}")
                 extracted_text = "\n\n".join(pages_text)
@@ -210,7 +608,9 @@ You must output a strictly valid JSON object adhering to this structure:
     }}
   ],
   "intents": [
-    // 5 to 10 top customer conversational intents
+    // STRICTLY 4 to 6 top customer conversational intents RELEVANT ONLY TO THIS SPECIFIC PROJECT / COLLATERAL.
+    // DO NOT invent generic intents or add cross-vertical topics (e.g. no IT/software topics for real estate).
+    // Every intent must have a clear customer purpose directly related to the company's offerings and documentation.
     {{
       "name": "intent_slug_name",
       "description": "Brief description of customer purpose",
@@ -224,17 +624,20 @@ You must output a strictly valid JSON object adhering to this structure:
     }}
   ],
   "offerings": [
-    // All individual products, services, properties, or packages extracted from documents
+    // All individual properties, units, floor plans, services, or catalog products
     {{
-      "name": "Item or Package Name",
-      "category": "Category or Segment",
-      "price": "Price, starting rate, or range (e.g. '₹85 Lakhs' or '$499/mo' or 'Starting ₹25,000')",
-      "short_description": "1 sentence punchy summary",
-      "description": "Detailed features, inclusions, and specifications",
-      "unit": "unit / package / license / flat / person",
+      "name": "Property, Project, Unit, or Service Name (e.g. '3 BHK Luxury Apartment', 'Skyline Villa Plot', 'Full-Stack Web App')",
+      "category": "Segment or Type (e.g. 'Residential Apartments', 'Luxury Villas', 'Commercial', 'Custom Software')",
+      "price": "Starting price or cost sheet rate (e.g. 'Starting ₹85 Lakhs', '₹1.45 Cr', 'Starting ₹4,00,000')",
+      "short_description": "Punchy 1-sentence summary of configuration and size",
+      "description": "Full specifications, super built-up area, carpet area, possession date, tech stack, and amenities",
+      "image_url": "CRITICAL: Direct public HTTPS photo or image URL from the document (e.g. https://images.unsplash.com/... or public image URL if present, else empty string)",
+      "unit": "flat / villa / unit / package / month / sqft",
       "attrs": {{
-        "highlights": "Key bullet points",
-        "specifications": "Extra details"
+        "specifications": "BHK, dimensions, sq.ft, floor or tech stack",
+        "timeline": "Possession timeline or delivery timeline",
+        "highlights": "Key bullet points, amenities, or deliverables",
+        "image_url": "Direct image URL"
       }}
     }}
   ],
@@ -254,11 +657,18 @@ You must output a strictly valid JSON object adhering to this structure:
 }}
 
 CRITICAL INSTRUCTIONS:
-1. Extract ALL tangible products/services/properties you find into the 'offerings' array.
-2. Ensure 'menu_items' titles are UNDER 24 CHARACTERS (strictly enforced by WhatsApp API).
-3. If phone or email is missing in the text, provide a sensible default based on the tenant name (e.g. 'support@{self.tenant_id}.com' and '+91 9800000000').
-4. Respond ONLY with the JSON object. Do not enclose in backticks or markdown if possible.
+1. Extract ALL tangible properties/projects/services/products into the 'offerings' array.
+2. CRITICAL FOR IMAGE URLS: If any property, project, offering, or catalog item in the document has an image URL or photo link (such as Unsplash https://images.unsplash.com/... or public image links), you MUST extract the exact URL into the 'image_url' field. Never omit or invent URLs; copy them verbatim.
+3. Ensure 'menu_items' titles are UNDER 24 CHARACTERS (strictly enforced by WhatsApp API).
+4. If phone or email is missing in the text, provide a sensible default based on the tenant name (e.g. 'support@{self.tenant_id}.com' and '+91 9800000000').
+5. Respond ONLY with the JSON object. Do not enclose in backticks or markdown if possible.
 """
+
+        # Check for structured onboarding guide template first
+        template_data = self._parse_onboarding_guide(full_corpus)
+        if template_data and template_data.get("brand") and template_data.get("offerings"):
+            logger.info("ONBOARDING_GUIDE_TEMPLATE_DETECTED | tenant=%s | offerings=%d", self.tenant_id, len(template_data.get("offerings", [])))
+            return template_data
 
         user_prompt = f"Please bifurcate and configure the chatbot system based on the following uploaded client collateral:\n\n{full_corpus}"
 
@@ -266,6 +676,9 @@ CRITICAL INSTRUCTIONS:
         if not response_json:
             logger.warning("LLM bifurcation returned empty or invalid JSON; applying heuristic fallback")
             response_json = self._heuristic_bifurcation(doc_summaries)
+
+        if response_json and response_json.get("offerings"):
+            self._enrich_offerings_with_images(response_json["offerings"], full_corpus)
 
         return response_json
 
@@ -389,6 +802,316 @@ CRITICAL INSTRUCTIONS:
                 pass
 
         return None
+
+    def _enrich_offerings_with_images(self, offerings: List[dict], corpus: str) -> None:
+        """Scan corpus for image URLs and ensure offerings get populated with their image URLs."""
+        # Find all https image URLs in corpus
+        image_urls = re.findall(r"https?://[^\s\|\]\)\>]+(?:unsplash\.com[^\s\|\]\)\>]*|\.jpg|\.jpeg|\.png|\.webp)", corpus, re.I)
+        if not image_urls:
+            image_urls = re.findall(r"https?://images\.[^\s\|\]\)\>]+", corpus, re.I)
+
+        if not image_urls:
+            return
+
+        for idx, off in enumerate(offerings):
+            if not off.get("image_url") and not off.get("media_url"):
+                off_name = off.get("name", "")
+                assigned_url = None
+                if off_name and len(off_name) > 3:
+                    pos = corpus.lower().find(off_name[:30].lower())
+                    if pos != -1:
+                        window = corpus[pos : pos + 1000]
+                        w_urls = re.findall(r"https?://[^\s\|\]\)\>]+(?:unsplash\.com[^\s\|\]\)\>]*|\.jpg|\.jpeg|\.png|\.webp|[a-zA-Z0-9_\-\./\?=&]+)", window, re.I)
+                        for u in w_urls:
+                            if "http" in u and ("unsplash" in u or "image" in u or ".jpg" in u or ".png" in u):
+                                assigned_url = u
+                                break
+                if not assigned_url and idx < len(image_urls):
+                    assigned_url = image_urls[idx]
+                if assigned_url:
+                    off["image_url"] = assigned_url
+                    off["media_url"] = assigned_url
+                    off.setdefault("attrs", {})["image_url"] = assigned_url
+
+    def _parse_onboarding_guide(self, text: str) -> Optional[Dict[str, Any]]:
+        """Direct deterministic parser for standardized AI WhatsApp Chatbot Onboarding Guide templates."""
+        if "[SECTION:" not in text and "Onboarding Guide" not in text:
+            return None
+
+        data = {}
+        # 1. Vertical
+        v_match = re.search(r"Vertical:\s*([^\(\n\r]+)(?:\(([a-z0-9_]+)\))?", text, re.I)
+        if v_match:
+            vert = (v_match.group(2) or v_match.group(1)).strip().lower().replace(" ", "_")
+            if "estate" in vert or "property" in vert:
+                vert = "real_estate"
+            elif "software" in vert or "it" in vert:
+                vert = "it_software"
+            elif "travel" in vert or "tour" in vert:
+                vert = "tours_travel"
+            elif "ecom" in vert or "retail" in vert:
+                vert = "ecommerce"
+            elif "bank" in vert or "finance" in vert:
+                vert = "finance"
+            elif "health" in vert or "clinic" in vert:
+                vert = "healthcare"
+            data["vertical"] = vert if vert in VALID_VERTICALS else "generic"
+        else:
+            data["vertical"] = "generic"
+
+        # 2. Brand & Profile
+        brand = {}
+        b_match = re.search(r"\[SECTION:\s*BRAND\s*&\s*PROFILE\](.*?)(?=\[SECTION:|$)", text, re.S | re.I)
+        if b_match:
+            b_txt = b_match.group(1)
+            # Company Legal Name
+            m = re.search(r"Company Legal Name\s*(?:Official registered entity name)?\s*([^\n\r]+)", b_txt, re.I)
+            if m:
+                brand["name"] = m.group(1).strip()
+
+            # Brand Display Name
+            m = re.search(r"Brand Display Name\s*(?:Name displayed on WhatsApp)?\s*([^\n\r]+)", b_txt, re.I)
+            if m:
+                brand["display_name"] = m.group(1).strip()
+                if "name" not in brand:
+                    brand["name"] = m.group(1).strip()
+
+            # Bot Assistant Name
+            m = re.search(r"AI Bot Assistant Name\s*(?:Bot assistant persona name)?\s*([^\n\r]+)", b_txt, re.I)
+            if m:
+                brand["bot_name"] = m.group(1).strip()
+
+            # Brand Tagline
+            m = re.search(r"Brand Tagline\s*(?:Value proposition sentence)?\s*([^\n\r]+(?:\n[^\n\r]+)?)", b_txt, re.I)
+            if m:
+                tag = m.group(1).replace("\n", " ").strip()
+                tag = re.split(r"Official Website|Support Email|Support Phone", tag, flags=re.I)[0].strip()
+                brand["tagline"] = tag
+
+            # Website
+            m = re.search(r"Official Website\s*(?:Company website URL)?\s*(https?://[^\s]+)", b_txt, re.I)
+            if m:
+                brand["website"] = m.group(1).strip()
+
+            # Support Email
+            m = re.search(r"Support Email\s*(?:Support desk inbox)?\s*([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)", b_txt, re.I)
+            if m:
+                brand["support_email"] = m.group(1).strip()
+
+            # Support Phone
+            m = re.search(r"Support Phone\s*(?:Helpline number with country code)?\s*(\+?[0-9\s-]{10,18})", b_txt, re.I)
+            if m:
+                brand["support_phone"] = m.group(1).strip()
+
+            # Working Hours
+            m = re.search(r"Working Hours\s*(?:Operating schedule & days)?\s*([^\n\r]+)", b_txt, re.I)
+            if m:
+                brand["working_hours"] = m.group(1).strip()
+
+        data["brand"] = brand
+
+        # 3. WhatsApp Menu
+        menu_items = []
+        m_match = re.search(r"\[SECTION:\s*WHATSAPP\s*MENU\](.*?)(?=\[SECTION:|$)", text, re.S | re.I)
+        if m_match:
+            m_txt = m_match.group(1)
+            for line in m_txt.splitlines():
+                line = line.strip()
+                if not line or "Button Title" in line or "Parameter" in line:
+                    continue
+                act_match = re.search(r"\b(offerings|catalog|quote|get_quote|book_callback|callback|raise_ticket|support|faq|[a-z0-9_-]+)$", line, re.I)
+                if act_match:
+                    action = act_match.group(1).lower()
+                    prefix = line[: act_match.start()].strip()
+                    sec_match = re.search(r"[·•\-|\t]\s*([A-Za-z0-9 &'-]{3,24})\s*$", prefix)
+                    if sec_match:
+                        section = sec_match.group(1).strip()
+                        main_part = prefix[: sec_match.start()].strip()
+                    else:
+                        parts = prefix.split()
+                        section = parts[-1] if parts else "Explore"
+                        main_part = " ".join(parts[:-1])
+
+                    words = main_part.split()
+                    if len(words) >= 4:
+                        title = " ".join(words[:2])[:24]
+                        desc = " ".join(words[2:])[:72]
+                    else:
+                        title = main_part[:24]
+                        desc = main_part[:72]
+
+                    known_titles = [
+                        "Our Services", "Technologies", "Projects", "Get a Quote", "Careers", "Benefits",
+                        "Explore Properties", "Ongoing Projects", "Schedule Site Visit", "Pricing Plans",
+                        "Price & Payment Plans", "Customer Support", "Talk to Advisor", "Book Site Visit",
+                        "RERA & Legal", "Request a Callback", "Project Brochure"
+                    ]
+                    for kt in known_titles:
+                        if main_part.lower().startswith(kt.lower()):
+                            title = kt
+                            desc = main_part[len(kt) :].strip()
+                            break
+
+                    btn_icon = _assign_button_icon(title, action, data.get("vertical", "generic"))
+                    menu_items.append({
+                        "id": re.sub(r"[^a-z0-9_]+", "_", title.lower()).strip("_"),
+                        "title": title[:24],
+                        "description": desc[:72],
+                        "section": section[:24],
+                        "action": action,
+                        "icon": btn_icon,
+                    })
+        data["menu_items"] = menu_items
+
+        # 4. Catalog & Offerings WITH Image URLs
+        offerings = []
+        cat_match = re.search(r"\[SECTION:\s*CATALOG\s*&\s*OFFERINGS\](.*?)(?=\[SECTION:|$)", text, re.S | re.I)
+        if cat_match:
+            c_txt = cat_match.group(1)
+            url_matches = list(re.finditer(r"(https?://[^\s]+)", c_txt))
+            if url_matches:
+                prev_idx = 0
+                for i, um in enumerate(url_matches):
+                    img_url = um.group(1).strip()
+                    block = c_txt[prev_idx : um.start()].strip()
+                    prev_idx = um.end()
+                    lines = [l.strip() for l in block.splitlines() if l.strip()]
+                    lines = [
+                        l for l in lines
+                        if not any(h in l.lower() for h in [
+                            "service / offering", "category", "starting price", "tech stack", "image url", "image url:"
+                        ])
+                    ]
+                    if not lines:
+                        continue
+                    name = lines[0]
+                    p_match = re.search(r"(?:Starting\s*)?[₹$·€£]\s*[0-9,.]+(?:\s*(?:Lakhs?|Cr|Crores?|k|/month|/project|/fixed|/T&M))?", block, re.I)
+                    if p_match:
+                        price = p_match.group(0).replace("·", "₹").strip()
+                        before_price = block[: p_match.start()].strip()
+                        after_price = block[p_match.end() :].strip()
+                    else:
+                        price = None
+                        before_price = lines[0] if lines else ""
+                        after_price = " ".join(lines[1:]) if len(lines) > 1 else ""
+
+                    # Clean any table header noise and instructions from before_price
+                    b_lines = [l.strip() for l in before_price.splitlines() if l.strip()]
+                    b_lines = [
+                        l for l in b_lines
+                        if not any(h in l.lower() for h in [
+                            "service / offering", "service/offering", "category", "starting price",
+                            "tech stack", "image url", "project / property", "paste a public",
+                            "stored on the offering", "scope & deliverables", "typical timeline",
+                            "configuration & sizes", "location / possession", "amenities & usps"
+                        ])
+                    ]
+                    before_price = " ".join(b_lines).strip()
+
+                    category = "General"
+                    name = before_price
+
+                    known_categories = [
+                        "Custom Software", "Mobile Engineering", "AI Engineering", "Cloud / Teams", "Cloud & Teams", "DevOps",
+                        "Luxury Apartments", "Commercial Office", "Commercial Space", "Residential Apartments",
+                        "Villas", "Plots", "Penthouse", "Retail Shops", "Holiday Packages", "Wellness", "Consulting", "Services"
+                    ]
+                    for kc in known_categories:
+                        if kc.lower() in before_price.lower():
+                            category = kc
+                            idx_cat = before_price.lower().find(kc.lower())
+                            candidate_name = before_price[:idx_cat].strip(" ·-–—|")
+                            if candidate_name:
+                                name = candidate_name
+                            break
+                    else:
+                        b_lines = [l.strip() for l in before_price.splitlines() if l.strip()]
+                        if len(b_lines) >= 2:
+                            name = " ".join(b_lines[:-1])
+                            category = b_lines[-1]
+
+                    desc = after_price if after_price else " ".join(lines)
+                    short_desc = desc.split("\n")[0][:120] if desc else name
+
+                    clean_name = re.sub(r"^[:\s·•\-\*\/]+", "", name).strip()
+                    clean_category = re.sub(r"^[:\s·•\-\*\/]+", "", category).strip() or "General"
+                    if not _is_offering_relevant_to_vertical(clean_name, clean_category, data.get("vertical", "generic")):
+                        continue
+
+                    offerings.append({
+                        "name": clean_name,
+                        "category": clean_category,
+                        "price": price or "On Request",
+                        "short_description": short_desc[:120],
+                        "description": desc.strip(),
+                        "image_url": img_url,
+                        "media_url": img_url,
+                        "attrs": {
+                            "image_url": img_url,
+                            "raw_specs": desc[:200]
+                        }
+                    })
+        data["offerings"] = offerings
+
+        # 5. FAQs & Policies
+        faq_articles = []
+        faq_match = re.search(r"\[SECTION:\s*FAQS\s*&\s*POLICIES\](.*?)(?=\[SECTION:|$)", text, re.S | re.I)
+        if faq_match:
+            f_txt = faq_match.group(1)
+            q_blocks = re.findall(r"([A-Za-z0-9][^\?\n]+\?)\s+([^\?\n]+?)(?=\s+[A-Za-z0-9][^\?\n]+\?|$)", f_txt, re.S)
+            if q_blocks:
+                faq_md = "# Frequently Asked Questions & Policies\n\n"
+                for q, a in q_blocks:
+                    faq_md += f"### Q: {q.strip()}\n{a.strip()}\n\n"
+                faq_articles.append({
+                    "title": "FAQs & Policies",
+                    "category": "FAQ",
+                    "markdown_content": faq_md
+                })
+        data["knowledge_articles"] = faq_articles
+
+        # 6. Info Pages (Intents)
+        intents = []
+        info_match = re.search(r"\[SECTION:\s*INFO\s*PAGES\](.*?)(?=\[SECTION:|$)", text, re.S | re.I)
+        if info_match:
+            i_txt = info_match.group(1)
+            for line in i_txt.splitlines():
+                line = line.strip()
+                clean_line = re.sub(r"^[•·\-\*\d\.\s]+", "", line).strip()
+                if not clean_line or any(clean_line.lower().startswith(s) for s in ["populates", "page name", "note:", "tip:", "instruction:", "parameter:"]):
+                    continue
+                parts = clean_line.split(":", 1) if ":" in clean_line else clean_line.split(maxsplit=1)
+                if len(parts) == 2:
+                    raw_p_name = parts[0].strip()
+                    p_slug = _slugify(raw_p_name)
+                    if p_slug in {"populates", "page", "page-name", "intent", "parameter", "section", "note", "tip", "instruction"} or len(p_slug) < 3:
+                        continue
+                    p_content = parts[1].strip()
+                    if not p_content:
+                        continue
+                    intents.append({
+                        "name": p_slug,
+                        "examples": [f"Tell me about {raw_p_name}", f"What is {raw_p_name}?", f"Information regarding {raw_p_name}"],
+                        "keywords": [k.lower() for k in raw_p_name.split() if len(k) > 2],
+                        "answer": p_content,
+                        "flow": None
+                    })
+                    if len(intents) >= 5:
+                        break
+        data["intents"] = intents
+
+        # 7. Bot Persona & Guardrails
+        p_match = re.search(r"\[SECTION:\s*BOT\s*PERSONA\s*&\s*GUARDRAILS\](.*?)(?=\[SECTION:|$)", text, re.S | re.I)
+        if p_match:
+            p_txt = p_match.group(1)
+            m = re.search(r"Welcome Greeting\s*([^\n\r]+)", p_txt, re.I)
+            if m:
+                data.setdefault("brand", {})["greeting"] = m.group(1).strip()
+            m = re.search(r"Strict Guardrails\s*([^\n\r]+)", p_txt, re.I)
+            if m:
+                data.setdefault("brand", {})["guardrails"] = m.group(1).strip()
+
+        return data if (data.get("brand") or data.get("offerings")) else None
 
     def _heuristic_bifurcation(self, doc_summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Deterministic rule-based fallback when LLM is unavailable."""
@@ -575,23 +1298,41 @@ CRITICAL INSTRUCTIONS:
 
         summary["brand"] = clean_brand
 
-        # 3.3 Sanitize WhatsApp Menu Buttons (Meta Character Limitations)
+        # 3.3 Sanitize WhatsApp Menu Buttons (Meta Character Limitations & Deduplication)
         menu_items_raw = bifurcation.get("menu_items", [])
         menu_buttons = []
+        seen_b_ids = set()
+        seen_b_titles = set()
+
         for i, item in enumerate(menu_items_raw):
-            b_id = _slugify(item.get("id") or item.get("title") or f"opt_{i}")
-            # STRICT LIMITS: Title <= 24 chars, Desc <= 72 chars, Section <= 24 chars
-            title = (item.get("title") or f"Option {i+1}").strip()[:24]
+            raw_title = (item.get("title") or "").strip()[:24]
+            if not raw_title or raw_title.lower() in {"button title", "parameter", "action", "section", "none", "empty"}:
+                continue
+            clean_t = re.sub(r"[^\w\s]", " ", raw_title).strip().lower()
+            clean_t = " ".join(clean_t.split())
+            if clean_t in seen_b_titles:
+                continue
+
+            b_id = _slugify(item.get("id") or raw_title or f"opt_{i}")
+            if not b_id or b_id in seen_b_ids:
+                b_id = f"{b_id or 'opt'}_{len(menu_buttons) + 1}"
+            seen_b_ids.add(b_id)
+            seen_b_titles.add(clean_t)
+
             desc = (item.get("description") or "").strip()[:72]
             sec = (item.get("section") or "Explore").strip()[:24]
             action = item.get("action") or "faq"
+            btn_icon = item.get("icon") or _assign_button_icon(raw_title, action, vertical)
+            btn_image_url = item.get("image_url") or None
 
             button_dict = {
                 "id": b_id,
-                "title": title,
+                "title": raw_title,
                 "description": desc,
                 "section": sec,
-                "sort_order": i + 1,
+                "icon": btn_icon,
+                "image_url": btn_image_url,
+                "sort_order": len(menu_buttons) + 1,
                 "enabled": True,
             }
             if action in ("offerings", "catalog"):
@@ -602,30 +1343,26 @@ CRITICAL INSTRUCTIONS:
                 button_dict["intent"] = b_id
 
             menu_buttons.append(button_dict)
+            if len(menu_buttons) >= 8:  # Keep menu clean and compact (avoid awkward grid wrap)
+                break
 
         if not menu_buttons:
-            # Fallback 3 default buttons
+            # Fallback 3 default buttons with vertical-aware icons
             menu_buttons = [
-                {"id": "offerings", "title": "Explore Offerings"[:24], "description": "Browse catalog"[:72], "section": "Main"[:24], "intent": "offerings", "sort_order": 1, "enabled": True},
-                {"id": "callback", "title": "Book Consultation"[:24], "description": "Request a callback"[:72], "section": "Main"[:24], "flow": "book_callback", "sort_order": 2, "enabled": True},
-                {"id": "support", "title": "Customer Help"[:24], "description": "Ask questions"[:72], "section": "Main"[:24], "flow": "raise_ticket", "sort_order": 3, "enabled": True},
+                {"id": "offerings", "title": "Explore Offerings"[:24], "description": "Browse catalog"[:72], "section": "Main"[:24], "icon": _assign_button_icon("Explore Offerings", "offerings", vertical), "intent": "offerings", "sort_order": 1, "enabled": True},
+                {"id": "callback", "title": "Book Consultation"[:24], "description": "Request a callback"[:72], "section": "Main"[:24], "icon": _assign_button_icon("Book Consultation", "book_callback", vertical), "flow": "book_callback", "sort_order": 2, "enabled": True},
+                {"id": "support", "title": "Customer Help"[:24], "description": "Ask questions"[:72], "section": "Main"[:24], "icon": _assign_button_icon("Customer Help", "raise_ticket", vertical), "flow": "raise_ticket", "sort_order": 3, "enabled": True},
             ]
         summary["menu_buttons_count"] = len(menu_buttons)
 
-        # 3.4 Sanitize Intents
+        # 3.4 Sanitize & Canonicalize Intents (strictly project-relevant, cap at 4-7)
         intents_raw = bifurcation.get("intents", [])
-        clean_intents = []
-        for intent in intents_raw:
-            i_name = _slugify(intent.get("name") or "custom_intent")
-            examples = [ex.strip() for ex in intent.get("examples", []) if ex.strip()][:5]
-            keywords = [kw.strip() for kw in intent.get("keywords", []) if kw.strip()][:10]
-            clean_intents.append({
-                "name": i_name,
-                "examples": examples,
-                "keywords": keywords,
-                "flow": intent.get("flow") or None,
-                "enabled": True,
-            })
+        clean_intents = _canonicalize_and_deduplicate_intents(
+            intents_raw,
+            vertical=vertical,
+            menu_buttons=menu_buttons,
+            max_intents=7,
+        )
         summary["intents_count"] = len(clean_intents)
 
         # 3.5 Update Tenant Profile Draft in Database
@@ -634,20 +1371,51 @@ CRITICAL INSTRUCTIONS:
         draft["vertical"] = vertical
         draft["display_name"] = clean_brand["name"]
         draft["brand"] = clean_brand
+
+        # Fetch vertical defaults and existing draft to tombstone non-selected buttons
+        from shared.tenancy.defaults import get_vertical_defaults
+        defaults = get_vertical_defaults(vertical)
+        default_menu_buttons = defaults.get("menu", {}).get("buttons", [])
+        default_ids = {
+            b.get("id") for b in default_menu_buttons if isinstance(b, dict) and b.get("id")
+        }
+        old_draft_ids = {
+            b.get("id") for b in draft.get("menu", {}).get("buttons", [])
+            if isinstance(b, dict) and b.get("id") and not b.get("__remove__")
+        }
+        active_ids = {b["id"] for b in menu_buttons}
+
+        final_menu_buttons = list(menu_buttons)
+        tombstone_ids = (default_ids | old_draft_ids) - active_ids
+        for tid in sorted(tombstone_ids):
+            final_menu_buttons.append({"id": tid, "__remove__": True})
+
         draft["menu"] = {
             "key": "kb_main",
             "header": clean_brand["name"],
             "body": "Welcome! How can we assist you today?",
             "footer": "Select an option or type your query directly",
             "button_text": "Select Option",
-            "buttons": menu_buttons,
+            "buttons": final_menu_buttons,
         }
-        if clean_intents:
-            # Merge existing and new intents
-            existing_intents = {i["name"]: i for i in draft.get("intents", [])}
-            for ci in clean_intents:
-                existing_intents[ci["name"]] = ci
-            draft["intents"] = list(existing_intents.values())
+
+        # Tombstone unneeded default intents and stale draft intents
+        default_intents = defaults.get("intents", [])
+        default_intent_names = {
+            i.get("name") for i in default_intents if isinstance(i, dict) and i.get("name")
+        }
+        old_draft_intent_names = {
+            i.get("name") for i in draft.get("intents", [])
+            if isinstance(i, dict) and i.get("name") and not i.get("__remove__")
+        }
+        active_intent_names = {i["name"] for i in clean_intents}
+
+        final_clean_intents = list(clean_intents)
+        tombstone_intent_names = (default_intent_names | old_draft_intent_names) - active_intent_names
+        for tin in sorted(tombstone_intent_names):
+            final_clean_intents.append({"name": tin, "__remove__": True})
+
+        draft["intents"] = final_clean_intents
 
         if "business_hours" in bifurcation:
             draft["business_hours"] = bifurcation["business_hours"]
@@ -683,22 +1451,57 @@ CRITICAL INSTRUCTIONS:
 
         # 3.6 Insert Offerings into Catalog (products table)
         offerings_raw = bifurcation.get("offerings", [])
-        existing_products = {p.get("name", "").lower(): p for p in list_products(tenant_id=tenant_id, active_only=False)}
+        clean_offerings = [
+            off for off in offerings_raw
+            if isinstance(off, dict) and _is_offering_relevant_to_vertical(
+                off.get("name", ""), off.get("category", ""), vertical
+            )
+        ]
+        existing_products_list = list_products(tenant_id=tenant_id, active_only=False)
+        existing_by_name = {p.get("name", "").lower().strip(): p for p in existing_products_list if p.get("name")}
+        existing_by_slug = {p.get("slug"): p for p in existing_products_list if p.get("slug")}
         inserted_count = 0
+        upserted_ids = set()
+        upserted_names = set()
 
-        for off in offerings_raw:
+        for off in clean_offerings:
             name = (off.get("name") or "").strip()
+            name = re.sub(r"^[:\s·•\-\*\/]+", "", name).strip()
             if not name:
                 continue
             cat = (off.get("category") or "General").strip()
+            cat = re.sub(r"^[:\s·•\-\*\/]+", "", cat).strip() or "General"
             price = (str(off.get("price") or "")).strip() or None
             short_desc = (off.get("short_description") or name).strip()
             desc = (off.get("description") or short_desc).strip()
             attrs = off.get("attrs") or {}
-            slug = _slugify(name)
+            target_slug = _slugify(name)
+            upserted_names.add(name.lower())
 
-            if name.lower() in existing_products:
-                prod_id = existing_products[name.lower()]["id"]
+            # EXTRACT IMAGE / MEDIA URL
+            media_url = (
+                off.get("image_url")
+                or off.get("media_url")
+                or attrs.get("image_url")
+                or attrs.get("media_url")
+                or ""
+            )
+            if media_url and isinstance(media_url, str):
+                media_url = media_url.strip()
+                if not media_url.startswith("http"):
+                    if "unsplash.com" in media_url or any(ext in media_url.lower() for ext in (".jpg", ".jpeg", ".png", ".webp")):
+                        media_url = "https://" + media_url.lstrip("/")
+                    else:
+                        media_url = None
+            else:
+                media_url = None
+
+            if media_url:
+                attrs["image_url"] = media_url
+
+            matched_prod = existing_by_name.get(name.lower()) or existing_by_slug.get(target_slug)
+            if matched_prod:
+                prod_id = matched_prod["id"]
                 update_product(
                     prod_id,
                     tenant_id=tenant_id,
@@ -706,23 +1509,73 @@ CRITICAL INSTRUCTIONS:
                     description=desc,
                     short_description=short_desc,
                     category=cat,
+                    media_url=media_url,
                     attrs_json=attrs,
                 )
+                upserted_ids.add(prod_id)
             else:
-                save_product(
+                # Check if target_slug is already used in products table globally
+                final_slug = target_slug
+                with get_db_context() as conn:
+                    row = conn.execute("SELECT id, tenant_id FROM products WHERE slug = ?", (target_slug,)).fetchone()
+                    if row:
+                        if str(row["tenant_id"]) == str(tenant_id):
+                            # Same tenant already has this slug, update the existing product
+                            update_product(
+                                row["id"],
+                                tenant_id=tenant_id,
+                                price=price,
+                                description=desc,
+                                short_description=short_desc,
+                                category=cat,
+                                media_url=media_url,
+                                attrs_json=attrs,
+                            )
+                            upserted_ids.add(row["id"])
+                            continue
+                        else:
+                            final_slug = f"{target_slug}-{tenant_id}"
+
+                new_id = save_product(
                     name=name,
-                    slug=slug,
+                    slug=final_slug,
                     category=cat,
                     price=price,
                     short_description=short_desc,
                     description=desc,
+                    media_url=media_url,
+                    media_type="image",
                     attrs_json=attrs,
                     tenant_id=tenant_id,
                     actor=self.actor,
                 )
+                upserted_ids.add(new_id)
                 inserted_count += 1
                 if len(summary["offerings_sample"]) < 5:
                     summary["offerings_sample"].append(name)
+
+        # Prune any existing products that are cross-vertical, template noise, or outdated duplicates
+        current_tenant_products = list_products(tenant_id=tenant_id, active_only=False)
+        for p in current_tenant_products:
+            p_id = p.get("id")
+            p_name = (p.get("name") or "").strip()
+            p_cat = (p.get("category") or "").strip()
+
+            # 1. Unrelated to vertical or header noise -> delete immediately
+            if not _is_offering_relevant_to_vertical(p_name, p_cat, vertical):
+                logger.info("PRUNING_UNRELATED_PRODUCT | tenant=%s | id=%s | name=%s", tenant_id, p_id, p_name)
+                delete_product(p_id, hard=True, tenant_id=tenant_id)
+                continue
+
+            # 2. Older duplicate of an upserted offering -> delete immediately
+            if clean_offerings and p_id not in upserted_ids:
+                is_dupe = any(
+                    (clean_name in p_name.lower() or p_name.lower() in clean_name)
+                    for clean_name in upserted_names
+                )
+                if is_dupe:
+                    logger.info("PRUNING_DUPLICATE_PRODUCT | tenant=%s | id=%s | name=%s", tenant_id, p_id, p_name)
+                    delete_product(p_id, hard=True, tenant_id=tenant_id)
 
         summary["offerings_created"] = inserted_count
 
@@ -750,11 +1603,19 @@ CRITICAL INSTRUCTIONS:
                     all_chunks_to_index.append(sec.strip())
 
         # Also chunk raw text from uploaded files
-        for rf in raw_files:
-            txt = rf.get("text", "")
-            if txt:
-                paragraphs = [p.strip() for p in txt.split("\n\n") if len(p.strip()) > 80]
-                all_chunks_to_index.extend(paragraphs[:50])
+        if raw_files:
+            if isinstance(raw_files, (str, bytes)):
+                raw_files = [{"text": str(raw_files)}]
+            for rf in raw_files:
+                if isinstance(rf, dict):
+                    txt = rf.get("text", "")
+                elif isinstance(rf, str):
+                    txt = rf
+                else:
+                    txt = ""
+                if txt:
+                    paragraphs = [p.strip() for p in txt.split("\n\n") if len(p.strip()) > 80]
+                    all_chunks_to_index.extend(paragraphs[:50])
 
         if all_chunks_to_index:
             try:

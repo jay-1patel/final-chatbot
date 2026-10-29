@@ -24,6 +24,7 @@ backend/models/
 *.sqlite3
 FAQ.DB
 backend/uploaded_files/
+**/uploaded_files/
 
 # ---- Frontend ----
 frontend/node_modules/
@@ -39,6 +40,7 @@ backend/admin_build/
 scratchpad/admin_build_backup_*/
 
 # ---- Local scratch / logs / backups ----
+scratch/
 scratchpad/
 *.log
 *.bak*

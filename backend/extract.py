@@ -1,5 +1,10 @@
 import os
 import sys
+
+# Configure PaddleOCR flags for CPU stability
+os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
+os.environ.setdefault("FLAGS_use_onednn", "0")
+
 import json
 import csv
 import re
@@ -11,6 +16,7 @@ from typing import Optional, List, Dict, Any
 import fitz  # PyMuPDF
 import pdfplumber
 import pytesseract
+import numpy as np
 from docx import Document
 import openpyxl
 from PIL import Image
@@ -30,6 +36,9 @@ logger = logging.getLogger("extract")
 # Configuration (env-var driven, with sane fallbacks)
 # ----------------------------------------------------------------------
 
+# OCR Engine configuration: 'paddle' (default, deep learning) or 'tesseract' (fallback/classic)
+OCR_ENGINE = os.environ.get("OCR_ENGINE", "paddle").lower()
+
 # Tesseract path — configurable via env var so this works on any machine,
 # not just yours. Falls back to auto-detection via shutil.which(),
 # then to a Windows-typical default path if nothing else is found.
@@ -42,12 +51,11 @@ if not TESSERACT_CMD:
 
 if TESSERACT_CMD:
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
-    logger.info(f"Using Tesseract at: {TESSERACT_CMD}")
+    logger.info(f"Using Tesseract fallback at: {TESSERACT_CMD}")
 else:
     logger.warning(
-        "Tesseract executable not found. OCR on scanned/image-only PDF pages "
-        "will fail. Set the TESSERACT_CMD environment variable to the full "
-        "path of tesseract.exe."
+        "Tesseract executable not found. OCR fallback on scanned/image-only PDF pages "
+        "will rely solely on PaddleOCR. Set TESSERACT_CMD if fallback is desired."
     )
 
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", 1200))
@@ -138,19 +146,76 @@ def chunk_paragraph(text: str) -> List[str]:
 
 
 # ----------------------------------------------------------------------
-# OCR
+# OCR Engines (PaddleOCR + Tesseract Fallback)
 # ----------------------------------------------------------------------
 
+_paddle_ocr_instance = None
+
+
+def get_paddle_ocr():
+    """Lazily initialize and cache the PaddleOCR engine."""
+    global _paddle_ocr_instance
+    if _paddle_ocr_instance is None:
+        try:
+            from paddleocr import PaddleOCR
+            _paddle_ocr_instance = PaddleOCR(
+                lang="en",
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+            )
+            logger.info("PaddleOCR engine initialized successfully.")
+        except Exception as e:
+            logger.warning(f"Failed to initialize PaddleOCR: {e}. Will fall back to Tesseract.")
+            _paddle_ocr_instance = None
+    return _paddle_ocr_instance
+
+
+def ocr_image(img) -> str:
+    """Run OCR on a PIL Image, numpy array, or file path using PaddleOCR with Tesseract fallback."""
+    # Handle filepath or PIL Image
+    if isinstance(img, (str, Path)):
+        img = Image.open(str(img))
+
+    # 1. Primary: PaddleOCR
+    if OCR_ENGINE == "paddle":
+        try:
+            ocr = get_paddle_ocr()
+            if ocr is not None:
+                img_np = np.array(img) if not isinstance(img, np.ndarray) else img
+                res = ocr.predict(img_np)
+                lines = []
+                if res:
+                    for page_res in res:
+                        rec_texts = page_res.get("rec_texts", [])
+                        for text in rec_texts:
+                            if text and text.strip():
+                                lines.append(text.strip())
+                extracted = "\n".join(lines).strip()
+                if extracted:
+                    return extracted
+        except Exception as e:
+            logger.warning(f"PaddleOCR processing error: {e}. Attempting Tesseract fallback.")
+
+    # 2. Fallback: Tesseract OCR
+    if TESSERACT_CMD:
+        try:
+            if isinstance(img, np.ndarray):
+                img = Image.fromarray(img)
+            text = pytesseract.image_to_string(img)
+            return text.strip()
+        except Exception as e:
+            logger.error(f"Tesseract OCR fallback failed: {e}")
+    else:
+        logger.warning("OCR skipped — neither PaddleOCR nor Tesseract is available.")
+    return ""
+
+
 def ocr_page(page) -> str:
-    """Render a PDF page to an image and run OCR on it."""
-    if not TESSERACT_CMD:
-        logger.warning("Skipping OCR — tesseract executable not configured.")
-        return ""
+    """Render a PDF page to an image and run OCR on it using PaddleOCR (with Tesseract fallback)."""
     try:
-        pix = page.get_pixmap(dpi=300)
+        pix = page.get_pixmap(dpi=200)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        text = pytesseract.image_to_string(img)
-        return text.strip()
+        return ocr_image(img)
     except Exception as e:
         logger.error(f"OCR failed on page: {e}")
         return ""

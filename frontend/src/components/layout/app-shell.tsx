@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useState } from 'react'
-import { ArrowLeft, Blocks, ChevronDown, ClipboardCheck, LayoutGrid, LogOut, Menu, PlusCircle, ScrollText, Send, UserRound, Users, ShieldCheck, KeyRound, X } from 'lucide-react'
+import { ArrowLeft, Blocks, ChevronDown, ClipboardCheck, FlaskConical, LayoutGrid, LogOut, Menu, PlusCircle, ScrollText, Send, UserRound, Users, ShieldCheck, KeyRound, X } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { useTenantProfile, useTenants } from '@/lib/tenants'
 import { useOfferingsCount } from '@/lib/offerings'
@@ -165,34 +165,60 @@ export function AppShell({ route, children }: { route: RouteMatch; children: Rea
                     setSwitcherOpen(false)
                     navigate('/tenants')
                   }}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-300 hover:bg-surface-panel"
+                  className="flex w-full items-center gap-2 border-b border-surface-line/40 px-3 py-2 text-left text-xs font-medium text-slate-300 hover:bg-surface-panel"
                 >
                   <LayoutGrid className="h-3.5 w-3.5" />
                   All tenants
                   <span className="ml-auto text-slate-500">{tenants.length}</span>
                 </button>
-                <div className="max-h-72 overflow-y-auto scroll-thin">
-                  {tenants.map((tenant) => (
-                    <button
-                      key={tenant.id}
-                      type="button"
-                      onClick={() => {
-                        setActive(tenant.id)
-                        setSwitcherOpen(false)
-                        navigate(`/tenants/${encodeURIComponent(tenant.id)}/overview`)
-                      }}
-                      className={cn(
-                        'flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-panel',
-                        tenant.id === active?.id ? 'text-accent-700' : 'text-slate-300',
-                      )}
-                    >
-                      <VerticalGlyph name={getVertical(tenant.vertical).icon} className="h-3.5 w-3.5 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate">{tenant.display_name || tenant.id}</span>
-                      {tenant.current_version ? (
-                        <span className="shrink-0 text-2xs text-slate-500">v{tenant.current_version}</span>
-                      ) : null}
-                    </button>
-                  ))}
+                <div className="max-h-72 divide-y divide-surface-line/20 overflow-y-auto scroll-thin">
+                  {tenants.map((tenant) => {
+                    const isCurrent = tenant.id === active?.id
+                    return (
+                      <div
+                        key={tenant.id}
+                        className={cn(
+                          'flex items-center justify-between gap-1 px-2.5 py-1.5 transition hover:bg-surface-panel',
+                          isCurrent && 'bg-surface-panel/40',
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActive(tenant.id)
+                            setSwitcherOpen(false)
+                            navigate(`/tenants/${encodeURIComponent(tenant.id)}/overview`)
+                          }}
+                          className={cn(
+                            'flex min-w-0 flex-1 items-center gap-2 text-left text-xs py-1',
+                            isCurrent ? 'font-medium text-accent-700' : 'text-slate-300 hover:text-slate-100',
+                          )}
+                          title={`Switch to ${tenant.display_name || tenant.id}`}
+                        >
+                          <VerticalGlyph name={getVertical(tenant.vertical).icon} className="h-3.5 w-3.5 shrink-0" />
+                          <span className="min-w-0 flex-1 truncate">{tenant.display_name || tenant.id}</span>
+                          {tenant.current_version ? (
+                            <span className="shrink-0 text-2xs text-slate-500">v{tenant.current_version}</span>
+                          ) : null}
+                        </button>
+
+                        <button
+                          type="button"
+                          title={`Test Chatbot for ${tenant.display_name || tenant.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setActive(tenant.id)
+                            setSwitcherOpen(false)
+                            navigate(`/tenants/${encodeURIComponent(tenant.id)}/test`)
+                          }}
+                          className="inline-flex shrink-0 items-center gap-1 rounded bg-accent-500/10 px-2 py-1 text-2xs font-semibold text-accent-700 ring-1 ring-accent-500/30 hover:bg-accent-500 hover:text-white transition"
+                        >
+                          <FlaskConical className="h-3 w-3" />
+                          <span>Test</span>
+                        </button>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )}

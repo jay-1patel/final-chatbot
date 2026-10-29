@@ -2667,16 +2667,40 @@ def set_active_test_tenant(tenant_id: Optional[str]) -> None:
 
 
 def _resolve_tenant(tenant_id: str = None) -> str:
-    if str(tenant_id or "").strip():
-        return str(tenant_id).strip()
+    raw = str(tenant_id or "").strip()
+    if raw:
+        try:
+            from shared.tenancy import store
+            rec = store.get_tenant(raw)
+            if rec and rec.get("id"):
+                return str(rec["id"])
+        except Exception:
+            pass
+        return raw
+
     active = get_active_test_tenant()
     if active:
+        try:
+            from shared.tenancy import store
+            rec = store.get_tenant(active)
+            if rec and rec.get("id"):
+                return str(rec["id"])
+        except Exception:
+            pass
         return active
     try:
         from shared.tenancy.resolver import resolve_default_tenant
-        return resolve_default_tenant()
+        def_t = resolve_default_tenant()
+        try:
+            from shared.tenancy import store
+            rec = store.get_tenant(def_t)
+            if rec and rec.get("id"):
+                return str(rec["id"])
+        except Exception:
+            pass
+        return str(def_t)
     except Exception:
-        return os.environ.get("DEFAULT_TENANT_ID", "default")
+        return os.environ.get("DEFAULT_TENANT_ID", "1")
 
 
 def save_product(name: str, slug: str, category: str = "general",
@@ -2690,7 +2714,20 @@ def save_product(name: str, slug: str, category: str = "general",
                  attrs_json: dict = None, short_label: str = None,
                  detail_url: str = None, tenant_id: str = None, 
                  actor: dict = None) -> int:
+    resolved_tenant = _resolve_tenant(tenant_id)
     with get_db_context() as conn:
+        # Guarantee slug uniqueness across products table
+        base_slug = slug or re.sub(r"[^a-z0-9]+", "-", (name or "item").lower()).strip("-") or "item"
+        unique_slug = base_slug
+        counter = 1
+        while True:
+            row = conn.execute("SELECT id FROM products WHERE slug = ?", (unique_slug,)).fetchone()
+            if not row:
+                break
+            counter += 1
+            unique_slug = f"{base_slug}-{counter}"
+        slug = unique_slug
+
         cur = conn.execute(
             """INSERT INTO products (name, slug, category, description, short_description,
                price, mrp, unit, moq, media_url, media_type, ingredients, sort_order, variants_json,
@@ -2701,7 +2738,7 @@ def save_product(name: str, slug: str, category: str = "general",
               price, mrp, unit, moq, media_url, media_type, json.dumps(ingredients or []), sort_order,
              json.dumps(variants_json or []),
               stock_quantity, nutritional_facts, json.dumps(bulk_discount_tiers or []),
-             json.dumps(attrs_json or {}), short_label, detail_url, _resolve_tenant(tenant_id)),
+             json.dumps(attrs_json or {}), short_label, detail_url, resolved_tenant),
         )
         product_id = cur.lastrowid
         

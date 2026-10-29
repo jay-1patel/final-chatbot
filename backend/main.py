@@ -1,6 +1,10 @@
 import os
 import sys
 
+# Configure PaddleOCR flags for CPU stability
+os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
+os.environ.setdefault("FLAGS_use_onednn", "0")
+
 _project_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, _project_root)
 sys.path.insert(0, os.path.join(_project_root, "routing"))

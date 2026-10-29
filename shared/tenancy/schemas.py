@@ -447,6 +447,7 @@ class MenuButton(_Base):
     description: str = ""
     section: str = "General"
     icon: str = ""
+    image_url: Optional[str] = None
     sort_order: int = 0
     # Independently controls whether this option appears in the customer menu.
     enabled: bool = True

@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   Briefcase,
   Cpu,
+  FlaskConical,
   FolderOpen,
   Gift,
   GitBranch,
@@ -81,6 +82,7 @@ export function buildTenantNav(opts: {
 
   const items: NavItem[] = [
     { id: 'overview', label: 'Overview', icon: LayoutGrid },
+    { id: 'test', label: 'Test Bot', icon: FlaskConical },
     {
       id: 'records',
       label: content.label,

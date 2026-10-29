@@ -568,13 +568,19 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
 
     # 0. Tenant menu row (tapped title) / rules intent: authoritative, no RAG.
     try:
+        tid = None
+        try:
+            from shared.tenancy.resolver import resolve_tenant_for_user
+            tid = resolve_tenant_for_user(wa_id)
+        except Exception:
+            pass
         try:
             from services.intent_answers import answer_for_menu_title, answer_for_text
         except ImportError:
             from backend.services.intent_answers import answer_for_menu_title, answer_for_text
-        tenant_answer = answer_for_menu_title(wa_id, message)
+        tenant_answer = answer_for_menu_title(wa_id, message, tenant_id=tid)
         if not tenant_answer:
-            tenant_answer = answer_for_text(wa_id, message)
+            tenant_answer = answer_for_text(wa_id, message, tenant_id=tid)
             try:
                 from services import service_answers as _svc_ans
             except Exception:
@@ -583,16 +589,10 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
                 except Exception:
                     _svc_ans = None
             if _svc_ans and _svc_ans.is_service_query(message):
-                svc_full = _svc_ans.answer_for_text(wa_id, message)
+                svc_full = _svc_ans.answer_for_text(wa_id, message, tenant_id=tid)
                 if svc_full:
                     tenant_answer = svc_full
         if tenant_answer:
-            tid = None
-            try:
-                from shared.tenancy.resolver import resolve_tenant_for_user
-                tid = resolve_tenant_for_user(wa_id)
-            except Exception:
-                pass
             synthesized = await _llm_synthesize(tenant_answer, message, message, tenant_id=tid)
             from routing.button_actions import get_contextual_buttons
             from services.whatsapp_sender import send_button_message, send_text_message
@@ -611,22 +611,32 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
     # (menu_services) never fires on the poller path — resolve it by title here.
     try:
         if _is_services_title(wa_id, message):
+            tid = None
+            try:
+                from shared.tenancy.resolver import resolve_tenant_for_user
+                tid = resolve_tenant_for_user(wa_id)
+            except Exception:
+                pass
             try:
                 from services import service_answers
             except ImportError:
                 from backend.services import service_answers
-            svc = service_answers.answer_for_text(wa_id, message)
-            if svc:
-                tid = None
+            svc = service_answers.answer_for_text(wa_id, message, tenant_id=tid)
+            if not svc:
                 try:
-                    from shared.tenancy.resolver import resolve_tenant_for_user
-                    tid = resolve_tenant_for_user(wa_id)
+                    from services import intent_answers
+                    svc = (
+                        intent_answers.answer_for_menu_title(wa_id, message, tenant_id=tid)
+                        or intent_answers.answer_for_intent(wa_id, "property_listings", tenant_id=tid)
+                        or intent_answers.answer_for_intent(wa_id, "offerings", tenant_id=tid)
+                    )
                 except Exception:
                     pass
+            if svc:
                 synthesized = await _llm_synthesize(svc, "Our Services", message, tenant_id=tid)
                 from routing.button_actions import get_contextual_buttons
                 from services.whatsapp_sender import send_button_message, send_text_message
-                buttons = get_contextual_buttons("services", wa_id=wa_id, limit=3)
+                buttons = get_contextual_buttons(message, tenant_id=tid, wa_id=wa_id, limit=3)
                 if buttons:
                     await send_button_message(wa_id, synthesized, buttons)
                 else:
@@ -675,8 +685,11 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
         from faq.service import handle_faq_query
         faq_res = await handle_faq_query({"message": message, "wa_id": wa_id, "tenant_id": tid})
         if faq_res and faq_res.get("answer") and faq_res.get("answer").strip():
-            answer = faq_res["answer"]
-            interactive = faq_res.get("interactive")
+            candidate_ans = faq_res["answer"].strip()
+            # Guard against bare signatures or empty answers
+            if not candidate_ans.startswith("---") and not candidate_ans.startswith("Thank you for choosing"):
+                answer = faq_res["answer"]
+                interactive = faq_res.get("interactive")
     except Exception as e:
         logger.warning(f"FAQ index lookup failed: {e}")
 
@@ -762,23 +775,31 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
 
 
 def _is_services_title(wa_id: str, message: str) -> bool:
-    """True if the message is the tenant's services/offerings menu row.
+    """True if the message is the tenant's services/offerings/projects menu row.
 
     Matches the tapped (or typed) row title against the visible profile menu
-    and returns True only for the rows that list offerings (menu_services /
-    menu_offerings), so the caller knows to render the offerings list.
+    and returns True for rows that list offerings, services, or projects.
     """
     if not (message or "").strip():
         return False
     try:
         from services.menu_catalog import get_kb_main_menu
         from services.intent_answers import _clean_title as _tc
-        target = _clean(message)
+        target = _tc(message)
         if not target:
             return False
+        if target in (
+            "ongoing projects", "ongoing project", "explore properties", "our projects",
+            "properties", "projects", "services", "our services", "packages", "our packages",
+        ):
+            return True
         for item in get_kb_main_menu(wa_id):
-            if getattr(item, "id", "") in ("menu_services", "menu_offerings") \
-                    and _tc(item.title) == target:
+            item_id = getattr(item, "id", "")
+            item_intent = getattr(item, "intent", "")
+            if (
+                item_id in ("menu_services", "menu_offerings", "ongoing-projects", "explore-properties", "menu_projects", "menu_properties", "menu_packages")
+                or item_intent in ("offerings", "property_listings", "project_details", "service_enquiry", "package_details")
+            ) and (_tc(item.title) == target or target in _tc(item.title)):
                 return True
     except Exception as e:
         logger.debug(f"Services title check failed: {e}")

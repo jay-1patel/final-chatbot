@@ -204,6 +204,15 @@ export function TenantList() {
                     <Button size="sm" variant="secondary" onClick={open}>
                       {canManageTenants ? 'Configure' : 'View'}
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => navigate(`/tenants/${encodeURIComponent(tenant.id)}/test`)}
+                      icon={<FlaskConical className="h-4 w-4 text-emerald-400" />}
+                      title={`Test chatbot simulation for ${tenant.display_name || tenant.id}`}
+                    >
+                      Test Bot
+                    </Button>
                     {canManageTenants &&
                       (confirming === tenant.id ? (
                         <>

@@ -149,6 +149,15 @@ def resolve_tenant_for_user(wa_id: str, default: Optional[str] = None) -> str:
     In single-number testing mode, active test tenant override takes absolute
     precedence so testers don't get trapped in stale tenant states.
     """
+    if wa_id and str(wa_id).startswith("sim_"):
+        target_tid = str(wa_id)[4:].strip()
+        from . import store
+        if store.get_tenant(target_tid):
+            return target_tid
+        for t in store.list_tenants():
+            if str(t.get("slug")) == target_tid or str(t.get("id")) == target_tid:
+                return str(t.get("slug") or t.get("id"))
+
     override = _active_test_override()
     if override:
         return override

@@ -100,6 +100,93 @@ function TestQuestionCard({ tenantId }: { tenantId: string }) {
               <Badge tone="neutral">tier: {result.tier}</Badge>
               {result.flow && <Badge tone="success">flow: {result.flow}</Badge>}
             </div>
+
+            {/* Live Chatbot Response (WhatsApp Preview) */}
+            {result.messages && result.messages.length > 0 && (
+              <div className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-3.5 space-y-2.5">
+                <div className="flex items-center gap-2 text-xs font-semibold text-emerald-400">
+                  <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                  Bot Reply
+                </div>
+                {result.messages.map((m, idx) => (
+                  <div key={idx} className="space-y-2">
+                    {/* List Menu Type */}
+                    {m.type === 'list' && (
+                      <div className="rounded-lg bg-surface p-3 ring-1 ring-surface-line space-y-2">
+                        {m.header && <p className="font-semibold text-slate-100 text-sm">{m.header}</p>}
+                        {m.body && <p className="text-xs text-slate-300 whitespace-pre-wrap">{m.body}</p>}
+                        {m.button_text && (
+                          <div className="inline-flex items-center rounded-md bg-accent-500/20 px-2.5 py-1 text-xs font-medium text-accent-300 ring-1 ring-inset ring-accent-400/30">
+                            📋 {m.button_text}
+                          </div>
+                        )}
+                        {m.sections && m.sections.length > 0 && (
+                          <div className="pt-2 border-t border-surface-line space-y-2">
+                            {m.sections.map((sec, sidx) => (
+                              <div key={sidx} className="space-y-1">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{sec.title}</p>
+                                <div className="space-y-1 pl-1">
+                                  {sec.rows.map((row) => (
+                                    <button
+                                      key={row.id}
+                                      type="button"
+                                      onClick={() => run(row.title)}
+                                      className="w-full text-left rounded bg-surface-panel p-2 text-xs transition hover:bg-accent-500/20 hover:ring-1 hover:ring-accent-400/40"
+                                    >
+                                      <p className="font-medium text-slate-200">{row.title}</p>
+                                      {row.description && <p className="text-[11px] text-slate-400 mt-0.5">{row.description}</p>}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Quick Reply Buttons */}
+                    {m.type === 'buttons' && (
+                      <div className="rounded-lg bg-surface p-3 ring-1 ring-surface-line space-y-2">
+                        {m.text && <p className="text-xs text-slate-200 whitespace-pre-wrap">{m.text}</p>}
+                        {m.buttons && m.buttons.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 pt-1">
+                            {m.buttons.map((btn, bidx) => {
+                              const bTitle = btn.title || btn.reply?.title || ''
+                              return (
+                                <button
+                                  key={bidx}
+                                  type="button"
+                                  onClick={() => run(bTitle)}
+                                  className="rounded-full bg-accent-500/20 px-3 py-1 text-xs text-accent-200 ring-1 ring-accent-400/40 hover:bg-accent-500/30 transition cursor-pointer"
+                                >
+                                  {bTitle}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Plain Text Message */}
+                    {m.type === 'text' && m.text && (
+                      <div className="rounded-lg bg-surface p-3 ring-1 ring-surface-line">
+                        <p className="text-xs text-slate-200 whitespace-pre-wrap">{m.text}</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Fallback to reply_text if messages array was empty */}
+            {(!result.messages || result.messages.length === 0) && result.reply_text && (
+              <div className="mt-3 rounded-lg bg-surface p-3 ring-1 ring-surface-line">
+                <p className="text-xs text-slate-200 whitespace-pre-wrap">{result.reply_text}</p>
+              </div>
+            )}
+
             <div>
               <p className="text-xs uppercase tracking-wide text-slate-500">
                 Routable intents ({result.active_intents.length})

@@ -115,6 +115,7 @@ export interface MenuButton {
   description: string
   section: string
   icon: string
+  image_url?: string | null
   sort_order: number
   enabled: boolean
   requires_feature: string | null
@@ -405,6 +406,19 @@ export interface SmokeReport {
   ok: boolean
 }
 
+export interface TestQuestionMessage {
+  type: 'text' | 'buttons' | 'list'
+  text?: string
+  header?: string
+  body?: string
+  button_text?: string
+  buttons?: Array<{ id?: string; title?: string; reply?: { id: string; title: string } }>
+  sections?: Array<{
+    title: string
+    rows: Array<{ id: string; title: string; description?: string }>
+  }>
+}
+
 export interface TestQuestionResult {
   tenant_id: string
   message: string
@@ -413,6 +427,8 @@ export interface TestQuestionResult {
   tier: string
   flow: string | null
   active_intents: string[]
+  messages?: TestQuestionMessage[]
+  reply_text?: string
 }
 
 export interface AdminIdentity {

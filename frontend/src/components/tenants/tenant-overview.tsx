@@ -171,25 +171,67 @@ export function TenantOverview({ tenantId }: { tenantId: string }) {
           }
         />
         <CardBody>
-          {data.menu?.buttons?.length ? (
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {data.menu.buttons
-                .filter((b) => b.enabled && (!b.requires_feature || data.features[b.requires_feature as FeatureFlag]))
-                .map((button) => (
-                  <div key={button.id} className="rounded-lg bg-surface-panel p-3 ring-1 ring-inset ring-surface-line">
-                    <div className="flex items-center gap-2">
-                      {button.icon && <span className="text-sm">{button.icon}</span>}
-                      <span className="text-xs font-medium text-slate-100">{button.title}</span>
+          {(() => {
+            const seenTitles = new Set<string>()
+            const validButtons = (data.menu?.buttons || []).filter((b) => {
+              if (!b.enabled) return false
+              if (!b.title || !b.title.trim()) return false
+              const norm = b.title.trim().toLowerCase()
+              if (['button title', 'parameter', 'action', '__new_page__', 'none', 'empty'].includes(norm)) return false
+              if (b.requires_feature && !data.features[b.requires_feature as FeatureFlag]) return false
+              if (seenTitles.has(norm)) return false
+              seenTitles.add(norm)
+              return true
+            })
+
+            if (!validButtons.length) {
+              return <p className="text-xs text-slate-500">No menu buttons configured in the profile.</p>
+            }
+
+            return (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {validButtons.map((button) => {
+                  const iconEmoji = button.icon || getFallbackButtonIcon(button.title, data.vertical)
+                  return (
+                    <div
+                      key={button.id}
+                      className="flex items-start gap-3 rounded-lg bg-surface-panel p-3.5 ring-1 ring-inset ring-surface-line hover:ring-surface-line/80 transition-all shadow-xs"
+                    >
+                      {button.image_url ? (
+                        <img
+                          src={button.image_url}
+                          alt=""
+                          className="h-9 w-9 rounded-md object-cover border border-white/10 shrink-0 shadow-xs"
+                          onError={(e) => {
+                            ;(e.currentTarget as HTMLElement).style.display = 'none'
+                          }}
+                        />
+                      ) : (
+                        <div className="h-9 w-9 rounded-md flex items-center justify-center bg-white/5 border border-white/10 text-lg shrink-0 shadow-inner">
+                          {iconEmoji}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="text-xs font-semibold text-slate-100 truncate">{button.title}</span>
+                          {button.section && button.section !== 'General' && (
+                            <span className="text-[9px] uppercase tracking-wider text-slate-400 bg-white/5 px-1.5 py-0.5 rounded border border-white/5 shrink-0">
+                              {button.section.replace(/^[^\w\s]+/, '').trim()}
+                            </span>
+                          )}
+                        </div>
+                        {button.description ? (
+                          <p className="mt-1 text-xs leading-relaxed text-slate-400 line-clamp-2">{button.description}</p>
+                        ) : (
+                          <p className="mt-1 text-xs italic text-slate-500">Interactive WhatsApp action</p>
+                        )}
+                      </div>
                     </div>
-                    {button.description && (
-                      <p className="mt-1 text-xs leading-relaxed text-slate-500">{button.description}</p>
-                    )}
-                  </div>
-                ))}
-            </div>
-          ) : (
-            <p className="text-xs text-slate-500">No menu buttons in the profile.</p>
-          )}
+                  )
+                })}
+              </div>
+            )
+          })()}
         </CardBody>
       </Card>
     </div>
@@ -203,4 +245,43 @@ function Row({ label, value }: { label: string; value: string }) {
       <span className="min-w-0 text-right text-slate-200">{value}</span>
     </div>
   )
+}
+
+function getFallbackButtonIcon(title: string, vertical?: string): string {
+  const t = (title || '').toLowerCase()
+  const v = (vertical || '').toLowerCase()
+
+  if (['callback', 'call', 'advisor', 'expert', 'talk to', 'contact', 'speak', 'phone', 'human'].some((k) => t.includes(k))) return '📞'
+  if (['support', 'help', 'ticket', 'complaint', 'issue'].some((k) => t.includes(k))) return '💬'
+  if (['quote', 'pricing', 'plans', 'cost', 'fee', 'rate'].some((k) => t.includes(k))) return '💰'
+  if (['brochure', 'download', 'pdf', 'terms'].some((k) => t.includes(k))) return '📄'
+  if (['visit', 'schedule', 'book', 'appointment'].some((k) => t.includes(k))) return '📅'
+
+  if (v.includes('estate') || v.includes('property')) {
+    if (['villa', 'plot', 'land'].some((k) => t.includes(k))) return '🏡'
+    if (['rera', 'legal'].some((k) => t.includes(k))) return '⚖️'
+    return '🏢'
+  }
+  if (v.includes('bank') || v.includes('finance')) {
+    if (['loan', 'credit', 'mortgage', 'emi'].some((k) => t.includes(k))) return '💳'
+    if (['invest', 'mutual', 'wealth'].some((k) => t.includes(k))) return '📈'
+    return '🏦'
+  }
+  if (v.includes('travel') || v.includes('tour')) {
+    if (['destination', 'place', 'city'].some((k) => t.includes(k))) return '🗺️'
+    if (['visa', 'passport'].some((k) => t.includes(k))) return '🛂'
+    if (['itinerary', 'custom'].some((k) => t.includes(k))) return '🧭'
+    if (['policy', 'cancellation'].some((k) => t.includes(k))) return '📋'
+    return '🌴'
+  }
+  if (v.includes('software') || v.includes('it')) {
+    if (['tech', 'stack'].some((k) => t.includes(k))) return '⚙️'
+    if (['project', 'portfolio'].some((k) => t.includes(k))) return '🚀'
+    if (['career', 'job'].some((k) => t.includes(k))) return '💼'
+    return '💻'
+  }
+  if (v.includes('ecom') || v.includes('retail')) return '🛍️'
+  if (v.includes('health') || v.includes('clinic')) return '🏥'
+
+  return '✨'
 }
