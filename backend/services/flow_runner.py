@@ -852,6 +852,7 @@ def _run_from(wa_id, profile, flow, step_id, collected, messages):
     lead_id = None
     handoff_id = None
     paused = False
+    escalated = False
     emitted_done = False
 
     while step_id:
@@ -904,7 +905,8 @@ def _run_from(wa_id, profile, flow, step_id, collected, messages):
             handoff_id = _handoff(profile.tenant_id, wa_id, flow.name, step, collected)
             paused = True
             if step.escalate:
-                _escalate(profile.tenant_id, wa_id, flow.name)
+                if _escalate(profile.tenant_id, wa_id, flow.name):
+                    escalated = True
             if step.prompt and step.prompt not in messages:
                 messages.append(step.prompt)
 
@@ -987,6 +989,28 @@ def _run_from(wa_id, profile, flow, step_id, collected, messages):
         if "menu" not in s_msg.lower():
             s_msg = f"{s_msg}\n\nType *menu* anytime or feel free to ask another question! 🙏"
         messages.append(s_msg)
+
+    # After an escalate handoff the bot stays silent until the user types hi
+    # (or an agent resolves). Always tell them how to continue with the bot.
+    if escalated:
+        try:
+            from shared.handover import append_resume_hint
+        except ImportError:  # pragma: no cover
+            from handover import append_resume_hint  # type: ignore
+        if messages:
+            last = messages[-1]
+            if isinstance(last, dict):
+                text_key = "text" if "text" in last else ("body" if "body" in last else None)
+                if text_key:
+                    last = {**last, text_key: append_resume_hint(str(last.get(text_key) or ""))}
+                    messages[-1] = last
+                else:
+                    messages.append(append_resume_hint(""))
+            else:
+                messages[-1] = append_resume_hint(message_to_text(last))
+        else:
+            messages.append(append_resume_hint(""))
+
     return _outcome(flow.name, messages, finished=True, lead_id=lead_id,
                     handoff_id=handoff_id,
                     status=_STATUS_PAUSED if paused else _STATUS_BOT)

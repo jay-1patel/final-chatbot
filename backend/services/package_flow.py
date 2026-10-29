@@ -160,7 +160,19 @@ def tour_packages(tenant_id: str = None) -> list:
         attrs = row.get("attrs_json")
         if not isinstance(attrs, dict):
             attrs = {}
-        if not (attrs.get("package_name") or attrs.get("destination")):
+        has_travel_signal = bool(
+            attrs.get("package_name")
+            or attrs.get("package name")
+            or attrs.get("destination")
+            or attrs.get("duration")
+            or attrs.get("itinerary")
+        )
+        # Tours tenants often store packages without package_name; keep name-based rows.
+        category = str(row.get("category") or "").lower()
+        looks_like_package = has_travel_signal or category in {
+            "packages", "package", "tours", "tour", "holiday", "holidays", "travel",
+        }
+        if not looks_like_package:
             continue
         merged = dict(row)
         merged["attrs_json"] = attrs
@@ -168,16 +180,75 @@ def tour_packages(tenant_id: str = None) -> list:
     return packages
 
 
-def package_name(pkg: dict) -> str:
-    attrs = pkg.get("attrs_json") or {}
-    return str(attrs.get("package_name") or pkg.get("name") or "").strip()
-
-
 def package_attrs(pkg: dict) -> dict:
     attrs = pkg.get("attrs_json")
     if isinstance(attrs, dict) and attrs:
         return attrs
     return pkg if isinstance(pkg, dict) else {}
+
+
+def package_name(pkg: dict) -> str:
+    attrs = package_attrs(pkg)
+    # Bifurcation sometimes stores "package name" (space) instead of package_name.
+    return str(
+        attrs.get("package_name")
+        or attrs.get("package name")
+        or pkg.get("name")
+        or ""
+    ).strip()
+
+
+_PLACEHOLDER_MEDIA = {
+    "",
+    "add public https image url",
+    "add image url",
+    "n/a",
+    "na",
+    "none",
+    "null",
+}
+
+
+def _usable_media_url(url: str) -> bool:
+    raw = str(url or "").strip()
+    if not raw or raw.lower() in _PLACEHOLDER_MEDIA:
+        return False
+    if raw.startswith(("http://", "https://", "/uploaded_files/", "/api/uploads/", "/media/")):
+        return True
+    return False
+
+
+def package_media(pkg: dict) -> tuple[str, str]:
+    """Return (media_url, media_type) for a package when a real file exists.
+
+    Prefers the product ``media_url``, then attrs brochure/image fields.
+    ``media_type`` is ``image`` or ``document``.
+    """
+    attrs = package_attrs(pkg)
+    candidates = [
+        (pkg.get("media_url"), pkg.get("media_type")),
+        (pkg.get("image_url"), "image"),
+        (attrs.get("media_url"), attrs.get("media_type") or "image"),
+        (attrs.get("image_url"), "image"),
+        (attrs.get("brochure_url"), "document"),
+        (attrs.get("pdf_url"), "document"),
+    ]
+    for url, mtype in candidates:
+        if not _usable_media_url(url):
+            continue
+        url_s = str(url).strip()
+        kind = str(mtype or "").strip().lower()
+        if kind in ("pdf", "doc", "docx") or url_s.lower().endswith((".pdf", ".doc", ".docx")):
+            return url_s, "document"
+        if kind in ("image", "jpg", "jpeg", "png", "webp", "gif") or url_s.lower().endswith(
+            (".jpg", ".jpeg", ".png", ".webp", ".gif")
+        ):
+            return url_s, "image"
+        # Unknown but usable HTTPS / hosted path — default to image for product shots.
+        if kind == "document":
+            return url_s, "document"
+        return url_s, "image"
+    return "", ""
 
 
 def package_row_id(pkg: dict) -> str:
@@ -478,11 +549,26 @@ def _brand_name(tenant_id: str) -> str:
 
 
 async def send_package_list(wa_id: str, tenant_id: str = None) -> bool:
-    """Send the package catalogue as a WhatsApp list menu."""
+    """Send the package catalogue as a WhatsApp list menu.
+
+    When the tenant also has a brochure/catalogue PDF, send that first so the
+    user gets the document as well as the interactive package picker.
+    """
     packages = tour_packages(tenant_id)
     sections = package_sections(packages)
     if not sections:
         return False
+
+    # Best-effort: attach the tenant brochure/catalogue PDF when one exists.
+    try:
+        from backend.services.brochure_service import send_relevant_brochure
+        send_relevant_brochure(
+            wa_id,
+            query="tour packages brochure catalogue",
+            tenant_id=tenant_id,
+        )
+    except Exception as exc:
+        logger.debug("package list brochure attach skipped: %s", exc)
 
     header = f"{_brand_name(tenant_id)} — Tour Packages"[:60]
     body = ("Here are our tour packages. Tap one to see the full itinerary, "
@@ -494,9 +580,31 @@ async def send_package_list(wa_id: str, tenant_id: str = None) -> bool:
 
 
 async def send_package_details(wa_id: str, pkg: dict, tenant_id: str = None) -> bool:
-    """Send the package card plus the booking button."""
+    """Send package media (image/PDF) when available, then the card + booking button."""
     remember_package(wa_id, pkg)
     sender = _sender()
+    name = package_name(pkg)
+
+    media_url, media_kind = package_media(pkg)
+    media_ok = True
+    if media_url:
+        try:
+            if media_kind == "document":
+                media_ok = await sender.send_document_message(
+                    wa_id, media_url, filename=f"{name or 'package'}.pdf",
+                )
+            else:
+                media_ok = await sender.send_image_message(
+                    wa_id, media_url, caption=name or "Tour package",
+                )
+            logger.info(
+                "PACKAGE_MEDIA_SENT | wa_id=%s | pkg=%s | kind=%s | ok=%s",
+                wa_id, name, media_kind, media_ok,
+            )
+        except Exception as exc:
+            media_ok = False
+            logger.warning("PACKAGE_MEDIA_FAILED | wa_id=%s | pkg=%s | err=%s", wa_id, name, exc)
+
     card_ok = await sender.send_text_message(wa_id, package_card(pkg))
     buttons = [{
         "type": "reply",
@@ -505,11 +613,12 @@ async def send_package_details(wa_id: str, pkg: dict, tenant_id: str = None) -> 
             "title": BOOK_BUTTON_TITLE,
         },
     }]
-    body = (f"Would you like to book *{package_name(pkg)}*? "
+    body = (f"Would you like to book *{name}*? "
             "Share your details and our travel team will confirm availability.")
     button_ok = await sender.send_button_message(
         wa_id, body, buttons, tenant_id=tenant_id,
     )
+    # Card + button are the core reply; media is best-effort when a URL exists.
     return bool(card_ok and button_ok)
 
 

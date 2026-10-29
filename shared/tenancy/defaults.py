@@ -10,8 +10,11 @@ runtime reads ``profile.vertical`` and looks the hints up there.
 
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from typing import Any, Dict, List
+
+logger = logging.getLogger("tenancy.defaults")
 
 # vertical -> key in routing/prompts.py::COMPANY_TYPE_CONFIGS
 VERTICAL_TO_COMPANY_TYPE = {
@@ -1220,6 +1223,100 @@ def scrub_company_info_pages(layer: Dict[str, Any]) -> Dict[str, Any]:
     return layer
 
 
+def _vertical_default_button_ids(vertical: str) -> set[str]:
+    layer = VERTICAL_DEFAULTS.get(vertical) or VERTICAL_DEFAULTS["generic"]
+    menu = layer.get("menu") or {}
+    buttons = menu.get("buttons") if isinstance(menu, dict) else None
+    out: set[str] = set()
+    if isinstance(buttons, list):
+        for b in buttons:
+            if isinstance(b, dict) and b.get("id"):
+                out.add(str(b["id"]))
+    return out
+
+
+def _vertical_default_intent_names(vertical: str) -> set[str]:
+    layer = VERTICAL_DEFAULTS.get(vertical) or VERTICAL_DEFAULTS["generic"]
+    intents = layer.get("intents") or []
+    out: set[str] = set()
+    if isinstance(intents, list):
+        for i in intents:
+            if isinstance(i, dict) and i.get("name"):
+                out.add(str(i["name"]))
+    return out
+
+
+def foreign_vertical_menu_button_ids(vertical: str | None) -> set[str]:
+    """Menu button ids that belong only to other verticals' defaults.
+
+    Shared ids (e.g. ``menu_callback``, ``menu_human``) appear in this vertical
+    too and are kept. Custom ids that appear in no vertical pack are kept.
+    """
+    own = _vertical_default_button_ids(vertical or "generic")
+    foreign_only: set[str] = set()
+    for other in VERTICAL_DEFAULTS:
+        if other == (vertical or "generic"):
+            continue
+        for bid in _vertical_default_button_ids(other):
+            if bid not in own:
+                foreign_only.add(bid)
+    return foreign_only
+
+
+def foreign_vertical_intent_names(vertical: str | None) -> set[str]:
+    """Intent names that belong only to other verticals' defaults."""
+    own = _vertical_default_intent_names(vertical or "generic")
+    foreign_only: set[str] = set()
+    for other in VERTICAL_DEFAULTS:
+        if other == (vertical or "generic"):
+            continue
+        for name in _vertical_default_intent_names(other):
+            if name not in own:
+                foreign_only.add(name)
+    return foreign_only
+
+
+def scrub_foreign_vertical_artifacts(layer: Dict[str, Any], vertical: str | None = None) -> Dict[str, Any]:
+    """Drop menu rows / intents that only exist on other vertical kits.
+
+    Keyed merge unions button lists by id, so a contaminated publish (e.g.
+    MakeMyTrip draft that once absorbed Leeway Softech / real-estate rows)
+    can leave Technologies, Careers, Explore Properties on a tours menu.
+    This runs after merge so runtime WhatsApp menus stay vertical-scoped.
+    """
+    vert = str(vertical or layer.get("vertical") or "generic")
+    drop_buttons = foreign_vertical_menu_button_ids(vert)
+    drop_intents = foreign_vertical_intent_names(vert)
+
+    menu = layer.get("menu")
+    if isinstance(menu, dict) and isinstance(menu.get("buttons"), list) and drop_buttons:
+        before = len(menu["buttons"])
+        menu["buttons"] = [
+            b for b in menu["buttons"]
+            if not (isinstance(b, dict) and str(b.get("id") or "") in drop_buttons)
+        ]
+        removed = before - len(menu["buttons"])
+        if removed:
+            logger.info(
+                "SCRUB_FOREIGN_MENU | vertical=%s | removed=%d button(s)",
+                vert, removed,
+            )
+
+    if isinstance(layer.get("intents"), list) and drop_intents:
+        before = len(layer["intents"])
+        layer["intents"] = [
+            i for i in layer["intents"]
+            if not (isinstance(i, dict) and str(i.get("name") or "") in drop_intents)
+        ]
+        removed = before - len(layer["intents"])
+        if removed:
+            logger.info(
+                "SCRUB_FOREIGN_INTENTS | vertical=%s | removed=%d intent(s)",
+                vert, removed,
+            )
+    return layer
+
+
 def vertical_has_company_info_pages(vertical: str | None) -> bool:
     return (vertical or "") in _VERTICALS_WITH_COMPANY_INFO
 
@@ -1397,8 +1494,10 @@ DEFAULT_FLOWS: List[Dict[str, Any]] = [
              "lead_source": "complaint", "next": "notify"},
             {"id": "notify", "type": "notify", "channels": [],
              "subject": "Support ticket from WhatsApp", "next": "handoff"},
+            # escalate=True parks the chat for a human while still letting the
+            # customer type *hi* to keep using the bot before an agent joins.
             {"id": "handoff", "type": "handoff", "handoff_reason": "support_ticket",
-             "store_context": True, "next": "done"},
+             "escalate": True, "store_context": True, "next": "done"},
             {"id": "done", "type": "say",
              "prompt": "Ticket raised. Our support team will get back to you shortly."},
         ],
@@ -1427,7 +1526,10 @@ DEFAULT_FLOWS: List[Dict[str, Any]] = [
             {"id": "save", "type": "save_lead",
              "collect_keys": ["name", "phone", "email", "preferred_time", "need"],
              "lead_source": "callback", "next": "notify"},
-            _NOTIFY,
+            {"id": "notify", "type": "notify", "channels": [],
+             "subject": "New callback request", "next": "handoff"},
+            {"id": "handoff", "type": "handoff", "handoff_reason": "callback_request",
+             "escalate": True, "store_context": True, "next": "done"},
             {"id": "done", "type": "say",
              "prompt": "Done! Your callback and Google Meeting have been scheduled."},
         ],

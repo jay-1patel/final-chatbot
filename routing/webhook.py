@@ -46,9 +46,15 @@ HUMAN_HANDOVER_PHRASES = [
     "human agent",
 ]
 
-HANDOVER_CONFIRMATION = "You're now connected to a human agent. Please hold on while we pick up your conversation. 🙏\n\nType *hi* anytime to continue with the chatbot."
-
-HANDOVER_BOT_RESUME = "You're back with the bot. How can I help you? 🙏"
+try:
+    from shared.handover import HANDOVER_BOT_RESUME, HANDOVER_CONFIRMATION, wants_bot_resume
+except ImportError:  # pragma: no cover - path when routing/ is cwd
+    import sys
+    from pathlib import Path
+    _root = Path(__file__).resolve().parents[1]
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+    from shared.handover import HANDOVER_BOT_RESUME, HANDOVER_CONFIRMATION, wants_bot_resume
 
 _PENDING_DOC_EXPIRY_SECONDS = 30 * 60
 _pending_docs = {}
@@ -422,13 +428,8 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
         # a human, so the bot must stay silent until resumed.
         # Resume keywords: "bot", "resume bot", "hi", "hello", "menu" allow the user to exit handover mode.
         if _is_handover_active(wa_id):
-            resume_phrases = {
-                "bot", "resume bot", "back to bot", "bot mode", "resume", "continue with bot",
-                "hi", "hello", "hey", "menu", "main menu", "start"
-            }
-            clean_text = (user_text or "").strip().lower()
-            if clean_text in resume_phrases or any(phrase in clean_text for phrase in resume_phrases):
-                # User wants to resume bot mode
+            if wants_bot_resume(user_text):
+                # User wants to resume bot mode (even if an agent has not connected yet)
                 _set_human_handover(wa_id, enabled=False)
                 save_chat(wa_id, sender_name, user_text, HANDOVER_BOT_RESUME, "human_handover")
                 if config.SEND2_USERNAME and config.SEND2_PASSWORD:
@@ -705,13 +706,18 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
             is_direct = is_direct_media_query(user_text)
 
             if is_direct and config.SEND_MEDIA:
-                # Catalogue / new-arrival / product-list query. In
-                # CATALOG_DELIVERY_MODE=products (default), `process_message`
-                # already populated `interactive` with a native WhatsApp list
-                # payload — let the list branch below handle it. In legacy
-                # CATALOG_DELIVERY_MODE=pdf, fall back to the text+button
-                # summary so we still send *something* useful.
-                if interactive and interactive.get("type") == "list" and interactive.get("sections"):
+                # Catalogue / new-arrival / product-list query.
+                # Prefer delivering the catalogue PDF/media when present, then
+                # fall through to list/summary UI so the user still gets choices.
+                if media_url and media_type:
+                    resolved = _resolve_public(media_url) or _resolve_media_url(media_url)
+                    media_type_n = _normalize_msg_type(media_type)
+                    if response_text:
+                        send_whatsapp_message(wa_id, response_text)
+                    media_sent = send_whatsapp_message(wa_id, resolved, media_type_n)
+                    send_status = "sent_catalog_media" if media_sent else "failed_catalog_media"
+                    logger.info(f"CATALOG_MEDIA_SENT | {wa_id} | ok={media_sent} | type={media_type_n}")
+                elif interactive and interactive.get("type") == "list" and interactive.get("sections"):
                     menu_body = interactive.get("body", "")
                     if not menu_body:
                         if response_text:

@@ -150,13 +150,18 @@ async def handle_b2c_message(
     message = (message or "").strip()
     context = context or {}
 
-    # Prefer caller-stamped tenant (orchestrator); fall back to user resolver.
+    # Prefer caller-stamped tenant (orchestrator); fall back to effective
+    # resolver so active_test_tenant always wins over a stale user stamp.
     if not tenant_id:
         try:
-            from shared.tenancy.resolver import resolve_tenant_for_user
-            tenant_id = resolve_tenant_for_user(wa_id)
+            from shared.tenancy.resolver import resolve_effective_tenant_id
+            tenant_id = resolve_effective_tenant_id(wa_id)
         except Exception:
-            tenant_id = None
+            try:
+                from shared.tenancy.resolver import resolve_tenant_for_user
+                tenant_id = resolve_tenant_for_user(wa_id)
+            except Exception:
+                tenant_id = None
 
     # ── Global rule: human handover request wins over anything else ──────────
     if tools.should_escalate(message):
@@ -166,14 +171,12 @@ async def handle_b2c_message(
     if state == cfg.B2C_MAIN_MENU_STATE or not state:
         clean_msg = _clean(message)
         if clean_msg in ("main menu", "menu", "start", "hi", "hello", "hey", "show options", "options") or message in ("Main Menu", "main_menu", "menu_main"):
-            menu_data = menus.get_main_menu(wa_id)
+            menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
             
             # Add welcome message for first-time users
             if _is_new_user(wa_id):
                 try:
-                    from shared.tenancy.resolver import resolve_tenant_for_user
                     from shared.tenancy.loader import get_tenant_profile
-                    tenant_id = resolve_tenant_for_user(wa_id)
                     if tenant_id:
                         profile = get_tenant_profile(tenant_id)
                         tenant_name = getattr(getattr(profile, 'brand', None), 'name', 'our service')
@@ -217,7 +220,7 @@ async def handle_b2c_message(
             return {"status": "menu_sent", "new_state": cfg.B2C_MAIN_MENU_STATE}
         # Greeting-ish input (typos / letter-spam like "Helooyyy"): show the menu.
         if _is_greeting(message):
-            menu_data = menus.get_main_menu(wa_id)
+            menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
             if menu_data.get("type") == "buttons":
                 await send_button_message(
                     wa_id,
@@ -236,7 +239,7 @@ async def handle_b2c_message(
         # Meaningless / keyboard-mash input: show the menu instead of
         # throwing the noise at the RAG index (which returns unrelated answers).
         if _is_meaningless(message):
-            menu_data = menus.get_main_menu(wa_id)
+            menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
             if menu_data.get("type") == "buttons":
                 await send_button_message(
                     wa_id,
@@ -253,14 +256,14 @@ async def handle_b2c_message(
                 )
             return {"status": "meaningless", "new_state": cfg.B2C_MAIN_MENU_STATE}
         # Not a menu button: fall back to the RAG pipeline for general questions.
-        return await _handle_main_selection(wa_id, message, context, cfg)
+        return await _handle_main_selection(wa_id, message, context, cfg, tenant_id=tenant_id)
 
     # ── Complaint: awaiting type ─────────────────────────────────────────────
     if state == cfg.B2C_AWAITING_COMPLAINT_TYPE:
         clean = (message or "").strip().lower()
         if clean in ("cancel", "stop", "exit", "quit", "menu", "main menu", "back", "restart", "start over"):
             # Show menu automatically
-            menu_data = menus.get_main_menu(wa_id)
+            menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
             if menu_data.get("type") == "buttons":
                 await send_button_message(
                     wa_id,
@@ -303,7 +306,7 @@ async def handle_b2c_message(
         if clean in ("cancel", "stop", "exit", "quit", "menu", "main menu", "back"):
             context.pop("complaint_type", None)
             # Show menu automatically
-            menu_data = menus.get_main_menu(wa_id)
+            menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
             if menu_data.get("type") == "buttons":
                 await send_button_message(
                     wa_id,
@@ -349,7 +352,7 @@ async def handle_b2c_message(
         )
         
         # Show menu for re-engagement
-        menu_data = menus.get_main_menu(wa_id)
+        menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
         if menu_data.get("type") == "buttons":
             await send_button_message(
                 wa_id,
@@ -443,7 +446,9 @@ async def handle_b2c_message(
     return await _fallback_to_rag(wa_id, message, cfg)
 
 
-async def _handle_main_selection(wa_id: str, message: str, context: dict, cfg) -> dict:
+async def _handle_main_selection(
+    wa_id: str, message: str, context: dict, cfg, tenant_id: str | None = None,
+) -> dict:
     """Handle a selection made from the B2C main menu.
 
     Returns a fallback to the RAG pipeline when the message is not a menu
@@ -452,13 +457,18 @@ async def _handle_main_selection(wa_id: str, message: str, context: dict, cfg) -
     from services.whatsapp_sender import send_text_message, send_button_message, send_list_menu, send_image_message
     from . import tools, menus
     
-    # Resolve tenant_id for this user
-    tenant_id = None
-    try:
-        from shared.tenancy.resolver import resolve_tenant_for_user
-        tenant_id = resolve_tenant_for_user(wa_id)
-    except Exception:
-        pass
+    # Prefer orchestrator-stamped tenant; never let a stale user stamp beat
+    # active_test_tenant during single-number WhatsApp testing.
+    if not tenant_id:
+        try:
+            from shared.tenancy.resolver import resolve_effective_tenant_id
+            tenant_id = resolve_effective_tenant_id(wa_id)
+        except Exception:
+            try:
+                from shared.tenancy.resolver import resolve_tenant_for_user
+                tenant_id = resolve_tenant_for_user(wa_id)
+            except Exception:
+                tenant_id = None
 
     sel = _clean(message)
 
@@ -583,9 +593,9 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
             from services.intent_answers import answer_for_menu_title, answer_for_text
         except ImportError:
             from backend.services.intent_answers import answer_for_menu_title, answer_for_text
-        tenant_answer = answer_for_menu_title(wa_id, message)
+        tenant_answer = answer_for_menu_title(wa_id, message, tenant_id=tenant_id)
         if not tenant_answer:
-            tenant_answer = answer_for_text(wa_id, message)
+            tenant_answer = answer_for_text(wa_id, message, tenant_id=tenant_id)
             try:
                 from services import service_answers as _svc_ans
             except Exception:
@@ -594,16 +604,11 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
                 except Exception:
                     _svc_ans = None
             if _svc_ans and _svc_ans.is_service_query(message):
-                svc_full = _svc_ans.answer_for_text(wa_id, message)
+                svc_full = _svc_ans.answer_for_text(wa_id, message, tenant_id=tenant_id)
                 if svc_full:
                     tenant_answer = svc_full
         if tenant_answer:
-            tid = None
-            try:
-                from shared.tenancy.resolver import resolve_tenant_for_user
-                tid = resolve_tenant_for_user(wa_id)
-            except Exception:
-                pass
+            tid = tenant_id
             synthesized = await _llm_synthesize(tenant_answer, message, message, tenant_id=tid)
             from routing.button_actions import get_contextual_buttons
             from services.whatsapp_sender import send_button_message, send_text_message
@@ -626,18 +631,13 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
                 from services import service_answers
             except ImportError:
                 from backend.services import service_answers
-            svc = service_answers.answer_for_text(wa_id, message)
+            svc = service_answers.answer_for_text(wa_id, message, tenant_id=tenant_id)
             if svc:
-                tid = None
-                try:
-                    from shared.tenancy.resolver import resolve_tenant_for_user
-                    tid = resolve_tenant_for_user(wa_id)
-                except Exception:
-                    pass
+                tid = tenant_id
                 synthesized = await _llm_synthesize(svc, "Our Services", message, tenant_id=tid)
                 from routing.button_actions import get_contextual_buttons
                 from services.whatsapp_sender import send_button_message, send_text_message
-                buttons = get_contextual_buttons("services", wa_id=wa_id, limit=3)
+                buttons = get_contextual_buttons("services", tenant_id=tid, wa_id=wa_id, limit=3)
                 if buttons:
                     await send_button_message(wa_id, synthesized, buttons)
                 else:
@@ -654,14 +654,12 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
     answer = None
 
     # 0. Check Tenant Intent Answers first (safety net for tenant menu options/queries)
-    tid = None
+    tid = tenant_id
     try:
-        from shared.tenancy.resolver import resolve_tenant_for_user
         try:
             from services import intent_answers
         except ImportError:
             from backend.services import intent_answers
-        tid = resolve_tenant_for_user(wa_id)
         intent_rep = (
             intent_answers.answer_for_button(wa_id, message, tenant_id=tid)
             or intent_answers.answer_for_intent(wa_id, message, tenant_id=tid)
@@ -926,5 +924,13 @@ async def _escalate(wa_id: str, cfg) -> dict:
     except Exception as e:
         logger.error(f"human_handover update failed for {wa_id}: {e}")
 
-    await send_text_message(wa_id, "Connecting you to a human agent...")
+    try:
+        from shared.handover import HANDOVER_CONFIRMATION
+        connecting = HANDOVER_CONFIRMATION
+    except Exception:
+        connecting = (
+            "Connecting you to a human agent...\n\n"
+            "Type *hi* anytime to continue with the chatbot."
+        )
+    await send_text_message(wa_id, connecting)
     return {"status": "human_handover", "new_state": cfg.B2C_MAIN_MENU_STATE}
