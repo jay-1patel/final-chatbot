@@ -1,1 +1,3 @@
-# Core Service Groups 1. **Communication & CPaaS** · Bulk SMS, Email, WhatsApp API, IVR, SMS Gateway, omnichannel 2. **AI & Emerging Technology** · GenAI, chatbots, ML, vision, automation 3. **Custom Software & SaaS** · enterprise apps, APIs, product engineering 4. **Web & Mobile** · React/Next, Flutter/RN, ASO, analytics 5. **Data & Analytics** · engineering, BI, predictive 6. **Cloud & DevOps** · AWS/Azure/GCP, CI/CD, Kubernetes 7. **UI/UX** · research, design systems, mobile UI Ask for a scoped quote with your use case and timeline.
+# Services Map — AI, Software, CPaaS & Cloud
+
+1) Communication & CPaaS 2) AI & Emerging Technology 3) Custom Software & SaaS 4) Web & Mobile 5) Data & Analytics 6) Cloud & DevOps 7) UI/UX. Ask for a scoped quote with use case and timeline.
