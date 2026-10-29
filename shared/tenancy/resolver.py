@@ -130,6 +130,19 @@ def resolve_tenant_from_payload(payload: Dict[str, Any]) -> Optional[str]:
         if active_tenant:
             return active_tenant
 
+    # No phone binding resolved: in single-number testing mode an activated
+    # test tenant still owns the conversation, so messages are not dropped (and
+    # chat history keeps being recorded). A real phone binding always wins
+    # above, so production routing is unaffected.
+    override = _active_test_override()
+    if override:
+        active_override = _registered_active_tenant(override)
+        if active_override:
+            logger.info(
+                "ACTIVE_TEST_TENANT | no phone binding; routing inbound to %s",
+                active_override,
+            )
+            return active_override
     if _extract_phone_ids(payload or {}):
         logger.warning(
             "Unbound or inactive WABA phone id(s) %s — ignoring inbound message",
@@ -176,14 +189,17 @@ def bind_phone_id(tenant_id: str, phone_id: str) -> bool:
     return store.set_waba_phone_id(tenant_id, phone_id)
 
 
-def resolve_default_tenant() -> str:
+def resolve_default_tenant() -> Optional[str]:
     """The tenant an unrecognised request belongs to.
 
     Resolution order:
       1. ``_active_test_override()`` if active test tenant is toggled
       2. ``DEFAULT_TENANT_ID`` from the environment, if that tenant is registered
       3. the single active tenant, when exactly one is registered
-      4. the literal default id as a last resort
+
+    There is deliberately NO default tenant: when several tenants are registered
+    and none is configured, we return None instead of guessing (or falling back
+    to a leftover "default"/leeway pack). Callers must handle None.
     """
     override = _active_test_override()
     if override:
@@ -191,20 +207,15 @@ def resolve_default_tenant() -> str:
 
     from . import store
 
-    configured = os.getenv("DEFAULT_TENANT_ID", "").strip() or DEFAULT_TENANT_ID
-    if store.get_tenant(configured):
+    configured = os.getenv("DEFAULT_TENANT_ID", "").strip()
+    # Never treat the synthetic "default" id as a real tenant.
+    if configured and configured != "default" and store.get_tenant(configured):
         return configured
 
     active = [t for t in store.list_tenants(status="active") if t.get("id")]
     if len(active) == 1:
-        return active[0]["id"]
-    if active:
-        logger.warning(
-            "DEFAULT_TENANT_ID is not set and %d tenants are registered (%s); "
-            "falling back to %r. Set DEFAULT_TENANT_ID to the owning tenant.",
-            len(active), ", ".join(sorted(str(t["id"]) for t in active)), configured,
-        )
-    return str(configured)
+        return str(active[0].get("slug") or active[0]["id"])
+    return None
 
 
 def resolve_tenant_for_user(

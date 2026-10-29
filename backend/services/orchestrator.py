@@ -80,7 +80,7 @@ async def _process_captured_message(wa_id: str, message: str, tenant_id: str = N
         effective_tenant = resolve_effective_tenant_id(
             wa_id,
             tenant_id,
-            allow_test_override=not bool(tenant_id),
+            allow_test_override=True,
         )
     except Exception as exc:
         logger.exception("ORCH_TENANT_RESOLUTION_FAILED | wa_id=%s", wa_id)

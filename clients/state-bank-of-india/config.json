@@ -9,7 +9,7 @@
     "website": "https://www.sbi.co.in",
     "support_email": "customercare@sbi.co.in",
     "support_phone": "+91 9876543210",
-    "signature": "Stay Safe Block lost cards immediately via the menu, SMS BLOCK to 567676 or 1800 — At your service."
+    "signature": "State Bank Of India — At your service."
   },
   "menu": {
     "key": "kb_main",
@@ -137,7 +137,12 @@
       "dispute",
       "representative"
     ],
-    "escalation_message": "Transfer to human sales advisor when user asks for 'human', 'agent' or expresses dispute"
+    "escalation_message": "Transfer to human sales advisor when user asks for 'human', 'agent' or expresses dispute",
+    "handoff_keywords": [
+      "human",
+      "agent",
+      "person"
+    ]
   },
   "flows": [
     {
@@ -152,5 +157,44 @@
       "name": "raise_ticket",
       "success_message": "Your request has been logged. A support ticket has been created and an executive will assist you."
     }
-  ]
+  ],
+  "features": {
+    "cart": false,
+    "buy_now": false,
+    "orders": false,
+    "payments": false,
+    "track_order": false,
+    "returns": false,
+    "brochure_pdf": true,
+    "distributors": false,
+    "offerings": true,
+    "offering_details": true,
+    "services": false,
+    "products": false,
+    "products_schemes": true,
+    "lead_capture": true,
+    "quote": false,
+    "callback": true,
+    "book_appointment": false,
+    "handoff": true,
+    "faq": true,
+    "kb": true,
+    "complaints": true,
+    "campaigns": false,
+    "human_handover": true
+  },
+  "vocabulary": {
+    "item_noun": "schemes",
+    "item_noun_singular": "scheme",
+    "browse_label": "Our Products",
+    "catalog_label": "Product Brochure",
+    "lead_noun": "enquiry",
+    "enquiry_label": "Enquire"
+  },
+  "prompt": {
+    "tone": "formal and compliant",
+    "industry": "banking and insurance",
+    "listing_type": "products or schemes",
+    "domain_specific_queries": "accounts, cards, charges, claims, or eligibility"
+  }
 }

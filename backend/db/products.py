@@ -31,9 +31,10 @@ def _resolve_tenant(tenant_id: str = None) -> str:
         return active
     try:
         from shared.tenancy.resolver import resolve_default_tenant
-        return resolve_default_tenant()
+        val = resolve_default_tenant()
+        return str(val).strip() if val else ""
     except Exception:
-        return os.environ.get("DEFAULT_TENANT_ID", "default")
+        return os.environ.get("DEFAULT_TENANT_ID", "default") or ""
 
 
 def _resolve_tenant_ids(tenant_id: str = None) -> list:

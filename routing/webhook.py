@@ -315,7 +315,7 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
     try:
         from shared.tenancy.resolver import resolve_effective_tenant_id
         tenant_id = resolve_effective_tenant_id(
-            wa_id, tenant_id, allow_test_override=False
+            wa_id, tenant_id, allow_test_override=(tenant_id is None)
         )
     except Exception as exc:
         logger.error("Could not resolve active tenant for %s; dropping message: %s", wa_id, exc)

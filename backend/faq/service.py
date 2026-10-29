@@ -66,7 +66,8 @@ def _resolve_tenant_id(tenant_id=None) -> str:
     if not tid:
         try:
             from shared.tenancy.resolver import resolve_default_tenant
-            tid = str(resolve_default_tenant())
+            _default = resolve_default_tenant()
+            tid = str(_default).strip() if _default else ""
         except Exception:
             tid = "1"
     if tid.isdigit():
@@ -1507,7 +1508,8 @@ async def synthesize_intent_answer(
     if not resolved_tenant:
         try:
             from shared.tenancy.resolver import resolve_default_tenant
-            resolved_tenant = str(resolve_default_tenant())
+            _default = resolve_default_tenant()
+            resolved_tenant = str(_default).strip() if _default else ""
         except Exception:
             resolved_tenant = ""
 
