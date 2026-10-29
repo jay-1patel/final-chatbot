@@ -119,20 +119,33 @@ def _claim_inbound(message_id: str, wa_id: str) -> bool:
         return True  # fail open — prefer answering once over dropping
 
 
-def _is_duplicate_content(wa_id: str, text: str) -> bool:
-    """Content fingerprint for the poller path.
+def _release_inbound(message_id: str) -> None:
+    """Allow a later poll to retry after process/send failed post-claim."""
+    _processed_message_ids.discard(message_id)
+    try:
+        try:
+            from services.dedup import release_inbound_claim
+        except ImportError:
+            from backend.services.dedup import release_inbound_claim
+        release_inbound_claim(message_id)
+    except Exception as e:
+        logger.warning(f"Could not release inbound id {message_id}: {e}")
 
-    Uses the full poll window (not the short webhook race TTL) so historical
-    rows Send2 re-returns every 5s stay quiet without re-answering ``Hi``.
+
+def _is_duplicate_content(wa_id: str, text: str) -> bool:
+    """Content fingerprint for the Meta webhook ↔ poller race only.
+
+    Historical rows Send2 re-lists every poll are suppressed by message-id
+    dedup (``processed_inbound_messages``). Using the full 15-minute poll
+    window here incorrectly silenced legitimate new ``Hi`` / menu taps.
     """
     try:
         try:
             from services.dedup import is_duplicate_content
         except ImportError:
             from backend.services.dedup import is_duplicate_content
-        return is_duplicate_content(
-            wa_id, text, window_seconds=max(60, POLL_WINDOW_MINUTES * 60)
-        )
+        # Keep this short: only covers push-vs-poll dual delivery lag.
+        return is_duplicate_content(wa_id, text, window_seconds=30)
     except Exception as e:
         logger.debug(f"content dedup unavailable: {e}")
         return False
@@ -525,13 +538,16 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                         else:
                             logger.info(f"Processed {wa_id} but no outgoing messages")
 
-                        # Mark as processed only after the reply was sent so a
-                        # crash mid-send retries instead of dropping the answer.
+                        # Claim already reserved the id; keep the durable mark and
+                        # chat/poll audit only after a successful process+send path.
                         _record_processed(message_id, wa_id)
                         _record_chat(wa_id, sender_name, text, outgoing)
                         _record_poll(wa_id, text)
 
                     except Exception as e:
+                        # Claim runs before send to stop double-answers; release so
+                        # the next poll can retry instead of permanently dropping.
+                        _release_inbound(message_id)
                         logger.error(f"Failed to process message from {wa_id}: {e}", exc_info=True)
 
                 if skipped_known:

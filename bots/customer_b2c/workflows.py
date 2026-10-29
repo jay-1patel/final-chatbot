@@ -283,7 +283,7 @@ async def handle_b2c_message(
         # If user asked a new question, break out of complaint flow and answer it via RAG
         if "?" in clean or any(clean.startswith(w + " ") or clean == w for w in QUESTION_WORDS):
             context.pop("complaint_type", None)
-            return await _fallback_to_rag(wa_id, message, cfg)
+            return await _fallback_to_rag(wa_id, message, cfg, tenant_id=tenant_id)
 
         # Get tenant-specific complaint types
         complaint_types = _get_tenant_complaint_types(wa_id)
@@ -331,7 +331,7 @@ async def handle_b2c_message(
 
         if "?" in clean or any(clean.startswith(w + " ") or clean == w for w in QUESTION_WORDS):
             context.pop("complaint_type", None)
-            return await _fallback_to_rag(wa_id, message, cfg)
+            return await _fallback_to_rag(wa_id, message, cfg, tenant_id=tenant_id)
 
         ctype = context.get("complaint_type", "Other")
         ticket = tools.register_b2c_complaint(wa_id, ctype, message)
@@ -443,7 +443,7 @@ async def handle_b2c_message(
         return {"status": "answered", "new_state": cfg.B2C_MAIN_MENU_STATE, "context": {}}
 
     # ── Unknown / stale state: fall back to RAG ───────────────────────────────
-    return await _fallback_to_rag(wa_id, message, cfg)
+    return await _fallback_to_rag(wa_id, message, cfg, tenant_id=tenant_id)
 
 
 async def _handle_main_selection(
@@ -562,10 +562,12 @@ async def _handle_main_selection(
         return {"status": "answered", "new_state": cfg.B2C_MAIN_MENU_STATE}
 
     # Anything else while in the main menu: answer via the RAG pipeline.
-    return await _fallback_to_rag(wa_id, message, cfg)
+    return await _fallback_to_rag(wa_id, message, cfg, tenant_id=tenant_id)
 
 
-async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
+async def _fallback_to_rag(
+    wa_id: str, message: str, cfg, tenant_id: str | None = None,
+) -> dict:
     """Answer a general question from the uploaded documents.
 
     Resolution order:
@@ -586,6 +588,17 @@ async def _fallback_to_rag(wa_id: str, message: str, cfg) -> dict:
         send_image_message,
         send_document_message,
     )
+
+    if not tenant_id:
+        try:
+            from shared.tenancy.resolver import resolve_effective_tenant_id
+            tenant_id = resolve_effective_tenant_id(wa_id)
+        except Exception:
+            try:
+                from shared.tenancy.resolver import resolve_tenant_for_user
+                tenant_id = resolve_tenant_for_user(wa_id)
+            except Exception:
+                tenant_id = None
 
     # 0. Tenant menu row (tapped title) / rules intent: authoritative, no RAG.
     try:

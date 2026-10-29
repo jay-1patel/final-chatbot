@@ -121,6 +121,30 @@ def try_claim_message(message_id: str, wa_id: str, channel: str = "send2") -> bo
         return True  # fail open
 
 
+def release_inbound_claim(message_id: str) -> None:
+    """Undo a poller/webhook claim so a failed send can be retried.
+
+    Claims are written before the reply goes out (to stop double-answers). If
+    processing or delivery then fails, leaving the claim in place permanently
+    drops the customer message. Clear both durable tables and the L1 cache.
+    """
+    if not message_id:
+        return
+    _l1_cache.pop(message_id, None)
+    try:
+        with get_db_context() as conn:
+            conn.execute(
+                "DELETE FROM processed_inbound_messages WHERE message_id = ?",
+                (message_id,),
+            )
+            conn.execute(
+                "DELETE FROM webhook_dedup WHERE message_id = ?",
+                (message_id,),
+            )
+    except Exception as e:
+        logger.error(f"release_inbound_claim failed for {message_id}: {e}")
+
+
 def _content_key(wa_id: str, text: str) -> str:
     norm = " ".join((text or "").strip().lower().split())
     digest = hashlib.sha1(f"{wa_id}|{norm}".encode("utf-8")).hexdigest()[:24]
