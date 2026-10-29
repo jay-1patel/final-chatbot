@@ -300,14 +300,26 @@ def send_whatsapp_list_menu(to, header_text, body_text, button_text, sections, f
     # Enforce WhatsApp / Send2 character limits:
     # row title <= 24, row desc <= 72, section title <= 24, button <= 20
     api_sections = []
+    seen_row_ids: set = set()
     for section in sections:
         api_section = {
             "title": str(section.get("title", "") or "")[:24],
             "rows": []
         }
         for row in section.get("rows", []):
+            rid = str(row.get("id", "") or "")[:200]
+            if not rid:
+                continue
+            # WhatsApp rejects the whole list when two rows share an id.
+            base = rid
+            n = 2
+            while rid in seen_row_ids:
+                suffix = f"_{n}"
+                rid = (base[: 200 - len(suffix)] + suffix)
+                n += 1
+            seen_row_ids.add(rid)
             api_row = {
-                "id": str(row.get("id", ""))[:200],
+                "id": rid,
                 "title": str(row.get("title", "") or "")[:24],
                 "description": str(row.get("description", "") or "")[:72],
             }
@@ -366,6 +378,99 @@ def _truncate_body(text: str, limit: int = 1020) -> str:
     if last_space > limit // 2:
         cut = cut[:last_space]
     return cut.rstrip()
+
+
+def send_whatsapp_cta_url(
+    to: str,
+    body_text: str,
+    cta_url: str,
+    display_text: str = "Learn More",
+    image_url: str = None,
+    footer_text: str = None,
+    tenant_id: str = None,
+    timeout: int = 60,
+) -> bool:
+    """Send send2 interactive ``cta_url`` with optional image header.
+
+    Notes from send2:
+    - Do not mix reply buttons with CTA URL in one payload.
+    - Max 1 CTA URL button per interactive payload.
+    - Image goes in ``interactive.header`` (type=image).
+    """
+    username, password = get_tenant_send2_credentials(tenant_id)
+    clean_to = re.sub(r"[^\d]", "", str(to or "")).strip() or str(to)
+    url = str(cta_url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        logger.error("CTA_URL_INVALID | to=%s | url=%r", to, url)
+        return False
+
+    body = _truncate_body(normalize_whatsapp_formatting(body_text or " ") or " ", limit=1020)
+    label = str(display_text or "Learn More").strip()[:20] or "Learn More"
+    footer = str(footer_text or " ").strip() or " "
+
+    interactive = {
+        "type": "cta_url",
+        "body": {"text": body},
+        "footer": {"text": footer[:60]},
+        "action": {
+            "name": "cta_url",
+            "parameters": {
+                "display_text": label,
+                "url": url,
+            },
+        },
+    }
+
+    image_link = str(image_url or "").strip()
+    if image_link:
+        try:
+            from kb.services.whatsapp import resolve_public_media_url
+            resolved = resolve_public_media_url(image_link)
+            if resolved:
+                image_link = resolved
+        except Exception:
+            image_link = _resolve_media_url(image_link)
+        if image_link.startswith(("http://", "https://")):
+            interactive["header"] = {
+                "type": "image",
+                "image": {"link": image_link},
+            }
+
+    payload = {
+        "user_name": username,
+        "password": password,
+        "contact_no": clean_to,
+        "message_type": "interactive",
+        "interactive": interactive,
+    }
+    try:
+        logger.info(
+            "CTA_URL_REQUEST | to=%s | has_image=%s | display=%r | url=%s",
+            to, "header" in interactive, label, url[:120],
+        )
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(SEND2_SESSION_SEND_URL, json=payload)
+        logger.info(
+            "CTA_URL_RESPONSE | to=%s | status=%s | body=%s",
+            to, resp.status_code, (resp.text or "")[:300],
+        )
+        try:
+            from routing.hookdeck import tee_outbound
+            tee_outbound(SEND2_SESSION_SEND_URL, payload, resp.status_code, resp.text, to=clean_to)
+        except Exception:
+            pass
+        low = (resp.text or "").lower()
+        ok = resp.status_code == 200 and (
+            "message sent successfully" in low
+            or '"success":true' in low
+            or '"success": true' in low
+            or '"success":1' in low
+            or '"success": 1' in low
+        )
+        return bool(ok)
+    except Exception as e:
+        logger.error("CTA_URL_FAILED | to=%s | error=%s", to, e)
+        return False
 
 
 def normalize_reply_buttons(buttons):

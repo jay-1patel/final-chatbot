@@ -906,12 +906,25 @@ def resolve_public_media_url(media_url: str) -> Optional[str]:
     if stored_name:
         pass  # media table removed; local path resolution handled below
 
-    # Prefer permanent Imghippo/catbox hosting over PUBLIC_BASE_URL tunnels
-    # (ngrok/local tunnels go stale and WhatsApp cannot fetch them).
+    # PDFs: prefer live PUBLIC_BASE_URL (Cloudflare tunnel). Catbox uploads
+    # often succeed but Meta cannot fetch files.catbox.moe.
+    # Images: try free hosts (img402/etc), then tunnel, then relative PUBLIC_BASE_URL.
     if local_path and os.path.isfile(local_path):
         file_ext = os.path.splitext(local_path)[1].lower()
         is_image = file_ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
         is_pdf = file_ext == ".pdf"
+        if is_pdf and config.PUBLIC_BASE_URL:
+            try:
+                from services.media_host import public_url_for_local_path
+            except ImportError:
+                try:
+                    from backend.services.media_host import public_url_for_local_path
+                except ImportError:
+                    public_url_for_local_path = None  # type: ignore
+            if public_url_for_local_path:
+                tunnel_url = public_url_for_local_path(local_path)
+                if tunnel_url:
+                    return tunnel_url
         if is_image or is_pdf:
             uploaded = _upload_image_file(local_path)
             if uploaded:
@@ -921,6 +934,7 @@ def resolve_public_media_url(media_url: str) -> Optional[str]:
         media_url.startswith("/media/serve/")
         or media_url.startswith("/uploaded_files/")
         or media_url.startswith("/api/uploads/chat/")
+        or media_url.startswith("/api/uploads/")
     ) and config.PUBLIC_BASE_URL:
         base = config.PUBLIC_BASE_URL.rstrip("/")
         return f"{base}{media_url}"
@@ -929,76 +943,32 @@ def resolve_public_media_url(media_url: str) -> Optional[str]:
 
 
 def _upload_image_file(file_path: str) -> Optional[str]:
-    """Upload local file to imghippo/catbox. Returns URL or None."""
-    from routing.config import IMGHIPPO_API_KEY
+    """Upload local file to a Meta-fetchable host. Returns URL or None."""
+    try:
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+    except Exception as e:
+        logger.error(f"upload_image: could not read {file_path}: {e}")
+        return None
 
-    ext = os.path.splitext(file_path)[1].lower()
-    is_image = ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
-
-    # 1. imghippo (images only)
-    if IMGHIPPO_API_KEY and is_image:
+    name = os.path.basename(file_path)
+    ext = os.path.splitext(name)[1].lower()
+    subdir = "product_images" if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg") else "brochures"
+    try:
         try:
-            with open(file_path, "rb") as f:
-                file_bytes = f.read()
-            resp = httpx.post(
-                "https://api.imghippo.com/v1/upload",
-                headers={"X-API-Key": IMGHIPPO_API_KEY},
-                files={
-                    "file": (
-                        os.path.basename(file_path),
-                        file_bytes,
-                        "application/octet-stream",
-                    )
-                },
-                timeout=60,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("success"):
-                    url = data["data"]["url"]
-                    logger.info(f"upload_image: imghippo -> {url}")
-                    return url
-                logger.warning(f"upload_image: imghippo rejected: {resp.status_code} {resp.text[:120]}")
-        except Exception as e:
-            logger.error(f"upload_image: imghippo failed: {e}")
-    else:
-        if not IMGHIPPO_API_KEY:
-            logger.warning("upload_image: IMGHIPPO_API_KEY not set, skipping imghippo")
-        else:
-            logger.info(f"upload_image: skipping imghippo for non-image file ({ext})")
-
-    # 2. Catbox.moe (fallback)
-    try:
-        with open(file_path, "rb") as f:
-            resp = httpx.post(
-                "https://catbox.moe/user/api.php",
-                data={"reqtype": "fileupload"},
-                files={"fileToUpload": (os.path.basename(file_path), f)},
-                timeout=60,
-            )
-            if resp.status_code == 200 and resp.text.strip().startswith("http"):
-                url = resp.text.strip()
-                logger.info(f"upload_image: catbox.moe -> {url}")
-                return url
-            logger.warning(f"upload_image: catbox rejected: {resp.status_code} {resp.text[:120]}")
+            from services.media_host import upload_public_media, public_url_for_local_path
+        except ImportError:
+            from backend.services.media_host import upload_public_media, public_url_for_local_path
+        # Prefer mapping an already-local uploaded_files path through the tunnel.
+        mapped = public_url_for_local_path(file_path)
+        if mapped and ext == ".pdf":
+            return mapped
+        url = upload_public_media(file_bytes, name, subdir=subdir)
+        if url:
+            logger.info(f"upload_image: media_host -> {url}")
+            return url
     except Exception as e:
-        logger.error(f"upload_image: catbox.moe failed: {e}")
-
-    # 3. 0x0.st (fallback)
-    try:
-        with open(file_path, "rb") as f:
-            resp = httpx.post(
-                "https://0x0.st",
-                files={"file": f},
-                timeout=60,
-                headers={"User-Agent": "Mozilla/5.0"},
-            )
-            if resp.status_code == 200 and resp.text.strip().startswith("http"):
-                url = resp.text.strip()
-                logger.info(f"upload_image: 0x0.st -> {url}")
-                return url
-    except Exception as e:
-        logger.error(f"upload_image: 0x0.st failed: {e}")
+        logger.error(f"upload_image: media_host failed: {e}")
 
     # 4. data URL only useful if send2 accepts it (last resort, small files)
     try:

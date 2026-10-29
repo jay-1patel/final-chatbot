@@ -85,9 +85,9 @@ export function OnboardingKitWidget({
       )
       let draft: StagedOnboardingDraft
       if (tenantId && tenantId !== 'draft_tenant') {
-        draft = await onboardingKitsApi.stageTenant(tenantId, file)
+        draft = await onboardingKitsApi.stageTenant(tenantId, file, lane)
       } else {
-        draft = await onboardingKitsApi.stageGlobal(file)
+        draft = await onboardingKitsApi.stageGlobal(file, lane)
       }
       setStagedDraft(draft)
       if (onStagedDraft) onStagedDraft(draft)

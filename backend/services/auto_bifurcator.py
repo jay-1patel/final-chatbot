@@ -204,7 +204,15 @@ def _attach_pdf_images_to_offerings(
     offerings: List[Dict[str, Any]],
     extracted_docs: List[Dict[str, Any]],
 ) -> None:
-    """Host embedded PDF product images and attach unambiguous matches to records."""
+    """Host embedded PDF product images and attach them to offering records.
+
+    Matching rules (in order):
+      1. Exact 1 image + 1 named offering on the page
+      2. Same count of page images and named offerings → zip by visual
+         reading order (top→bottom, left→right) — covers catalog pages
+         like MakeMyTrip kits with 6 packages + 6 photos
+      3. Otherwise skip with a warning (ambiguous layout)
+    """
     if not offerings:
         return
     from routes.chat import _upload_to_imghippo
@@ -246,18 +254,42 @@ def _attach_pdf_images_to_offerings(
                         continue
                     if int(extracted.get("width") or 0) < 120 or int(extracted.get("height") or 0) < 120:
                         continue
-                    page_images.append((xref, image_index, extracted))
+                    try:
+                        rects = page.get_image_rects(xref) or []
+                    except Exception:
+                        rects = []
+                    if rects:
+                        y0 = min(float(r.y0) for r in rects)
+                        x0 = min(float(r.x0) for r in rects)
+                    else:
+                        y0, x0 = float(image_index), 0.0
+                    page_images.append((y0, x0, xref, image_index, extracted))
 
                 if not page_images:
                     continue
-                if len(page_offerings) == 1 and len(page_images) == 1:
-                    matches = [(page_offerings[0], page_images[0])]
+                # Visual reading order so catalog grids zip correctly.
+                page_images.sort(key=lambda row: (round(row[0] / 20), row[1], row[3]))
+                ordered_images = [
+                    (xref, image_index, extracted)
+                    for _y, _x, xref, image_index, extracted in page_images
+                ]
+
+                if len(page_offerings) == 1 and len(ordered_images) == 1:
+                    matches = [(page_offerings[0], ordered_images[0])]
+                elif len(page_offerings) == len(ordered_images) and len(ordered_images) > 0:
+                    matches = list(zip(page_offerings, ordered_images))
+                    logger.info(
+                        "PDF_IMAGE_ZIP_MATCH | file=%s | page=%d | pairs=%d",
+                        source.get("filename"),
+                        page_number,
+                        len(matches),
+                    )
                 else:
                     logger.warning(
                         "PDF_IMAGE_MATCH_SKIPPED | file=%s | page=%d | images=%d | products=%d",
                         source.get("filename"),
                         page_number,
-                        len(page_images),
+                        len(ordered_images),
                         len(page_offerings),
                     )
                     continue
@@ -275,15 +307,29 @@ def _attach_pdf_images_to_offerings(
                             f"{Path(str(source.get('filename') or 'document')).stem}"
                             f"_p{page_number}_{image_index}.{extension}"
                         )
-                        uploaded_url = _upload_to_imghippo(extracted["image"], filename)
+                        try:
+                            uploaded_url = _upload_to_imghippo(extracted["image"], filename)
+                        except Exception as upload_err:
+                            logger.warning(
+                                "PDF_IMAGE_UPLOAD_FAILED | file=%s | err=%s",
+                                filename,
+                                upload_err,
+                            )
+                            continue
                         url = tenancy_schemas.extract_first_url(uploaded_url or "")
                         if not url:
-                            raise RuntimeError(
-                                f"Could not get a public URL for extracted PDF image '{filename}' "
-                                "from ImageHipo. "
-                                "Check the ImageHipo API key and try again."
+                            logger.warning(
+                                "PDF_IMAGE_NO_PUBLIC_URL | file=%s — image extracted but "
+                                "hosting returned no URL (check img402 / PUBLIC_BASE_URL)",
+                                filename,
                             )
+                            continue
                         uploaded_by_xref[xref] = url
+                        logger.info(
+                            "PDF_IMAGE_HOSTED | offering=%r | url=%s",
+                            offering.get("name"),
+                            url[:120],
+                        )
                     offering["media_url"] = url
                     offering["media_type"] = "image"
         finally:
@@ -452,25 +498,34 @@ class AutoBifurcator:
             return merge_bifurcation_results(heuristic, tenant_id=self.tenant_id)
 
         llm_parts: List[Dict[str, Any]] = []
-        # Pass strategy: brand on first window; catalog/faq on every window
+        # One full pass per window. The old brand+catalog+faq_info triple pass
+        # made local Ollama take ~3–5+ minutes and looked like a hang.
+        logger.info(
+            "OLLAMA_BIFURCATION_PLAN | tenant=%s | windows=%s | passes=%s",
+            self.tenant_id,
+            len(windows),
+            len(windows),
+        )
         for idx, window in enumerate(windows):
-            if idx == 0:
-                focuses = ("brand", "catalog", "faq_info")
-            else:
-                focuses = ("catalog", "faq_info")
-            for focus in focuses:
-                system_prompt = self._bifurcation_system_prompt(focus=focus)
-                user_prompt = (
-                    f"This is chunk {idx + 1} of {len(windows)} from uploaded client collateral.\n"
-                    f"Extract per focus='{focus}'. Merge-safe partial JSON is OK.\n\n{window}"
-                )
-                try:
-                    part = self._call_llm_json(system_prompt, user_prompt)
-                except Exception as exc:
-                    logger.warning("LLM bifurcate chunk=%s focus=%s failed: %s", idx, focus, exc)
-                    part = None
-                if part:
-                    llm_parts.append(part)
+            system_prompt = self._bifurcation_system_prompt(focus="full")
+            user_prompt = (
+                f"This is chunk {idx + 1} of {len(windows)} from uploaded client collateral.\n"
+                f"Extract per focus='full'. Merge-safe partial JSON is OK.\n\n{window}"
+            )
+            logger.info(
+                "OLLAMA_BIFURCATION_START | tenant=%s | chunk=%s/%s | chars=%s",
+                self.tenant_id,
+                idx + 1,
+                len(windows),
+                len(window),
+            )
+            try:
+                part = self._call_llm_json(system_prompt, user_prompt)
+            except Exception as exc:
+                logger.warning("LLM bifurcate chunk=%s focus=full failed: %s", idx, exc)
+                part = None
+            if part:
+                llm_parts.append(part)
 
         if not llm_parts:
             logger.warning(
@@ -486,145 +541,94 @@ class AutoBifurcator:
         return merged
 
     def _call_llm_json(self, system_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
-        """Call local Ollama first, then Groq or Mistral as fallbacks.
-        Keys are read from routing.config (the app's central config) with
-        os.getenv() as a secondary fallback so the service works in both
-        the production app and standalone test contexts.
+        """Call local Ollama only (no Groq/Mistral).
+
+        Bifurcation always uses the configured Ollama model. Heavy work must
+        run in a thread pool (see tenant_files auto-bifurcate) so a slow
+        generation does not freeze port 9000.
         """
         import requests
 
-        # ── Resolve API keys from routing.config first, then env ──────────────
         try:
             from routing import config as _cfg
-            groq_key    = getattr(_cfg, "GROQ_API_KEY", None)    or os.getenv("GROQ_API_KEY", "")
-            groq_url    = getattr(_cfg, "GROQ_API_URL", None)    or "https://api.groq.com/openai/v1/chat/completions"
-            groq_model  = getattr(_cfg, "GROQ_MODEL", None)      or "openai/gpt-oss-120b"
-            mistral_key = getattr(_cfg, "MISTRAL_API_KEY", None) or os.getenv("MISTRAL_API_KEY", "")
-            mistral_url = getattr(_cfg, "MISTRAL_API_URL", None) or "https://api.mistral.ai/v1/chat/completions"
-            mistral_mdl = getattr(_cfg, "MISTRAL_MODEL", None)   or "open-mistral-7b"
-            ollama_base = getattr(_cfg, "OLLAMA_BASE_URL", None) or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-            ollama_url  = getattr(_cfg, "OLLAMA_API_URL", None)  or (ollama_base.rstrip("/") + "/api/chat")
-            ollama_mdl  = getattr(_cfg, "OLLAMA_MODEL", None)    or "qwen3:8b"
+            ollama_base = getattr(_cfg, "OLLAMA_BASE_URL", None) or os.getenv(
+                "OLLAMA_BASE_URL", "http://localhost:11434"
+            )
+            ollama_url = getattr(_cfg, "OLLAMA_API_URL", None) or (
+                ollama_base.rstrip("/") + "/api/chat"
+            )
+            ollama_mdl = getattr(_cfg, "OLLAMA_MODEL", None) or "qwen3:8b"
         except Exception:
-            groq_key    = os.getenv("GROQ_API_KEY", "")
-            groq_url    = "https://api.groq.com/openai/v1/chat/completions"
-            groq_model  = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-            mistral_key = os.getenv("MISTRAL_API_KEY", "")
-            mistral_url = "https://api.mistral.ai/v1/chat/completions"
-            mistral_mdl = os.getenv("MISTRAL_MODEL", "open-mistral-7b")
-            ollama_url  = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat")
-            ollama_mdl  = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+            ollama_url = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat")
+            ollama_mdl = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
 
-        # 1. Ollama (primary configured provider)
+        # Allow long local generations; defaults match chat/RAG OLLAMA_TIMEOUT.
+        ollama_timeout = float(
+            os.getenv(
+                "BIFURCATE_OLLAMA_TIMEOUT",
+                os.getenv("OLLAMA_TIMEOUT", "300"),
+            )
+        )
+        # qwen3 "thinking" models often leave content empty unless think is off.
+        payload = {
+            "model": ollama_mdl,
+            "messages": messages,
+            "format": "json",
+            "stream": False,
+            "think": False,
+            "options": {
+                "temperature": 0.1,
+                "num_ctx": 8192,
+                "num_predict": 4096,
+            },
+        }
+        ollama_headers = {
+            "Content-Type": "application/json",
+            "ngrok-skip-browser-warning": "true",
+        }
         try:
-            payload = {
-                "model": ollama_mdl,
-                "messages": messages,
-                "format": "json",
-                "stream": False,
-                "options": {"temperature": 0.1, "num_ctx": 8192},
-            }
-            ollama_headers = {
-                "Content-Type": "application/json",
-                "ngrok-skip-browser-warning": "true",
-            }
             resp = requests.post(
                 ollama_url,
                 json=payload,
                 headers=ollama_headers,
-                timeout=float(os.getenv("OLLAMA_TIMEOUT", 180)),
+                timeout=ollama_timeout,
             )
-            if resp.status_code == 200:
-                content = resp.json().get("message", {}).get("content", "")
-                parsed = self._extract_json_block(content)
-                if parsed:
-                    logger.info("OLLAMA_BIFURCATION_SUCCESS | model=%s", ollama_mdl)
-                    return parsed
-                logger.warning("Ollama returned no usable JSON; trying hosted fallbacks.")
-            else:
-                logger.warning("Ollama bifurcation HTTP %s; trying hosted fallbacks.", resp.status_code)
-        except Exception as e:
-            logger.warning("Ollama bifurcation failed: %s", e)
-
-        # 2. Groq (fast hosted inference — uses routing.config key)
-        if groq_key:
-            try:
-                headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-                for model in (groq_model, "openai/gpt-oss-20b"):
-                    if not model:
-                        continue
-                    payload = {
-                        "model": model,
-                        "messages": messages,
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.2,
-                        "max_tokens": 4096,
-                    }
-                    resp = requests.post(groq_url, headers=headers, json=payload, timeout=45)
-                    if resp.status_code == 200:
-                        content = resp.json()["choices"][0]["message"]["content"]
-                        parsed = self._extract_json_block(content)
-                        if parsed:
-                            logger.info("GROQ_BIFURCATION_SUCCESS | model=%s", model)
-                            return parsed
-            except Exception as e:
-                logger.warning("Groq bifurcation failed: %s", e)
-        else:
-            logger.warning("Groq API key not configured — skipping Groq bifurcation.")
-
-        # 3. Mistral (fallback — uses routing.config key)
-        if mistral_key:
-            try:
-                headers = {"Authorization": f"Bearer {mistral_key}", "Content-Type": "application/json"}
-                payload = {
-                    "model": mistral_mdl,
-                    "messages": messages,
-                    "temperature": 0.2,
-                    "max_tokens": 4096,
-                }
-                resp = requests.post(mistral_url, headers=headers, json=payload, timeout=45)
-                if resp.status_code == 200:
-                    content = resp.json()["choices"][0]["message"]["content"]
-                    parsed = self._extract_json_block(content)
-                    if parsed:
-                        logger.info("MISTRAL_BIFURCATION_SUCCESS")
-                        return parsed
-            except Exception as e:
-                logger.warning("Mistral bifurcation failed: %s", e)
-        else:
-            logger.warning("Mistral API key not configured — skipping Mistral bifurcation.")
-
-        return None
-        if mistral_key:
-            try:
-                headers = {"Authorization": f"Bearer {mistral_key}", "Content-Type": "application/json"}
-                payload = {
-                    "model": os.getenv("MISTRAL_MODEL", "open-mistral-7b"),
-                    "messages": messages,
-                    "temperature": 0.2,
-                    "max_tokens": 4096,
-                }
-                resp = requests.post(
-                    "https://api.mistral.ai/v1/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=45,
+            if resp.status_code != 200:
+                logger.warning(
+                    "Ollama bifurcation HTTP %s | model=%s | body=%s",
+                    resp.status_code,
+                    ollama_mdl,
+                    (resp.text or "")[:200],
                 )
-                if resp.status_code == 200:
-                    content = resp.json()["choices"][0]["message"]["content"]
-                    parsed = self._extract_json_block(content)
-                    if parsed:
-                        logger.info("MISTRAL_BIFURCATION_SUCCESS")
-                        return parsed
-            except Exception as e:
-                logger.warning("Mistral bifurcation failed: %s", e)
-
-        return None
+                return None
+            message = resp.json().get("message") or {}
+            content = (
+                (message.get("content") or "").strip()
+                or (message.get("thinking") or "").strip()
+                or (message.get("reasoning") or "").strip()
+            )
+            parsed = self._extract_json_block(content)
+            if parsed:
+                logger.info("OLLAMA_BIFURCATION_SUCCESS | model=%s", ollama_mdl)
+                return parsed
+            logger.warning(
+                "Ollama returned no usable JSON | model=%s | preview=%s",
+                ollama_mdl,
+                (content or "")[:200],
+            )
+            return None
+        except Exception as e:
+            logger.warning(
+                "Ollama bifurcation failed | model=%s | error=%s",
+                ollama_mdl,
+                e,
+            )
+            return None
 
     def _extract_json_block(self, text: str) -> Optional[Dict[str, Any]]:
         """Extract and parse JSON safely from LLM output."""
@@ -1836,13 +1840,75 @@ class AutoBifurcator:
             staged["warning"] = warning
         return staged
 
-    def stage_files(self, files_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _persist_option_b_as_kb(self, files_data: List[Dict[str, Any]]) -> None:
+        """Option B (filled industry kit): store source files as module=kb only.
+
+        Never catalogue/brochure — WhatsApp brochure asks must ignore these.
+        """
+        if not self.tenant_id or self.tenant_id == "draft_tenant":
+            return
+        for f in files_data:
+            filename = f.get("filename") or "onboarding_kit"
+            content = f.get("content") or b""
+            if isinstance(content, str):
+                import base64
+                try:
+                    content = base64.b64decode(content)
+                except Exception:
+                    content = content.encode("utf-8", errors="ignore")
+            if not content:
+                continue
+            ext = Path(filename).suffix.lstrip(".") or "bin"
+            module = "kb"
+            upload_dir = os.path.join("backend", "uploaded_files", module)
+            os.makedirs(upload_dir, exist_ok=True)
+            filepath = os.path.join(upload_dir, filename)
+            public_url = None
+            try:
+                with open(filepath, "wb") as disk_file:
+                    disk_file.write(content)
+                if ext.lower() == "pdf":
+                    try:
+                        from services.media_host import host_via_public_base
+                    except ImportError:
+                        from backend.services.media_host import host_via_public_base
+                    public_url = host_via_public_base(content, filename, subdir=module)
+                save_admin_file(
+                    filename,
+                    ext,
+                    module,
+                    len(content),
+                    file_path=filepath,
+                    url=public_url or f"/uploaded_files/{module}/{filename}",
+                    tenant_id=self.tenant_id,
+                    actor=self.actor,
+                )
+                logger.info(
+                    "OPTION_B_KB_STORED | tenant=%s | file=%s | module=kb",
+                    self.tenant_id, filename,
+                )
+            except Exception as write_err:
+                logger.warning(
+                    "Option B kb store failed for %s: %s", filename, write_err,
+                )
+
+    def stage_files(
+        self,
+        files_data: List[Dict[str, Any]],
+        *,
+        lane: str = "any",
+    ) -> Dict[str, Any]:
         """Parse files into a reviewable staging draft without committing.
 
         Complete kits (all 5 core ``[SECTION:]`` markers) use deterministic parsers
         plus heuristic/LLM gap-fill. Incomplete kits and unstructured uploads use
         the universal path (warn + continue for incomplete kits).
+
+        Option B (``lane='kit'``) always persists source files as ``module=kb``.
         """
+        if (lane or "").strip().lower() == "kit":
+            self._persist_option_b_as_kb(files_data)
+
         extracted_docs = []
         for f in files_data:
             fname = f.get("filename") or "onboarding_doc.docx"
@@ -2660,10 +2726,6 @@ class AutoBifurcator:
         """
         extracted_docs = []
 
-        # Ensure upload directory exists
-        upload_dir = os.path.join("backend", "uploaded_files", "kb")
-        os.makedirs(upload_dir, exist_ok=True)
-
         for f in files_data:
             filename = f.get("filename") or "document.pdf"
             content = f.get("content") or b""
@@ -2671,18 +2733,33 @@ class AutoBifurcator:
                 import base64
                 content = base64.b64decode(content)
 
-            # Save uploaded raw file to disk
+            ext = Path(filename).suffix.lstrip(".")
+            # Default process_files path: keep as kb so extraction sources are never
+            # auto-sent as WhatsApp brochures. Option B also uses stage_files(lane=kit)
+            # which always persists as kb via _persist_option_b_as_kb.
+            module = "kb"
+            upload_dir = os.path.join("backend", "uploaded_files", module)
+            os.makedirs(upload_dir, exist_ok=True)
             filepath = os.path.join(upload_dir, filename)
+            public_url = None
             try:
                 with open(filepath, "wb") as disk_file:
                     disk_file.write(content)
-                ext = Path(filename).suffix.lstrip(".")
+                if ext.lower() == "pdf":
+                    try:
+                        from services.media_host import host_via_public_base
+                    except ImportError:
+                        from backend.services.media_host import host_via_public_base
+                    public_url = host_via_public_base(
+                        content, filename, subdir=module
+                    )
                 save_admin_file(
                     filename,
                     ext,
-                    "kb",
+                    module,
                     len(content),
                     file_path=filepath,
+                    url=public_url or f"/uploaded_files/{module}/{filename}",
                     tenant_id=self.tenant_id,
                     actor=self.actor,
                 )

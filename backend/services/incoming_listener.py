@@ -30,6 +30,7 @@ from routing.whatsapp import (
     send_whatsapp_message,
     send_whatsapp_interactive,
     send_whatsapp_list_menu,
+    send_whatsapp_cta_url,
     normalize_reply_buttons,
 )
 
@@ -225,6 +226,7 @@ async def _send_reply(wa_id: str, messages: list, tenant_id: str = None) -> None
         {"type": "document", "media_url": "...", "filename": "..."}
         {"type": "buttons", "text": "...", "buttons": [...], "header_media": {...}}
         {"type": "list", "header": "...", "body": "...", "button_text": "...", "sections": [...]}
+        {"type": "cta_url", "text": "...", "cta_url": "...", "display_text": "...", "image_url": "..."}
     """
     for msg in messages:
         if msg.get("sent_live"):
@@ -256,6 +258,36 @@ async def _send_reply(wa_id: str, messages: list, tenant_id: str = None) -> None
                     logger.info(
                         f"Sent document reply to {wa_id}: name={msg.get('filename') or ''} url={url[:80]}"
                     )
+
+            elif msg_type == "cta_url":
+                # send2 interactive cta_url: image header + description + one URL button
+                image_url = _resolve_send_url(msg.get("image_url") or "") or None
+                cta_url = (msg.get("cta_url") or "").strip()
+                body = msg.get("text") or ""
+                display = msg.get("display_text") or "Learn More"
+                footer = msg.get("footer_text") or None
+                if cta_url:
+                    ok = send_whatsapp_cta_url(
+                        to=wa_id,
+                        body_text=body,
+                        cta_url=cta_url,
+                        display_text=display,
+                        image_url=image_url,
+                        footer_text=footer,
+                        tenant_id=tenant_id,
+                    )
+                    logger.info(
+                        "Sent cta_url reply to %s: ok=%s display=%r has_image=%s",
+                        wa_id, ok, display, bool(image_url),
+                    )
+                elif image_url:
+                    send_whatsapp_message(wa_id, image_url, msg_type="image")
+                    if body:
+                        send_whatsapp_message(wa_id, body)
+                    logger.info(f"Sent image+text fallback (no cta url) to {wa_id}")
+                elif body:
+                    send_whatsapp_message(wa_id, body)
+                    logger.info(f"Sent text fallback (cta_url missing) to {wa_id}")
 
             elif msg_type == "buttons":
                 text = msg.get("text", "")

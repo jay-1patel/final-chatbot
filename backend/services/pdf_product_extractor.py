@@ -282,25 +282,24 @@ Extract all products/offerings from the above text in JSON format:"""
 
 
 async def call_llm_json(system_prompt: str, user_prompt: str) -> List[Dict[str, Any]]:
-    """Call the LLM with JSON fallback and parse the products list."""
+    """Call local Ollama only and parse the products list (no Groq/Mistral)."""
     import httpx
     try:
         from routing import config
-        api_url = getattr(config, "GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions")
-        api_key = getattr(config, "GROQ_API_KEY", "")
-        model = getattr(config, "GROQ_MODEL", "openai/gpt-oss-20b")
+        ollama_base = getattr(config, "OLLAMA_BASE_URL", None) or os.environ.get(
+            "OLLAMA_BASE_URL", "http://localhost:11434"
+        )
+        api_url = getattr(config, "OLLAMA_API_URL", None) or (
+            ollama_base.rstrip("/") + "/api/chat"
+        )
+        model = getattr(config, "OLLAMA_MODEL", None) or "qwen3:8b"
     except Exception:
-        api_url = os.environ.get("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions")
-        api_key = os.environ.get("GROQ_API_KEY", "")
-        model = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
-
-    if not api_key:
-        logger.warning("No LLM API key found for PDF extraction.")
-        return []
+        api_url = os.environ.get("OLLAMA_API_URL", "http://localhost:11434/api/chat")
+        model = os.environ.get("OLLAMA_MODEL", "qwen3:8b")
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        "ngrok-skip-browser-warning": "true",
     }
     payload = {
         "model": model,
@@ -308,30 +307,30 @@ async def call_llm_json(system_prompt: str, user_prompt: str) -> List[Dict[str, 
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.1,
-        "max_tokens": 4096,
-        "response_format": {"type": "json_object"},
+        "format": "json",
+        "stream": False,
+        "think": False,
+        "options": {
+            "temperature": 0.1,
+            "num_ctx": 8192,
+            "num_predict": 4096,
+        },
     }
+    timeout = float(os.environ.get("OLLAMA_TIMEOUT", "300"))
 
     raw_text = ""
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(api_url, json=payload, headers=headers)
             resp.raise_for_status()
-            data = resp.json()
-            raw_text = data["choices"][0]["message"]["content"]
+            message = resp.json().get("message") or {}
+            raw_text = (
+                (message.get("content") or "").strip()
+                or (message.get("thinking") or "").strip()
+            )
     except Exception as e:
-        logger.warning(f"JSON mode request failed: {e}. Retrying without response_format...")
-        try:
-            payload.pop("response_format", None)
-            async with httpx.AsyncClient(timeout=45.0) as client:
-                resp = await client.post(api_url, json=payload, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
-                raw_text = data["choices"][0]["message"]["content"]
-        except Exception as retry_err:
-            logger.error(f"LLM extraction request failed completely: {retry_err}")
-            return []
+        logger.error(f"Ollama PDF extraction failed: {e}")
+        return []
 
     if not raw_text:
         return []

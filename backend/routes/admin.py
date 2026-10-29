@@ -883,51 +883,48 @@ async def run_upload(
     ext = Path(filename).suffix.lower()
     image_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
     if ext in image_exts or is_image:
-        # Upload image to imghippo
-        if not IMGHIPPO_API_KEY:
-            raise HTTPException(status_code=400, detail="Imghippo API key not configured")
-        import aiohttp
-        img_payload = aiohttp.FormData()
-        img_payload.add_field("file", content, filename=filename or "image")
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://api.imghippo.com/v1/upload",
-                data=img_payload,
-                headers={"X-API-Key": IMGHIPPO_API_KEY},
-            ) as resp:
-                img_data = await resp.json()
-                if not resp.ok or not img_data.get("success"):
-                    raise HTTPException(status_code=400, detail=img_data.get("message", "Imghippo upload failed"))
-                effective_url = img_data["data"]["url"]
-                effective_media_type = media_type or ext.lstrip(".")
-                save_admin_file(filename, ext.lstrip("."), module, len(content), url=effective_url, tenant_id=tenant_id, actor=current_admin)
-                return {
-                    "status": "ok",
-                    "filename": filename,
-                    "module": module,
-                    "chunks": 0,
-                    "size": len(content),
-                    "file_url": effective_url,
-                }
+        # Free hosts (img402/BasePic) + ImgHippo if it still has credits.
+        try:
+            from services.media_host import upload_public_image
+        except ImportError:
+            from backend.services.media_host import upload_public_image
+        effective_url = await run_in_threadpool(
+            upload_public_image, content, filename or "image.png", media_type or ""
+        )
+        if not effective_url:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Image upload failed. Free hosts (img402/BasePic) were unreachable "
+                    "and ImgHippo has no credits. Check network or PUBLIC_BASE_URL."
+                ),
+            )
+        effective_media_type = media_type or ext.lstrip(".")
+        save_admin_file(
+            filename,
+            ext.lstrip("."),
+            module,
+            len(content),
+            url=effective_url,
+            tenant_id=tenant_id,
+            actor=current_admin,
+        )
+        return {
+            "status": "ok",
+            "filename": filename,
+            "module": module,
+            "chunks": 0,
+            "size": len(content),
+            "file_url": effective_url,
+        }
 
     if ext not in SUPPORTED:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
-    # Auto-host uploaded PDFs on catbox.moe so the bot can send the document
-    # directly to WhatsApp from a permanent public URL (no dependency on the
-    # transient tunnel PUBLIC_BASE_URL). Text extraction still runs below and
-    # its chunks are stored in faq_dataset, with the catbox URL as the
-    # media_url for the answer. Catalogue PDF text is intentionally NOT
-    # imported into the products table — "catalogue" requests send the PDF.
-    catbox_url = None
-    if ext == ".pdf" and module in ("faq", "catalogue", "new_arrival", "kb") and not url:
-        try:
-            catbox_url = await _upload_to_catbox(filename, content, media_type or "application/pdf")
-            logger.info(f"CATBOX_UPLOAD | {filename} -> {catbox_url}")
-        except Exception as e:
-            logger.error(f"Catbox upload failed for {filename}: {e}")
-            catbox_url = None
-
+    # Store on disk first. For PDFs prefer PUBLIC_BASE_URL (Cloudflare tunnel)
+    # so Meta/WhatsApp can fetch the file. Catbox often uploads OK but Meta
+    # cannot retrieve files.catbox.moe. Catalogue PDF text is intentionally
+    # NOT imported into products — "catalogue" requests send the PDF.
     module_dir = os.path.join(UPLOAD_DIR, module)
     os.makedirs(module_dir, exist_ok=True)
     filepath = os.path.join(module_dir, filename)
@@ -935,7 +932,27 @@ async def run_upload(
         f.write(content)
     size = len(content)
 
-    effective_url = url or catbox_url or f"/uploaded_files/{module}/{filename}"
+    local_rel = f"/uploaded_files/{module}/{filename}"
+    tunnel_url = None
+    if ext == ".pdf" and module in ("faq", "catalogue", "new_arrival", "kb") and not url:
+        try:
+            from routing.config import PUBLIC_BASE_URL
+            base = (PUBLIC_BASE_URL or "").strip().rstrip("/")
+            if base:
+                tunnel_url = f"{base}{local_rel}"
+                logger.info(f"PDF_PUBLIC_BASE | {filename} -> {tunnel_url}")
+        except Exception as e:
+            logger.warning(f"PUBLIC_BASE_URL resolve failed for {filename}: {e}")
+            tunnel_url = None
+        if not tunnel_url:
+            try:
+                tunnel_url = await _upload_to_catbox(filename, content, media_type or "application/pdf")
+                logger.info(f"CATBOX_UPLOAD | {filename} -> {tunnel_url}")
+            except Exception as e:
+                logger.error(f"Catbox upload failed for {filename}: {e}")
+                tunnel_url = None
+
+    effective_url = url or tunnel_url or local_rel
     effective_media_type = media_type or ext.lstrip(".")
 
     save_admin_file(

@@ -228,47 +228,79 @@ class BrochureService:
     def __init__(self):
         self.brochure_cache = {}
     
+    def clear_cache(self, tenant_id: str = None) -> None:
+        """Drop cached brochure lists so a fresh upload is visible immediately."""
+        if tenant_id:
+            self.brochure_cache.pop(tenant_id, None)
+        else:
+            self.brochure_cache.clear()
+
     def get_all_brochures(self, tenant_id: str = None) -> List[Brochure]:
         """Get all brochures for a specific tenant or globally."""
         try:
             cache_key = tenant_id or "global"
-            if cache_key in self.brochure_cache:
+            if cache_key in self.brochure_cache and self.brochure_cache[cache_key]:
                 return self.brochure_cache[cache_key]
             
             brochures = []
+            seen_ids = set()
+
+            def _append_row(row) -> None:
+                rid = row["id"] if "id" in row.keys() else None
+                if rid is not None and rid in seen_ids:
+                    return
+                if rid is not None:
+                    seen_ids.add(rid)
+                raw_name = row["name"] or ""
+                raw_filename = ""
+                try:
+                    raw_filename = row["filename"] or ""
+                except Exception:
+                    raw_filename = ""
+                display = raw_name or raw_filename or "Brochure.pdf"
+                brochures.append(Brochure(
+                    file_id=row["id"],
+                    tenant_id=row["tenant_id"] or "",
+                    module=row["module"] or "general",
+                    name=raw_name or display,
+                    filename=display,
+                    url=row["url"] or "",
+                    file_path=row["file_path"] or "",
+                    ext=row["ext"] or "",
+                    size=row["size"] or 0,
+                    doc_id=row["doc_id"] or None,
+                    created_at=row["created_at"] or "",
+                ))
             
+            # Only dedicated brochure modules (Uploads → brochure /brochures/upload).
+            # Option A/B onboarding kit PDFs are stored as module=kb and must never
+            # be returned here — even if the filename contains "brochure".
+            brochure_modules = tuple(BROCHURE_MODULES) + ("brochure",)
             with self._get_db_context() as conn:
-                placeholders = ", ".join(["?"] * len(BROCHURE_MODULES))
+                placeholders = ", ".join(["?"] * len(brochure_modules))
                 
                 if tenant_id:
-                    sql = f"SELECT * FROM admin_files WHERE tenant_id = ? AND module IN ({placeholders}) ORDER BY created_at DESC"
-                    rows = conn.execute(sql, (tenant_id,) + tuple(BROCHURE_MODULES)).fetchall()
+                    sql = (
+                        f"SELECT * FROM admin_files WHERE tenant_id = ? "
+                        f"AND module IN ({placeholders}) ORDER BY created_at DESC"
+                    )
+                    rows = conn.execute(sql, (tenant_id,) + brochure_modules).fetchall()
                 else:
-                    sql = f"SELECT * FROM admin_files WHERE tenant_id IS NULL AND module IN ({placeholders}) ORDER BY created_at DESC"
-                    rows = conn.execute(sql, tuple(BROCHURE_MODULES)).fetchall()
+                    sql = (
+                        f"SELECT * FROM admin_files WHERE tenant_id IS NULL "
+                        f"AND module IN ({placeholders}) ORDER BY created_at DESC"
+                    )
+                    rows = conn.execute(sql, brochure_modules).fetchall()
                 
                 for row in rows:
-                    brochure = Brochure(
-                        file_id=row["id"],
-                        tenant_id=row["tenant_id"] or "",
-                        module=row["module"] or "general",
-                        name=row["name"] or "",
-                        filename=row["name"] or row["filename"] or "Brochure.pdf",
-                        url=row["url"] or "",
-                        file_path=row["file_path"] or "",
-                        ext=row["ext"] or "",
-                        size=row["size"] or 0,
-                        doc_id=row["doc_id"] or None,
-                        created_at=row["created_at"] or "",
-                    )
-                    brochures.append(brochure)
+                    _append_row(row)
             
-            # Check tenant profile for configured brochure_url if no database files found
+            # Profile-configured brochure URL (admin setting), still a real upload/link.
             if not brochures and tenant_id:
                 try:
                     from shared.tenancy.loader import get_tenant_profile
                     from shared.tenancy.resolver import resolve_tenant_for_user
-                    tid = resolve_tenant_for_user(tenant_id)
+                    tid = resolve_tenant_for_user(tenant_id) or tenant_id
                     profile = get_tenant_profile(tid)
                     url = (getattr(getattr(profile, "notifications", None), "brochure_url", "") or "").strip()
                     label = (getattr(getattr(profile, "notifications", None), "brochure_label", "") or "").strip() or "Brochure.pdf"
@@ -284,36 +316,8 @@ class BrochureService:
                 except Exception as exc:
                     logger.debug(f"profile brochure fallback failed: {exc}")
 
-            # Fallback: active product rows tagged as catalogue / brochure PDFs.
-            # Tenants that only stored the catalogue on a product media_url still
-            # need "send catalogue" to deliver the document.
-            if not brochures and tenant_id:
-                try:
-                    import database as db
-                    products = db.list_products(active_only=True, limit=50, tenant_id=tenant_id)
-                    for prod in products or []:
-                        media = str(prod.get("media_url") or "").strip()
-                        media_type = str(prod.get("media_type") or "").strip().lower()
-                        category = str(prod.get("category") or "").strip().lower()
-                        is_catalogish = category in {
-                            "catalogue", "catalog", "brochure", "brochures", "price list",
-                        } or media_type in {"pdf", "document"} or media.lower().endswith(".pdf")
-                        if not media or not is_catalogish:
-                            continue
-                        if not media.startswith(("http://", "https://", "/uploaded_files/", "/api/")):
-                            continue
-                        name = str(prod.get("name") or "Catalogue").strip() or "Catalogue"
-                        filename = name if name.lower().endswith(".pdf") else f"{name}.pdf"
-                        brochures.append(Brochure(
-                            file_id=int(prod.get("id") or 0),
-                            tenant_id=tenant_id,
-                            module="catalogue",
-                            name=name,
-                            filename=filename,
-                            url=media,
-                        ))
-                except Exception as exc:
-                    logger.debug("product catalogue fallback failed: %s", exc)
+            # Intentionally NO product-row fallback: Explore Offerings sends
+            # product image+text cards; brochure asks must only send uploaded PDFs.
 
             # Cache the result
             self.brochure_cache[cache_key] = brochures
@@ -399,12 +403,13 @@ class BrochureService:
                     ).fetchone()
                 
                 if row:
+                    display = row["name"] or f"{module}_brochure.pdf"
                     return Brochure(
                         file_id=row["id"],
                         tenant_id=row["tenant_id"] or "",
                         module=row["module"] or module,
-                        name=row["name"] or "",
-                        filename=row["name"] or row["filename"] or f"{module}_brochure.pdf",
+                        name=row["name"] or display,
+                        filename=display,
                         url=row["url"] or "",
                         file_path=row["file_path"] or "",
                         ext=row["ext"] or "",
@@ -445,13 +450,15 @@ class BrochureService:
         return relevant_brochures
     
     def _button_id_to_module(self, button_id: str) -> Optional[str]:
-        """Convert button ID to brochure module."""
+        """Convert brochure menu button IDs to modules.
+
+        Browse buttons (menu_products / menu_services / …) must NOT map here —
+        those open image+text offering cards, not the PDF.
+        """
         button_module_map = {
             "menu_brochure": "catalogue",
             "menu_catalogue": "catalogue",
             "menu_new_arrivals": "new_arrival",
-            "menu_products": "catalogue",
-            "menu_services": "service_brochure",
             "menu_company_profile": "company_profile",
             "menu_technical": "technical_brochure",
             "menu_pricing": "pricing",
@@ -607,6 +614,110 @@ def extract_file_metadata(file_path: str) -> Dict[str, str]:
 brochure_service = BrochureService()
 
 
+# Menu / interactive ids that mean "send the uploaded brochure PDF".
+_BROCHURE_MENU_IDS = frozenset({
+    "menu_brochure",
+    "menu_catalogue",
+    "menu_catalog",
+    "menu_pdf",
+    "menu_new_arrivals",
+    "menu_company_profile",
+})
+
+_BROCHURE_INTENTS = frozenset({
+    "brochure_request",
+    "catalogue_request",
+    "new_arrivals",
+})
+
+_BROCHURE_FEATURES = frozenset({
+    "brochure_pdf",
+    "catalogue_pdf",
+})
+
+
+def _normalize_ask(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _brochure_button_keys(tenant_id: str = None) -> set:
+    """Ids and titles of profile menu rows that should send the brochure PDF."""
+    keys: set = set(_BROCHURE_MENU_IDS)
+    if not tenant_id:
+        return keys
+    try:
+        from shared.tenancy.loader import get_tenant_profile
+        profile = get_tenant_profile(tenant_id)
+        buttons = getattr(getattr(profile, "menu", None), "buttons", None) or []
+    except Exception as exc:
+        logger.debug("brochure button keys unavailable for %s: %s", tenant_id, exc)
+        return keys
+    for button in buttons:
+        intent = (getattr(button, "intent", None) or "").strip()
+        feature = (getattr(button, "requires_feature", None) or "").strip()
+        bid = (getattr(button, "id", None) or "").strip()
+        title = (getattr(button, "title", None) or "").strip()
+        if (
+            bid in _BROCHURE_MENU_IDS
+            or intent in _BROCHURE_INTENTS
+            or feature in _BROCHURE_FEATURES
+        ):
+            if bid:
+                keys.add(bid)
+                keys.add(_normalize_ask(bid))
+            if title:
+                keys.add(title)
+                keys.add(_normalize_ask(title))
+    return keys
+
+
+def is_brochure_ask(text: str = None, button_id: str = None, tenant_id: str = None) -> bool:
+    """True when the user tapped/typed a request for the uploaded brochure/PDF.
+
+    Explore Offerings / product browse must NOT match — those send image cards.
+    """
+    raw_id = (button_id or "").strip()
+    raw_text = (text or "").strip()
+
+    # send2 often delivers the row id as plain text
+    if not raw_id and raw_text.startswith("menu_"):
+        raw_id = raw_text
+
+    keys = _brochure_button_keys(tenant_id)
+    if raw_id and (raw_id in keys or _normalize_ask(raw_id) in keys):
+        return True
+    if raw_text and (raw_text in keys or _normalize_ask(raw_text) in keys):
+        return True
+
+    try:
+        from routing.message import _wants_catalogue_pdf
+        if _wants_catalogue_pdf(raw_text):
+            return True
+    except Exception:
+        pass
+
+    # Narrow typed fallback (avoid stealing "products" / "offerings" browse).
+    needle = _normalize_ask(raw_text)
+    if not needle or len(needle) > 60:
+        return False
+    exact = {
+        "pdf", "brochure", "brochures", "catalogue", "catalog",
+        "brochure pdf", "catalogue pdf", "catalog pdf", "send brochure",
+        "share brochure", "send pdf", "project brochure", "price list",
+    }
+    if needle in exact:
+        return True
+    if any(tok in needle for tok in ("brochure", "catalogue pdf", "catalog pdf")) and not any(
+        bad in needle for bad in ("offering", "product", "package", "propert", "service")
+    ):
+        # "send me the brochure" / "need brochure" — but not "brochure of products explore"
+        if any(v in needle for v in ("send", "share", "give", "get", "need", "want", "download", "pdf")):
+            return True
+        if needle.count(" ") <= 2 and "brochure" in needle:
+            return True
+    return False
+
+
 # 🎯 Convenience Functions
 
 def get_relevant_brochure(query: str = None, tenant_id: str = None, 
@@ -639,6 +750,8 @@ def send_relevant_brochure(wa_id: str, query: str = None, tenant_id: str = None,
     Send the most relevant brochure to a WhatsApp contact.
     Returns True if brochure was sent successfully.
     """
+    # Always re-read after uploads; empty caches used to hide new PDFs.
+    brochure_service.clear_cache(tenant_id)
     brochure = get_relevant_brochure(query, tenant_id, button_id)
 
     # Last-resort fallback used by older catalogue helpers.

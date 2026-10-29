@@ -93,8 +93,25 @@ def _cfg():
     return config
 
 
+def _looks_like_keyboard_mash(message: str) -> bool:
+    """True for single-token gibberish like ``Hwbsii`` / ``Hcyfu``."""
+    raw = (message or "").strip()
+    if not raw or " " in raw:
+        return False
+    cleaned = re.sub(r"[^a-z]", "", raw.lower())
+    if len(cleaned) < 4 or len(cleaned) > 16:
+        return False
+    # Long consonant run is typical keyboard mash even when a vowel sneaks in.
+    if re.search(r"[bcdfghjklmnpqrstvwxyz]{4,}", cleaned):
+        return True
+    vowels = len(re.findall(r"[aeiou]", cleaned))
+    return (vowels / len(cleaned)) < 0.25
+
+
 def _is_meaningless(message: str) -> bool:
-    """True for keyboard-mash / no-query noise (jsdbkop, hyyyy, emoji-only...)."""
+    """True for keyboard-mash / no-query noise (jsdbkop, Hwbsii, emoji-only...)."""
+    if _looks_like_keyboard_mash(message):
+        return True
     try:
         from routing.classifier import is_meaningless_or_greeting
         return bool(is_meaningless_or_greeting(message))
@@ -109,6 +126,112 @@ def _is_greeting(message: str) -> bool:
         return bool(is_greeting(message))
     except Exception:
         return False
+
+
+async def _send_main_menu(
+    wa_id: str,
+    tenant_id: str | None = None,
+    body_prefix: str = "",
+) -> dict:
+    """Send the tenant main menu the same way a ``hi`` greeting does."""
+    from services.whatsapp_sender import send_button_message, send_list_menu
+    from . import menus, config as cfg
+
+    try:
+        try:
+            from services.offerings_flow import clear_offerings_context
+        except ImportError:
+            from backend.services.offerings_flow import clear_offerings_context
+        clear_offerings_context(wa_id)
+    except Exception:
+        pass
+
+    menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
+    if menu_data.get("type") == "buttons":
+        body = f"{body_prefix}{menu_data.get('text', 'Here are your options:')}".strip()
+        await send_button_message(
+            wa_id,
+            body=body or "Here are your options:",
+            buttons=menu_data.get("buttons", []),
+        )
+    else:
+        body = f"{body_prefix}{menu_data.get('body', 'What would you like to explore today?')}".strip()
+        await send_list_menu(
+            wa_id,
+            header=menu_data.get("header", ""),
+            body=body or "What would you like to explore today?",
+            button_text=menu_data.get("button_text", "Show Options"),
+            sections=menu_data.get("sections", []),
+        )
+    return {"status": "menu_sent", "new_state": cfg.B2C_MAIN_MENU_STATE}
+
+
+PROMPT_TYPE_HI_FOR_MENU = (
+    "I didn't catch that. Please type *hi* (or hello / hey) to open the menu."
+)
+
+
+async def _prompt_type_hi_for_menu(wa_id: str) -> dict:
+    """Guide the user to send a greeting so the main menu opens."""
+    from services.whatsapp_sender import send_text_message
+    from . import config as cfg
+
+    await send_text_message(wa_id, PROMPT_TYPE_HI_FOR_MENU)
+    return {"status": "prompt_greeting", "new_state": cfg.B2C_MAIN_MENU_STATE}
+
+
+def _wants_brochure_pdf(message: str, tenant_id: str | None = None) -> bool:
+    """True when the user is asking to receive an uploaded brochure/PDF."""
+    try:
+        try:
+            from services.brochure_service import is_brochure_ask
+        except ImportError:
+            from backend.services.brochure_service import is_brochure_ask
+        return is_brochure_ask(message, tenant_id=tenant_id)
+    except Exception:
+        lower = (message or "").lower()
+        keys = (
+            "brochure", "catalog", "catalogue", "pdf", "price list",
+            "send brochure", "share brochure", "brochure pdf",
+        )
+        return any(k in lower for k in keys)
+
+
+async def _maybe_send_brochure(
+    wa_id: str,
+    message: str,
+    cfg,
+    tenant_id: str | None = None,
+) -> dict | None:
+    """If the message asks for a brochure, send the tenant's uploaded PDF."""
+    if not _wants_brochure_pdf(message, tenant_id=tenant_id):
+        return None
+
+    from services.whatsapp_sender import send_text_message
+
+    try:
+        try:
+            from services.brochure_service import send_relevant_brochure
+        except ImportError:
+            from backend.services.brochure_service import send_relevant_brochure
+        pressed = message if (message or "").startswith("menu_") else None
+        sent = send_relevant_brochure(
+            wa_id, query=message, tenant_id=tenant_id, button_id=pressed,
+        )
+    except Exception as exc:
+        logger.warning("BROCHURE_SEND_FAILED | wa_id=%s | err=%s", wa_id, exc)
+        sent = False
+
+    if sent:
+        logger.info("BROCHURE_SENT_B2C | wa_id=%s | tenant=%s | q=%r", wa_id, tenant_id, (message or "")[:80])
+        return {"status": "brochure_sent", "new_state": cfg.B2C_MAIN_MENU_STATE}
+
+    await send_text_message(
+        wa_id,
+        "Sorry, I don't have a brochure PDF available right now. "
+        "Please type *hi* for the menu, or ask our team.",
+    )
+    return {"status": "brochure_missing", "new_state": cfg.B2C_MAIN_MENU_STATE}
 
 
 async def _llm_synthesize(raw: str, label: str, query: str, tenant_id: str | None = None) -> str:
@@ -167,10 +290,23 @@ async def handle_b2c_message(
     if tools.should_escalate(message):
         return await _escalate(wa_id, cfg)
 
+    # ── Brochure / catalogue PDF request (uploaded tenant PDFs) ───────────────
+    brochure_result = await _maybe_send_brochure(wa_id, message, cfg, tenant_id=tenant_id)
+    if brochure_result:
+        return brochure_result
+
     # ── Main menu / start ─────────────────────────────────────────────────────
     if state == cfg.B2C_MAIN_MENU_STATE or not state:
         clean_msg = _clean(message)
         if clean_msg in ("main menu", "menu", "start", "hi", "hello", "hey", "show options", "options") or message in ("Main Menu", "main_menu", "menu_main"):
+            try:
+                try:
+                    from services.offerings_flow import clear_offerings_context
+                except ImportError:
+                    from backend.services.offerings_flow import clear_offerings_context
+                clear_offerings_context(wa_id)
+            except Exception:
+                pass
             menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
             
             # Add welcome message for first-time users
@@ -220,6 +356,14 @@ async def handle_b2c_message(
             return {"status": "menu_sent", "new_state": cfg.B2C_MAIN_MENU_STATE}
         # Greeting-ish input (typos / letter-spam like "Helooyyy"): show the menu.
         if _is_greeting(message):
+            try:
+                try:
+                    from services.offerings_flow import clear_offerings_context
+                except ImportError:
+                    from backend.services.offerings_flow import clear_offerings_context
+                clear_offerings_context(wa_id)
+            except Exception:
+                pass
             menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
             if menu_data.get("type") == "buttons":
                 await send_button_message(
@@ -236,25 +380,10 @@ async def handle_b2c_message(
                     sections=menu_data.get("sections", []),
                 )
             return {"status": "menu_sent", "new_state": cfg.B2C_MAIN_MENU_STATE}
-        # Meaningless / keyboard-mash input: show the menu instead of
-        # throwing the noise at the RAG index (which returns unrelated answers).
+        # Meaningless / keyboard-mash (e.g. Hwbsii): ask them to type hi for menu.
         if _is_meaningless(message):
-            menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
-            if menu_data.get("type") == "buttons":
-                await send_button_message(
-                    wa_id,
-                    body="Here are your options:",
-                    buttons=menu_data.get("buttons", []),
-                )
-            else:
-                await send_list_menu(
-                    wa_id,
-                    header=menu_data.get("header", ""),
-                    body=menu_data.get("body", "What would you like to explore today?"),
-                    button_text=menu_data.get("button_text", "Show Options"),
-                    sections=menu_data.get("sections", []),
-                )
-            return {"status": "meaningless", "new_state": cfg.B2C_MAIN_MENU_STATE}
+            logger.info("MEANINGLESS_PROMPT_HI | wa_id=%s | q=%r", wa_id, (message or "")[:80])
+            return await _prompt_type_hi_for_menu(wa_id)
         # Not a menu button: fall back to the RAG pipeline for general questions.
         return await _handle_main_selection(wa_id, message, context, cfg, tenant_id=tenant_id)
 
@@ -427,7 +556,6 @@ async def handle_b2c_message(
             from backend.services.order_service import lookup_order_status
             status_text = lookup_order_status(wa_id, query_ref)
         except Exception as exc:
-            logger = __import__("logging").getLogger("b2c_workflows")
             logger.error("Order lookup failed for %s: %s", wa_id, exc)
             status_text = (
                 "Sorry, I couldn't look that order up right now. "
@@ -696,13 +824,16 @@ async def _fallback_to_rag(
     faq_media_url = None
     faq_media_type = None
     try:
-        from faq.service import handle_faq_query
+        from faq.service import handle_faq_query, UNKNOWN_ANSWER
         faq_res = await handle_faq_query({"message": message, "wa_id": wa_id, "tenant_id": tid})
         if faq_res and faq_res.get("answer") and faq_res.get("answer").strip():
-            answer = faq_res["answer"]
-            interactive = faq_res.get("interactive")
-            faq_media_url = faq_res.get("media_url")
-            faq_media_type = faq_res.get("media_type")
+            candidate = faq_res["answer"].strip()
+            # No-evidence replies must not look like real answers — show menu.
+            if UNKNOWN_ANSWER not in candidate:
+                answer = candidate
+                interactive = faq_res.get("interactive")
+                faq_media_url = faq_res.get("media_url")
+                faq_media_type = faq_res.get("media_type")
     except Exception as e:
         logger.warning(f"FAQ index lookup failed: {e}")
 
@@ -717,6 +848,9 @@ async def _fallback_to_rag(
             if hits:
                 with get_db_context() as conn:
                     for top in hits:
+                        score = float(top.get("score") or top.get("similarity") or 0.0)
+                        if score < MIN_KB_SIMILARITY:
+                            continue
                         row = conn.execute(
                             "SELECT chunks_json FROM knowledge_base WHERE id=?",
                             (top["doc_id"],),
@@ -768,10 +902,14 @@ async def _fallback_to_rag(
             )
         except Exception as e:
             logger.debug(f"Knowledge gap recording failed: {e}")
-        answer = (
-            "I'm not certain about that. Would you like to check our services, "
-            "book a callback, or talk to an agent?"
+        # Unrecognized / not applicable → tell them to type hi for the menu.
+        logger.info(
+            "UNKNOWN_QUERY_PROMPT_HI | wa_id=%s | tenant=%s | q=%r",
+            wa_id,
+            tid,
+            (message or "")[:80],
         )
+        return await _prompt_type_hi_for_menu(wa_id)
 
     # If no interactive buttons were returned, attach tenant-aware contextual follow-up buttons
     if not (interactive and interactive.get("buttons")):

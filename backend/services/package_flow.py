@@ -201,7 +201,10 @@ def package_name(pkg: dict) -> str:
 _PLACEHOLDER_MEDIA = {
     "",
     "add public https image url",
+    "addpublichttpsimageurl",
     "add image url",
+    "paste https image url",
+    "pastehttpsimageurl",
     "n/a",
     "na",
     "none",
@@ -211,7 +214,8 @@ _PLACEHOLDER_MEDIA = {
 
 def _usable_media_url(url: str) -> bool:
     raw = str(url or "").strip()
-    if not raw or raw.lower() in _PLACEHOLDER_MEDIA:
+    normalized = re.sub(r"\s+", "", raw.lower())
+    if not raw or raw.lower() in _PLACEHOLDER_MEDIA or normalized in _PLACEHOLDER_MEDIA:
         return False
     if raw.startswith(("http://", "https://", "/uploaded_files/", "/api/uploads/", "/media/")):
         return True
@@ -221,7 +225,9 @@ def _usable_media_url(url: str) -> bool:
 def package_media(pkg: dict) -> tuple[str, str]:
     """Return (media_url, media_type) for a package when a real file exists.
 
-    Prefers the product ``media_url``, then attrs brochure/image fields.
+    Prefers the product ``media_url`` / image fields. Brochure/PDF URLs from
+    attrs are intentionally omitted — those are only sent when the user asks
+    for a brochure (see brochure_service).
     ``media_type`` is ``image`` or ``document``.
     """
     attrs = package_attrs(pkg)
@@ -230,8 +236,6 @@ def package_media(pkg: dict) -> tuple[str, str]:
         (pkg.get("image_url"), "image"),
         (attrs.get("media_url"), attrs.get("media_type") or "image"),
         (attrs.get("image_url"), "image"),
-        (attrs.get("brochure_url"), "document"),
-        (attrs.get("pdf_url"), "document"),
     ]
     for url, mtype in candidates:
         if not _usable_media_url(url):
@@ -465,29 +469,50 @@ def _package_button_keys(tenant_id: str) -> set:
         logger.debug("could not read profile menu for %s: %s", tenant_id, e)
         return keys
     for button in profile.menu.buttons:
-        if button.intent == "package_details" or button.id == "menu_packages":
-            if button.id:
-                keys.add(button.id)
-            if button.title:
-                keys.add(button.title)
-                keys.add(_normalize(button.title))
+        bid = (getattr(button, "id", None) or "").strip()
+        intent = (getattr(button, "intent", None) or "").strip()
+        feature = (getattr(button, "requires_feature", None) or "").strip()
+        if intent in ("brochure_request", "catalogue_request", "new_arrivals"):
+            continue
+        if (
+            intent in (
+                "package_details", "offerings", "service_enquiry",
+                "property_listings", "destination_details",
+            )
+            or bid in (
+                "menu_packages", "browse_offerings", "menu_offerings",
+                "menu_tour_packages", "menu_products", "menu_properties",
+                "menu_services", "menu_destinations", "menu_banking_products",
+            )
+            or feature in ("offerings", "products", "services", "products_schemes")
+        ):
+            if bid:
+                keys.add(bid)
+            title = (getattr(button, "title", None) or "").strip()
+            if title:
+                keys.add(title)
+                keys.add(_normalize(title))
     return keys
 
 
 def is_package_list_request(tenant_id: str, text: str, pressed_id: str = "") -> bool:
     """True when the message is asking for the package catalogue."""
     raw = (text or "").strip()
-    if (pressed_id or "").strip() in ("menu_packages", "menu_tour_packages"):
+    if (pressed_id or "").strip() in (
+        "menu_packages", "menu_tour_packages", "browse_offerings", "menu_offerings",
+    ):
         return True
-    if raw in ("menu_packages", "menu_tour_packages"):
+    if raw in ("menu_packages", "menu_tour_packages", "browse_offerings", "menu_offerings"):
         return True
     needle = _normalize(raw)
     if not needle:
         return False
-    if needle in LIST_PHRASES:
+    if needle in LIST_PHRASES or needle in {
+        "explore offerings", "browse offerings", "what we offer", "offerings",
+    }:
         return True
     keys = _package_button_keys(tenant_id)
-    return needle in {_normalize(k) for k in keys if k}
+    return needle in {_normalize(k) for k in keys if k} or raw in keys
 
 
 def _has_book_verb(text: str) -> bool:
@@ -551,24 +576,13 @@ def _brand_name(tenant_id: str) -> str:
 async def send_package_list(wa_id: str, tenant_id: str = None) -> bool:
     """Send the package catalogue as a WhatsApp list menu.
 
-    When the tenant also has a brochure/catalogue PDF, send that first so the
-    user gets the document as well as the interactive package picker.
+    Brochure PDFs are NOT attached here — only when the user asks for a
+    brochure/PDF (uploaded file only).
     """
     packages = tour_packages(tenant_id)
     sections = package_sections(packages)
     if not sections:
         return False
-
-    # Best-effort: attach the tenant brochure/catalogue PDF when one exists.
-    try:
-        from backend.services.brochure_service import send_relevant_brochure
-        send_relevant_brochure(
-            wa_id,
-            query="tour packages brochure catalogue",
-            tenant_id=tenant_id,
-        )
-    except Exception as exc:
-        logger.debug("package list brochure attach skipped: %s", exc)
 
     header = f"{_brand_name(tenant_id)} — Tour Packages"[:60]
     body = ("Here are our tour packages. Tap one to see the full itinerary, "
@@ -580,23 +594,22 @@ async def send_package_list(wa_id: str, tenant_id: str = None) -> bool:
 
 
 async def send_package_details(wa_id: str, pkg: dict, tenant_id: str = None) -> bool:
-    """Send package media (image/PDF) when available, then the card + booking button."""
+    """Send package image when available, then the card + booking button.
+
+    Brochure/PDF files are not attached here — only when the user asks for a
+    brochure (uploaded file via brochure_service).
+    """
     remember_package(wa_id, pkg)
     sender = _sender()
     name = package_name(pkg)
 
     media_url, media_kind = package_media(pkg)
     media_ok = True
-    if media_url:
+    if media_url and media_kind == "image":
         try:
-            if media_kind == "document":
-                media_ok = await sender.send_document_message(
-                    wa_id, media_url, filename=f"{name or 'package'}.pdf",
-                )
-            else:
-                media_ok = await sender.send_image_message(
-                    wa_id, media_url, caption=name or "Tour package",
-                )
+            media_ok = await sender.send_image_message(
+                wa_id, media_url, caption=name or "Tour package",
+            )
             logger.info(
                 "PACKAGE_MEDIA_SENT | wa_id=%s | pkg=%s | kind=%s | ok=%s",
                 wa_id, name, media_kind, media_ok,

@@ -659,7 +659,7 @@ def save_intent_draft(
     merged = deep_merge(draft, {"intents": [override]})
     with get_db_context() as conn:
         tenancy_store.save_draft(tenant_id, merged, updated_by=by, conn=conn)
-        _backfill_domain(conn, tenant_id, (body.snapshot.get("brand") or {}).get("website") or "", only_if_empty=True)
+        # Intent drafts have no brand.snapshot — do not call _backfill_domain here.
         if principal.get("type") == "admin":
             record_admin_audit_event(
                 conn,
