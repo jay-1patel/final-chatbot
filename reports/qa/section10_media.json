@@ -1,0 +1,78 @@
+{
+  "resolve_matrix": [
+    {
+      "label": "already_public",
+      "input": "https://cdn.example.com/a.jpg",
+      "public_base": "SET",
+      "output": "https://cdn.example.com/a.jpg",
+      "ok": true
+    },
+    {
+      "label": "local_path",
+      "input": "/uploaded_files/kb/x.jpg",
+      "public_base": "SET",
+      "output": "https://projects-often-lined-boards.trycloudflare.com/uploaded_files/kb/x.jpg",
+      "ok": true
+    },
+    {
+      "label": "bare_relative",
+      "input": "uploaded_files/kb/x.jpg",
+      "public_base": "SET",
+      "output": null,
+      "ok": true
+    },
+    {
+      "label": "bare_filename",
+      "input": "x.jpg",
+      "public_base": "SET",
+      "output": null,
+      "ok": true
+    },
+    {
+      "label": "empty",
+      "input": "",
+      "public_base": "SET",
+      "output": null,
+      "ok": true
+    },
+    {
+      "label": "none",
+      "input": null,
+      "public_base": "SET",
+      "output": null,
+      "ok": true
+    },
+    {
+      "label": "already_public",
+      "input": "https://cdn.example.com/a.jpg",
+      "public_base": "EMPTY",
+      "output": "https://cdn.example.com/a.jpg",
+      "ok": true
+    },
+    {
+      "label": "local_path",
+      "input": "/uploaded_files/kb/x.jpg",
+      "public_base": "EMPTY",
+      "output": "https://projects-often-lined-boards.trycloudflare.com/uploaded_files/kb/x.jpg",
+      "ok": true
+    },
+    {
+      "label": "bare_relative",
+      "input": "uploaded_files/kb/x.jpg",
+      "public_base": "EMPTY",
+      "output": null,
+      "ok": true
+    },
+    {
+      "label": "bare_filename",
+      "input": "x.jpg",
+      "public_base": "EMPTY",
+      "output": null,
+      "ok": true
+    }
+  ],
+  "send_sticker_result": false,
+  "brochure": {
+    "capture_mode": "on"
+  }
+}

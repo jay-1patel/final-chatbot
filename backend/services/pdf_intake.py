@@ -1123,6 +1123,21 @@ class PdfIntakeService:
 
             menu_items = draft.get("menu_items") or []
             if menu_items:
+                # Same sanitizer the kit/bifurcation path uses: underscore ids,
+                # and titles/ids that already exist as vertical defaults reuse
+                # the default's id, so "Technologies" merges with
+                # menu_technologies instead of doubling the menu.
+                try:
+                    from services.bifurcation_extract import _sanitize_menu_buttons
+                except ImportError:  # pragma: no cover
+                    from backend.services.bifurcation_extract import _sanitize_menu_buttons  # type: ignore
+                try:
+                    menu_items = _sanitize_menu_buttons(
+                        menu_items, vertical=draft.get("vertical") or "generic"
+                    )
+                except Exception as exc:  # never lose the extract to a sanitizer bug
+                    logger.warning("MENU_SANITIZE_FAILED | tenant=%s | %s", self.tenant_id, exc)
+            if menu_items:
                 draft_payload["menu"] = {
                     "key": (draft_payload.get("menu") or {}).get("key", "kb_main"),
                     "header": brand.get("name") or self.tenant_id,

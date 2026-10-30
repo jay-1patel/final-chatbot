@@ -300,56 +300,62 @@
     "button_text": "Select Option",
     "buttons": [
       {
-        "id": "our-services",
+        "id": "menu_services",
         "title": "Our Services",
         "description": "AI, software, web, mobile & CPaaS",
         "section": "💻 Services",
-        "sort_order": 1,
+        "icon": "🛠️",
+        "sort_order": 0,
         "enabled": true,
         "intent": "offerings"
       },
       {
-        "id": "technologies",
+        "id": "menu_technologies",
         "title": "Technologies",
         "description": "React, Python, Flutter, cloud & AI",
         "section": "💻 Services",
-        "sort_order": 2,
+        "icon": "💻",
+        "sort_order": 1,
         "enabled": true,
         "intent": "technologies"
       },
       {
-        "id": "projects",
+        "id": "menu_projects",
         "title": "Projects",
         "description": "Clients, portfolio & industries served",
         "section": "🏢 Company",
-        "sort_order": 3,
+        "icon": "📁",
+        "sort_order": 2,
         "enabled": true,
         "intent": "projects"
       },
       {
-        "id": "get-a-quote",
+        "id": "menu_quote",
         "title": "Get a Quote",
         "description": "Share scope for a written estimate",
         "section": "📋 Sales",
-        "sort_order": 4,
+        "icon": "📝",
+        "sort_order": 3,
         "enabled": true,
         "flow": "get_quote"
       },
       {
-        "id": "careers",
+        "id": "menu_careers",
         "title": "Careers",
         "description": "Open roles & how to apply",
         "section": "🏢 Company",
-        "sort_order": 5,
+        "icon": "💼",
+        "sort_order": 4,
         "enabled": true,
         "intent": "careers"
       },
       {
-        "id": "benefits",
+        "id": "menu_benefits",
         "title": "Benefits",
         "description": "Why 1500+ clients choose Leeway",
         "section": "🏢 Company",
-        "sort_order": 6,
+        "icon": "🎁",
+        "sort_order": 5,
         "enabled": true,
         "intent": "benefits"
       }

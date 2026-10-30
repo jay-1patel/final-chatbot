@@ -484,6 +484,138 @@ class MenuButtonDedupeTests(unittest.TestCase):
         self.assertEqual(titles.count("Cards"), 1)
         self.assertEqual(titles.count("Loans"), 1)
 
+    def test_merge_layers_collapses_same_title_different_ids_onto_defaults(self):
+        """PDF slug ids like explore_properties must not double default titles."""
+        defaults = get_vertical_defaults("real_estate")
+        draft = {
+            "menu": {
+                "buttons": [
+                    {
+                        "id": "explore-properties",
+                        "title": "Explore Properties",
+                        "description": "Browse listings",
+                    },
+                    {
+                        "id": "schedule-site-visit",
+                        "title": "Schedule Site Visit",
+                        "description": "Book a visit",
+                    },
+                    {
+                        "id": "customer-support",
+                        "title": "Customer Support",
+                        "description": "Get help",
+                    },
+                ]
+            }
+        }
+        merged = merge_layers(defaults, draft)
+        titles = [b["title"] for b in merged["menu"]["buttons"]]
+        ids = [b["id"] for b in merged["menu"]["buttons"]]
+        self.assertEqual(titles.count("Explore Properties"), 1)
+        self.assertEqual(titles.count("Schedule Site Visit"), 1)
+        self.assertEqual(titles.count("Customer Support"), 1)
+        self.assertIn("menu_properties", ids)
+        self.assertIn("menu_site_visit", ids)
+        self.assertNotIn("explore_properties", ids)
+        self.assertNotIn("explore-properties", ids)
+
+    def test_it_kit_slugs_do_not_duplicate_services_and_technologies(self):
+        """Leeway IT kit used our_services/technologies alongside menu_* defaults."""
+        from shared.tenancy.schemas import MenuSpec, TenantProfile
+
+        defaults = get_vertical_defaults("it_software")
+        draft = {
+            "menu": {
+                "buttons": [
+                    {
+                        "id": "our_services",
+                        "title": "Our Services",
+                        "description": "AI, software, web, mobile & CPaaS",
+                        "section": "Services",
+                        "intent": "offerings",
+                    },
+                    {
+                        "id": "technologies",
+                        "title": "Technologies",
+                        "description": "React, Python, Flutter, cloud & AI",
+                        "section": "Services",
+                        "intent": "technologies",
+                    },
+                    {
+                        "id": "projects",
+                        "title": "Projects",
+                        "description": "Clients, portfolio & industries served",
+                        "section": "Company",
+                        "intent": "projects",
+                    },
+                ]
+            }
+        }
+        merged = merge_layers(defaults, draft)
+        titles = [b["title"] for b in merged["menu"]["buttons"]]
+        ids = [b["id"] for b in merged["menu"]["buttons"]]
+        self.assertEqual(titles.count("Our Services"), 1)
+        self.assertEqual(titles.count("Technologies"), 1)
+        self.assertIn("menu_services", ids)
+        self.assertIn("menu_technologies", ids)
+        self.assertNotIn("our_services", ids)
+        self.assertNotIn("technologies", ids)
+
+        # Toxic published snapshot that already contains both id forms.
+        toxic = {
+            "vertical": "it_software",
+            "menu": {
+                "buttons": [
+                    {
+                        "id": "menu_services",
+                        "title": "Our Services",
+                        "section": "🛠️ Services",
+                        "icon": "🛠️",
+                        "intent": "offerings",
+                    },
+                    {
+                        "id": "menu_technologies",
+                        "title": "Technologies",
+                        "section": "🛠️ Services",
+                        "icon": "💻",
+                        "intent": "technologies",
+                    },
+                    {
+                        "id": "our_services",
+                        "title": "Our Services",
+                        "section": "Services",
+                        "intent": "offerings",
+                    },
+                    {
+                        "id": "technologies",
+                        "title": "Technologies",
+                        "section": "Services",
+                        "intent": "technologies",
+                    },
+                ]
+            },
+        }
+        profile = TenantProfile(tenant_id="leewaysoftech", **merge_layers(defaults, toxic))
+        profile_titles = [b.title for b in profile.menu.buttons]
+        profile_ids = [b.id for b in profile.menu.buttons]
+        self.assertEqual(profile_titles.count("Our Services"), 1)
+        self.assertEqual(profile_titles.count("Technologies"), 1)
+        self.assertIn("menu_services", profile_ids)
+        self.assertIn("menu_technologies", profile_ids)
+        self.assertNotIn("our_services", profile_ids)
+        self.assertNotIn("technologies", profile_ids)
+
+        # MenuSpec alone must collapse even without merge_layers.
+        solo = MenuSpec(
+            buttons=[
+                {"id": "menu_services", "title": "Our Services", "intent": "offerings"},
+                {"id": "our_services", "title": "Our Services", "intent": "offerings"},
+                {"id": "technologies", "title": "Technologies", "intent": "technologies"},
+                {"id": "menu_technologies", "title": "Technologies", "intent": "technologies"},
+            ]
+        )
+        self.assertEqual([b.id for b in solo.buttons], ["menu_services", "menu_technologies"])
+
 
 if __name__ == "__main__":
     unittest.main()

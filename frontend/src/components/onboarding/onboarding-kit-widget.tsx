@@ -24,6 +24,8 @@ interface OnboardingKitWidgetProps {
   onStagedDraft?: (draft: StagedOnboardingDraft) => void
   onPublished?: (summary: any) => void
   compact?: boolean
+  /** Hide the "Option A — Any document" lane; kit upload only. */
+  kitOnly?: boolean
 }
 
 type UploadLane = 'any' | 'kit'
@@ -32,6 +34,7 @@ export function OnboardingKitWidget({
   tenantId,
   onStagedDraft,
   onPublished,
+  kitOnly,
 }: OnboardingKitWidgetProps) {
   const toast = useToast()
   const anyFileRef = useRef<HTMLInputElement>(null)
@@ -139,6 +142,7 @@ export function OnboardingKitWidget({
     <>
       <div className="space-y-4">
         {/* Option A — any document */}
+        {!kitOnly && (
         <Card className="border-sky-500/30 bg-sky-500/[0.02]">
           <CardBody className="p-4 sm:p-5">
             <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
@@ -192,6 +196,7 @@ export function OnboardingKitWidget({
             </div>
           </CardBody>
         </Card>
+        )}
 
         {/* Option B — filled industry kit */}
         <Card className="border-teal-500/30 bg-teal-500/[0.02]">

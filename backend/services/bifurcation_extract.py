@@ -178,6 +178,8 @@ def _sanitize_menu_buttons(
             button_dict["intent"] = "offerings" if action != "services" else "services"
         elif action in ("technologies", "projects", "careers", "benefits"):
             button_dict["intent"] = action
+        elif action in ("brochure", "brochure_request", "brochure_pdf"):
+            button_dict["intent"] = "brochure_request"
         elif action in ("quote", "get_quote", "pricing"):
             button_dict["flow"] = "get_quote"
         elif action in ("book_callback", "callback", "enquire", "inquire", "appointment"):

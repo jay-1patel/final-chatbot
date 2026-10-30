@@ -90,11 +90,12 @@ def resolve_effective_tenant_id(
       2. An explicit hint (webhook phone binding, simulator, caller)
       3. ``user_states.tenant_id`` for this ``wa_id``
 
-    Step 1 always wins so enabling Leeway in the console cannot leak SBI/L&T
-    menus from phone binding or stale per-user stamps. Live webhooks disable
-    the test override and must use the active tenant bound to their phone id.
-    Missing or inactive tenants return None; inbound traffic must never default
-    to another tenant.
+    Step 1 always wins so enabling a tenant in the console routes the single
+    WhatsApp number to that bot (and cannot leak another tenant's menu from
+    phone binding or a stale per-user stamp). Pass ``allow_test_override=False``
+    only when you intentionally ignore the console override. Missing or
+    inactive tenants return None; inbound traffic must never default to
+    another tenant.
     """
     override = _active_test_override() if allow_test_override else None
     if override:
@@ -114,7 +115,23 @@ def resolve_effective_tenant_id(
 
 
 def resolve_tenant_from_payload(payload: Dict[str, Any]) -> Optional[str]:
-    """Resolve an inbound WABA message only to its active phone-bound tenant."""
+    """Resolve an inbound WABA message to the tenant that should answer it.
+
+    When Active Test Tenant is set in the admin console (single-number WhatsApp
+    testing), that selection always wins — so switching tenants in the UI
+    immediately changes which bot answers, even if SEND2 / Meta phone ids are
+    still bound to another tenant. With no override, route by phone binding.
+    """
+    override = _active_test_override()
+    if override:
+        active_override = _registered_active_tenant(override)
+        if active_override:
+            logger.info(
+                "ACTIVE_TEST_TENANT | routing inbound webhook to %s",
+                active_override,
+            )
+            return active_override
+
     for phone_id in _extract_phone_ids(payload or {}):
         active_tenant = resolve_tenant_for_phone(
             phone_id,
@@ -130,19 +147,6 @@ def resolve_tenant_from_payload(payload: Dict[str, Any]) -> Optional[str]:
         if active_tenant:
             return active_tenant
 
-    # No phone binding resolved: in single-number testing mode an activated
-    # test tenant still owns the conversation, so messages are not dropped (and
-    # chat history keeps being recorded). A real phone binding always wins
-    # above, so production routing is unaffected.
-    override = _active_test_override()
-    if override:
-        active_override = _registered_active_tenant(override)
-        if active_override:
-            logger.info(
-                "ACTIVE_TEST_TENANT | no phone binding; routing inbound to %s",
-                active_override,
-            )
-            return active_override
     if _extract_phone_ids(payload or {}):
         logger.warning(
             "Unbound or inactive WABA phone id(s) %s — ignoring inbound message",

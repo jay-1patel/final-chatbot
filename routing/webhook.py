@@ -316,12 +316,11 @@ def _is_duplicate(msg_id: str, wa_id: str) -> bool:
 
 async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, msg_id, tenant_id=None):
     start_time = time.time()
-    # A live WABA phone binding is authoritative; never let a global test
-    # tenant override route real customer messages to another tenant.
+    # Active Test Tenant from the admin console wins for single-number testing.
     try:
         from shared.tenancy.resolver import resolve_effective_tenant_id
         tenant_id = resolve_effective_tenant_id(
-            wa_id, tenant_id, allow_test_override=(tenant_id is None)
+            wa_id, tenant_id, allow_test_override=True
         )
     except Exception as exc:
         logger.error("Could not resolve active tenant for %s; dropping message: %s", wa_id, exc)

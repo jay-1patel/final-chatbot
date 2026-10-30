@@ -1,0 +1,101 @@
+[
+  {
+    "input": "0",
+    "expect": false,
+    "result": {
+      "valid": false,
+      "error": "Minimum order quantity is 1."
+    },
+    "pass": true
+  },
+  {
+    "input": "-1",
+    "expect": false,
+    "result": {
+      "valid": false,
+      "error": "Minimum order quantity is 1."
+    },
+    "pass": true
+  },
+  {
+    "input": "1",
+    "expect": true,
+    "result": {
+      "valid": true,
+      "normalized": 1
+    },
+    "pass": true
+  },
+  {
+    "input": "99",
+    "expect": true,
+    "result": {
+      "valid": true,
+      "normalized": 99
+    },
+    "pass": true
+  },
+  {
+    "input": "100",
+    "expect": false,
+    "result": {
+      "valid": false,
+      "error": "Maximum quantity is 99."
+    },
+    "pass": true
+  },
+  {
+    "input": "2",
+    "expect": false,
+    "result": {
+      "valid": false,
+      "error": "Minimum order quantity is 5."
+    },
+    "pass": true
+  },
+  {
+    "input": "10",
+    "expect": false,
+    "result": {
+      "valid": false,
+      "error": "Only 5 units available."
+    },
+    "pass": true
+  },
+  {
+    "input": "2.5",
+    "expect": false,
+    "result": {
+      "valid": false,
+      "error": "Please enter a valid number."
+    },
+    "pass": true
+  },
+  {
+    "input": "two",
+    "expect": false,
+    "result": {
+      "valid": false,
+      "error": "Please enter a valid number."
+    },
+    "pass": true
+  },
+  {
+    "input": "007",
+    "expect": true,
+    "result": {
+      "valid": true,
+      "normalized": 7
+    },
+    "pass": true
+  },
+  {
+    "input": "999999999",
+    "expect": false,
+    "result": {
+      "valid": false,
+      "error": "Maximum quantity is 99."
+    },
+    "pass": true
+  }
+]

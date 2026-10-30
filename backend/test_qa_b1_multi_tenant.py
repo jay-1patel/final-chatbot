@@ -1,7 +1,7 @@
 """Integration-style tests for multi-tenant routing (B1).
 
 Focuses on code-paths we can validate without heavy mocking:
-  - orchestrator.py sets allow_test_override based on explicit tenant_id
+  - orchestrator always honors Active Test Tenant from the admin console
   - products.py delegates to central resolver chain
   - the conditional expressions used across modules
 """
@@ -9,34 +9,24 @@ Focuses on code-paths we can validate without heavy mocking:
 import pytest
 
 
-class TestOrchestratorSetCorrectAllowOverride:
-    """Verify the exact expression orchestrator uses."""
+class TestOrchestratorHonorsActiveTestTenant:
+    """Console Active Test Tenant must win over a poller phone-bound hint."""
 
-    def test_uses_not_bool_tenant_id(self):
-        # Read source file to confirm the line hasn't drifted
+    def test_allow_test_override_always_true(self):
         source = open(
             "backend/services/orchestrator.py", encoding="utf-8"
         ).read()
-        assert "allow_test_override=not bool(tenant_id)" in source
-
-    def test_logic_for_each_caller_scenario(self):
-        scenarios = [
-            ("caller_passes_prestigue", "prestigue", False),
-            ("caller_passes_none", None, True),
-            ("caller_passes_empty", "", True),
-        ]
-        for desc, tid, expected_allow in scenarios:
-            result = not bool(tid)
-            assert result is expected_allow, f"{desc}: not bool({tid!r}) → {result}, expect {expected_allow}"
+        assert "allow_test_override=True" in source
+        assert "allow_test_override=not bool(tenant_id)" not in source
 
 
 class TestWebhookSetCorrectAllowOverride:
     """Verify routing/webhook uses correct conditional."""
 
-    def test_uses_tenant_is_none_conditional(self):
+    def test_allows_active_test_override(self):
         source = open("routing/webhook.py", encoding="utf-8").read()
-        # Must NOT be hardcoded False anymore
-        assert 'allow_test_override=(tenant_id is None)' in source
+        assert "allow_test_override=True" in source
+        assert "allow_test_override=(tenant_id is None)" not in source
 
 
 class TestProductsDelegatesToResolver:

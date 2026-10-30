@@ -10,7 +10,6 @@ import {
   Sparkles,
   CheckCircle2,
   Package,
-  Layers,
   ArrowRight,
   Bot,
   Compass,
@@ -305,16 +304,6 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
                 Re-process library
               </Button>
             )}
-            {canUpload && (
-              <Button
-                variant="primary"
-                icon={<Upload className="h-4 w-4" />}
-                onClick={pickUpload}
-                loading={uploading || bifurcating}
-              >
-                Upload documents
-              </Button>
-            )}
           </div>
         }
       />
@@ -327,74 +316,6 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
         className="hidden"
         onChange={(e) => void onUploadFiles(e.target.files)}
       />
-
-      <Card className="mb-6 border-accent-500/30 bg-accent-950/20">
-        <CardHeader
-          title="Option 1 — Any document (freeform)"
-          icon={<Sparkles className="h-4 w-4 text-accent-400" />}
-          actions={
-            canUpload ? (
-              <Button
-                variant="primary"
-                size="sm"
-                icon={<Upload className="h-4 w-4" />}
-                loading={uploading || bifurcating}
-                onClick={pickUpload}
-              >
-                Upload PDF, Word & more
-              </Button>
-            ) : undefined
-          }
-        />
-        <CardBody className="space-y-3">
-          <p className="text-xs text-slate-300">
-            Upload any company PDF/Word (brochure, FAQ sheet, product list). The backend LLM extracts products,
-            FAQs and knowledge and publishes them live. For a guided fill-in template, use Option 2 below.
-          </p>
-
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-lg border border-surface-line bg-surface-panel/80 p-3">
-              <div className="flex items-center gap-2 font-medium text-xs text-slate-200">
-                <Bot className="h-4 w-4 text-emerald-400" />
-                <span>1. Brand & Persona</span>
-              </div>
-              <p className="mt-1 text-2xs text-slate-400">
-                Name, Bot identity, Tagline, Support Phone/Email & Operating Hours configured in Profile.
-              </p>
-            </div>
-
-            <div className="rounded-lg border border-surface-line bg-surface-panel/80 p-3">
-              <div className="flex items-center gap-2 font-medium text-xs text-slate-200">
-                <Compass className="h-4 w-4 text-sky-400" />
-                <span>2. WhatsApp Menu</span>
-              </div>
-              <p className="mt-1 text-2xs text-slate-400">
-                3 to 6 interactive buttons & list drawer items formatted under Meta WhatsApp API length limits.
-              </p>
-            </div>
-
-            <div className="rounded-lg border border-surface-line bg-surface-panel/80 p-3">
-              <div className="flex items-center gap-2 font-medium text-xs text-slate-200">
-                <Package className="h-4 w-4 text-amber-400" />
-                <span>3. Catalog Offerings</span>
-              </div>
-              <p className="mt-1 text-2xs text-slate-400">
-                Products, packages, properties, and services extracted and populated into the database.
-              </p>
-            </div>
-
-            <div className="rounded-lg border border-surface-line bg-surface-panel/80 p-3">
-              <div className="flex items-center gap-2 font-medium text-xs text-slate-200">
-                <Layers className="h-4 w-4 text-violet-400" />
-                <span>4. Vector RAG Search</span>
-              </div>
-              <p className="mt-1 text-2xs text-slate-400">
-                Markdown knowledge articles, text chunks, and FAISS vector embeddings indexed immediately.
-              </p>
-            </div>
-          </div>
-        </CardBody>
-      </Card>
 
       {/* Auto-Bifurcation Result Banner */}
       {bifurcationResult && (
@@ -490,7 +411,7 @@ export function UploadsPanel({ tenantId }: { tenantId: string }) {
 
       {/* Predefined Onboarding Kits & AI Bifurcation */}
       <div className="mb-6">
-        <OnboardingKitWidget tenantId={tenantId} onPublished={() => state.reload()} />
+        <OnboardingKitWidget tenantId={tenantId} kitOnly onPublished={() => state.reload()} />
       </div>
 
       {/* Traditional Upload & Existing Files Section */}

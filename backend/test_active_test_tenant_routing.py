@@ -34,6 +34,32 @@ class ActiveTestTenantRoutingTests(unittest.TestCase):
             )
         self.assertEqual(tid, "leeway-softech")
 
+    def test_orchestrator_style_hint_still_loses_to_active_test(self):
+        """Poller may pass a phone-bound tenant_id; console override must win."""
+        def fake_get_tenant(tid):
+            mapping = {
+                "state-bank-of-india": {
+                    "id": "state-bank-of-india",
+                    "slug": "state-bank-of-india",
+                    "status": "active",
+                },
+                "leewaytest": {
+                    "id": "leewaytest", "slug": "leewaytest", "status": "active",
+                },
+            }
+            return mapping.get(tid)
+
+        with (
+            patch("shared.tenancy.resolver._active_test_override", return_value="state-bank-of-india"),
+            patch("shared.tenancy.store.get_tenant", side_effect=fake_get_tenant),
+        ):
+            tid = resolve_effective_tenant_id(
+                "919512777899",
+                tenant_id="leewaytest",
+                allow_test_override=True,
+            )
+        self.assertEqual(tid, "state-bank-of-india")
+
     def test_hint_used_when_no_active_test(self):
         with (
             patch("shared.tenancy.resolver._active_test_override", return_value=None),
@@ -58,14 +84,42 @@ class ActiveTestTenantRoutingTests(unittest.TestCase):
 
         self.assertIsNone(tid)
 
-    def test_webhook_phone_binding_beats_active_test_tenant(self):
+    def test_active_test_tenant_beats_webhook_phone_binding(self):
+        """Frontend Active Test Tenant must win so single-number testing works."""
+        payload = {
+            "entry": [{"id": "tours-waba", "changes": [{"value": {
+                "metadata": {"phone_number_id": "tours-phone"},
+            }}]}],
+        }
+
+        def fake_get_tenant(tid):
+            mapping = {
+                "leeway-softech": {
+                    "id": "leeway-softech", "slug": "leeway-softech", "status": "active",
+                },
+                "tours-travel": {
+                    "id": "tours-travel", "slug": "tours-travel", "status": "active",
+                },
+            }
+            return mapping.get(tid)
+
+        with (
+            patch("shared.tenancy.resolver._active_test_override", return_value="leeway-softech"),
+            patch("shared.tenancy.store.find_tenant_by_phone_id", return_value="tours-travel"),
+            patch("shared.tenancy.store.get_tenant", side_effect=fake_get_tenant),
+        ):
+            tid = resolve_tenant_from_payload(payload)
+
+        self.assertEqual(tid, "leeway-softech")
+
+    def test_phone_binding_used_when_no_active_test_tenant(self):
         payload = {
             "entry": [{"id": "tours-waba", "changes": [{"value": {
                 "metadata": {"phone_number_id": "tours-phone"},
             }}]}],
         }
         with (
-            patch("shared.tenancy.resolver._active_test_override", return_value="leeway-softech"),
+            patch("shared.tenancy.resolver._active_test_override", return_value=None),
             patch("shared.tenancy.store.find_tenant_by_phone_id", return_value="tours-travel"),
             patch("shared.tenancy.store.get_tenant", return_value={
                 "id": "tours-travel", "slug": "tours-travel", "status": "active",
@@ -74,6 +128,30 @@ class ActiveTestTenantRoutingTests(unittest.TestCase):
             tid = resolve_tenant_from_payload(payload)
 
         self.assertEqual(tid, "tours-travel")
+
+    def test_phone_lookup_prefers_active_test_when_override_allowed(self):
+        def fake_get_tenant(tid):
+            mapping = {
+                "state-bank-of-india": {
+                    "id": "state-bank-of-india",
+                    "slug": "state-bank-of-india",
+                    "status": "active",
+                },
+                "leewaytest": {
+                    "id": "leewaytest", "slug": "leewaytest", "status": "active",
+                },
+            }
+            return mapping.get(tid)
+
+        with (
+            patch("shared.tenancy.resolver._active_test_override", return_value="state-bank-of-india"),
+            patch("shared.tenancy.store.normalize_waba_phone_id", return_value="919999999999"),
+            patch("shared.tenancy.store.find_tenant_by_phone_id", return_value="leewaytest"),
+            patch("shared.tenancy.store.get_tenant", side_effect=fake_get_tenant),
+        ):
+            tid = resolve_tenant_for_phone("919999999999", allow_test_override=True)
+
+        self.assertEqual(tid, "state-bank-of-india")
 
     def test_unstamped_whatsapp_user_has_no_implicit_default(self):
         with (

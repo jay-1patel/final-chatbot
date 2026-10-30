@@ -50,7 +50,7 @@ def deep_merge(base: Any, override: Any, path: tuple = ()) -> Any:
         return out
     if isinstance(base, list) and isinstance(override, list):
         key_field = KEYED_PATHS.get(path)
-        if key_field and _is_named(base, key_field) and _is_named(override, key_field):
+        if key_field and _is_named(base, key_field, path) and _is_named(override, key_field, path):
             return _merge_named(base, override, key_field, path)
         # Lists replace wholesale.
         return _copy(override, path, draft=False)
@@ -59,10 +59,23 @@ def deep_merge(base: Any, override: Any, path: tuple = ()) -> Any:
     return _copy(override, path, draft=False)
 
 
-def _is_named(items: List[Any], key_field: str) -> bool:
+def _is_named(items: List[Any], key_field: str, path: tuple = ()) -> bool:
     if not items:
         return True
-    return all(isinstance(i, Mapping) and key_field in i for i in items)
+    # Menu buttons may arrive without an id (older LLM bifurcator writes). They
+    # still carry a title, so treat them as keyed — _canonicalize_keyed_item
+    # synthesizes the id — instead of letting the list replace defaults
+    # wholesale (which both duplicated and then invalidated the whole profile).
+    menu_titles = path == ("menu", "buttons")
+    for i in items:
+        if not isinstance(i, Mapping):
+            return False
+        if key_field in i:
+            continue
+        if menu_titles and str(i.get("title") or "").strip():
+            continue
+        return False
+    return True
 
 
 def _normalize_keyed_name(name: str, path: tuple, key_field: str) -> str:
@@ -79,50 +92,95 @@ def _normalize_keyed_name(name: str, path: tuple, key_field: str) -> str:
 
 
 def _canonicalize_keyed_item(item: Mapping, path: tuple, key_field: str) -> Dict[str, Any]:
-    """Rewrite menu button ids to underscore form so hyphen clones cannot stick."""
+    """Rewrite menu button ids to underscore form so hyphen clones cannot stick.
+
+    A button with no id at all gets one synthesized from its title, so it can
+    still merge/dedupe by key instead of breaking the keyed merge entirely.
+    """
     out = dict(item)
     if path == ("menu", "buttons") and key_field == "id":
         raw = str(out.get("id") or "").strip()
+        if not raw:
+            raw = str(out.get("title") or "").strip()
         canon = re.sub(r"[-_\s]+", "_", raw.lower()).strip("_")
+        if not canon:
+            canon = re.sub(r"[^a-z0-9]+", "_", raw.lower()).strip("_")
         if canon:
             out["id"] = canon
     return out
+
+
+def _menu_title_key(item: Mapping) -> str:
+    """Normalized menu title used to collapse PDF clones of vertical defaults."""
+    return re.sub(
+        r"[-_\s]+",
+        "_",
+        str(item.get("title") or "").strip().casefold(),
+    ).strip("_")
 
 
 def _merge_named(base: List[Any], override: List[Any], key_field: str, path: tuple) -> List[Any]:
     """Per-item override by name. Base order is preserved, new items appended."""
     merged: List[Any] = []
     index: Dict[str, int] = {}
+    title_index: Dict[str, int] = {}
+    match_titles = path == ("menu", "buttons") and key_field == "id"
+
+    def _remember(name: str, title_key: str, pos: int) -> None:
+        index[name] = pos
+        if match_titles and title_key:
+            title_index[title_key] = pos
+
+    def _lookup(name: str, title_key: str) -> int | None:
+        if name in index:
+            return index[name]
+        if match_titles and title_key and title_key in title_index:
+            return title_index[title_key]
+        return None
 
     for item in base:
         if item.get(REMOVE_KEY):
             continue
         cleaned = _canonicalize_keyed_item(_strip_remove(item), path, key_field)
         name = _normalize_keyed_name(str(cleaned.get(key_field, "")), path, key_field)
-        if name in index:
-            # Same layer listed both menu_products and menu-products — keep first.
+        title_key = _menu_title_key(cleaned) if match_titles else ""
+        if _lookup(name, title_key) is not None:
+            # Same layer listed menu_products and menu-products / same title twice.
             continue
-        index[name] = len(merged)
+        _remember(name, title_key, len(merged))
         merged.append(cleaned)
 
     for item in override:
-        name = _normalize_keyed_name(str(item.get(key_field, "")), path, key_field)
+        title_key = _menu_title_key(item) if match_titles else ""
         if item.get(REMOVE_KEY):
-            if name in index:
-                merged[index[name]] = None  # tombstone
+            name = _normalize_keyed_name(str(item.get(key_field, "")), path, key_field)
+            pos = _lookup(name, title_key)
+            if pos is not None:
+                merged[pos] = None  # tombstone
             continue
         cleaned = _canonicalize_keyed_item(_strip_remove(item), path, key_field)
-        if name in index:
-            current = merged[index[name]]
+        # Name from the canonicalized item: an id-less button gets its
+        # synthesized id here, so two such buttons never collide on "".
+        name = _normalize_keyed_name(str(cleaned.get(key_field, "")), path, key_field)
+        title_key = _menu_title_key(cleaned) if match_titles else title_key
+        pos = _lookup(name, title_key)
+        if pos is not None:
+            current = merged[pos]
             if current:
                 combined = deep_merge(current, cleaned, path)
-                # Keep the canonical (underscore) id from the surviving slot.
+                # Keep the surviving slot's id (defaults win over PDF slug clones).
                 combined[key_field] = current.get(key_field) or cleaned.get(key_field)
-                merged[index[name]] = combined
+                merged[pos] = combined
+                _remember(
+                    _normalize_keyed_name(str(combined.get(key_field, "")), path, key_field),
+                    _menu_title_key(combined) if match_titles else "",
+                    pos,
+                )
             else:
-                merged[index[name]] = cleaned
+                merged[pos] = cleaned
+                _remember(name, title_key, pos)
         else:
-            index[name] = len(merged)
+            _remember(name, title_key, len(merged))
             merged.append(cleaned)
 
     return [i for i in merged if i is not None]
@@ -180,32 +238,55 @@ def _merge_named_drafts(base: List[Any], override: List[Any], key_field: str, pa
     """Keyed merge for the draft layer, with tombstone preservation."""
     out: List[Any] = []
     index: Dict[str, int] = {}
+    title_index: Dict[str, int] = {}
+    match_titles = path == ("menu", "buttons") and key_field == "id"
+
+    def _remember(name: str, title_key: str, pos: int) -> None:
+        index[name] = pos
+        if match_titles and title_key:
+            title_index[title_key] = pos
+
+    def _lookup(name: str, title_key: str):
+        if name in index:
+            return index[name]
+        if match_titles and title_key and title_key in title_index:
+            return title_index[title_key]
+        return None
+
     for item in base:
         cleaned = _canonicalize_keyed_item(dict(item), path, key_field)
         name = _normalize_keyed_name(str(cleaned.get(key_field, "")), path, key_field)
-        if name in index:
+        title_key = _menu_title_key(cleaned) if match_titles else ""
+        if _lookup(name, title_key) is not None:
             continue
-        index[name] = len(out)
+        _remember(name, title_key, len(out))
         out.append(cleaned)
 
     for item in override:
         cleaned = _canonicalize_keyed_item(dict(item), path, key_field)
         name = _normalize_keyed_name(str(cleaned.get(key_field, "")), path, key_field)
+        title_key = _menu_title_key(cleaned) if match_titles else ""
         marker = bool(cleaned.get(REMOVE_KEY))
-        if name in index:
-            current = out[index[name]]
+        pos = _lookup(name, title_key)
+        if pos is not None:
+            current = out[pos]
             # A marker replaces the pending item; re-adding a tombstoned id
             # replaces the marker. Neither case can deep-merge the two.
             if marker or current.get(REMOVE_KEY):
-                out[index[name]] = cleaned
+                out[pos] = cleaned
             else:
                 combined = merge_drafts(current, cleaned, path)
                 combined[key_field] = current.get(key_field) or cleaned.get(key_field)
-                out[index[name]] = combined
+                out[pos] = combined
+            _remember(
+                _normalize_keyed_name(str(out[pos].get(key_field, "")), path, key_field),
+                _menu_title_key(out[pos]) if match_titles else "",
+                pos,
+            )
         else:
             # A tombstone for a name the draft never carried must persist too —
             # it is what deletes the *default* at publish time.
-            index[name] = len(out)
+            _remember(name, title_key, len(out))
             out.append(cleaned)
     return out
 
@@ -238,7 +319,7 @@ def _copy(value: Any, path: tuple = (), *, draft: bool = False) -> Any:
     if isinstance(value, list):
         items = [_copy(v, path, draft=draft) for v in value]
         key_field = KEYED_PATHS.get(path)
-        if key_field and _is_named(items, key_field):
+        if key_field and _is_named(items, key_field, path):
             if draft:
                 return _merge_named_drafts([], items, key_field, path)
             return _merge_named([], items, key_field, path)

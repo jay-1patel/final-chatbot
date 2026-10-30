@@ -96,8 +96,8 @@ export function TenantList() {
                 )}
               </div>
               <p className="mt-1 text-xs text-slate-400">
-                You have 1 WhatsApp phone number. Toggle any tenant below to route your incoming messages to that tenant for testing.
-                You can also test in WhatsApp directly by sending <code className="rounded bg-slate-800 px-1 py-0.5 text-emerald-300 font-mono">#tenants</code> or <code className="rounded bg-slate-800 px-1 py-0.5 text-emerald-300 font-mono">#tenant &lt;name&gt;</code>.
+                Keep one tenant <span className="text-emerald-300">Active Test Bot</span> below — every WhatsApp message on your single number goes to that tenant until you switch.
+                Do not leave this empty (messages will not route). You can also switch in chat with <code className="rounded bg-slate-800 px-1 py-0.5 text-emerald-300 font-mono">#tenants</code> or <code className="rounded bg-slate-800 px-1 py-0.5 text-emerald-300 font-mono">#tenant &lt;name&gt;</code>.
               </p>
             </div>
           </div>

@@ -82,3 +82,34 @@ def set_active_test_tenant(tenant_id: Optional[str]) -> None:
         tenancy_cache.clear()
     except Exception:
         pass
+    # Fresh routing session: drop in-memory dedup + poller unrouted warnings so
+    # the next WhatsApp "hi" is answered by the newly selected tenant.
+    try:
+        from services.dedup import clear_ephemeral_caches
+        clear_ephemeral_caches()
+    except Exception:
+        try:
+            from backend.services.dedup import clear_ephemeral_caches
+            clear_ephemeral_caches()
+        except Exception:
+            pass
+    try:
+        from services import incoming_listener as _il
+        _il._unrouted_warned_ids.clear()
+    except Exception:
+        try:
+            from backend.services import incoming_listener as _il
+            _il._unrouted_warned_ids.clear()
+        except Exception:
+            pass
+    # Content-fingerprint rows (c:…) block a repeated "hi" for ~25s across
+    # webhook+poller. Clear them on switch so the new tenant can greet.
+    try:
+        with get_db_context() as conn:
+            conn.execute("DELETE FROM webhook_dedup WHERE message_id LIKE 'c:%'")
+    except Exception as e:
+        logger.debug(f"Could not clear content dedup rows: {e}")
+    if val:
+        logger.info("ACTIVE_TEST_TENANT_READY | tenant=%s | WhatsApp will route here", val)
+    else:
+        logger.info("ACTIVE_TEST_TENANT_CLEARED | phone binding / default routing restored")

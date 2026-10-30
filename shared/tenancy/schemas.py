@@ -14,7 +14,7 @@ publish is rejected at write time rather than blowing up mid-conversation.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -515,6 +515,57 @@ class MenuButton(_Base):
     intent: Optional[str] = None
 
 
+def _menu_button_title_key(title: str) -> str:
+    """Normalize menu titles so 'Our Services' matches across kit/default clones."""
+    return re.sub(r"[-_\s]+", "_", (title or "").strip().casefold()).strip("_")
+
+
+def _prefer_menu_button(existing: Dict[str, Any], challenger: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep one button per title; prefer vertical ``menu_*`` ids and richer fields."""
+    ex_id = str(existing.get("id") or "")
+    ch_id = str(challenger.get("id") or "")
+    keep = existing
+    drop = challenger
+    if ch_id.startswith("menu_") and not ex_id.startswith("menu_"):
+        keep, drop = challenger, existing
+    # Fill blanks on the survivor from the discarded clone (kit text, icons…).
+    out = dict(keep)
+    for key in ("description", "section", "icon", "intent", "flow", "requires_feature"):
+        if not out.get(key) and drop.get(key):
+            out[key] = drop[key]
+    if out.get("enabled") is None and drop.get("enabled") is not None:
+        out["enabled"] = drop["enabled"]
+    return out
+
+
+def _dedupe_menu_button_dicts(buttons: List[Any]) -> List[Any]:
+    """Collapse same-title menu rows (e.g. menu_services vs our_services)."""
+    if not isinstance(buttons, list) or len(buttons) < 2:
+        return buttons
+    kept: List[Any] = []
+    index: Dict[str, int] = {}
+    for item in buttons:
+        if not isinstance(item, Mapping):
+            kept.append(item)
+            continue
+        raw = dict(item)
+        title_key = _menu_button_title_key(str(raw.get("title") or ""))
+        if not raw.get("id") and title_key:
+            # An id-less button (old LLM bifurcator writes) would otherwise
+            # fail MenuButton validation and drop the tenant to the skeleton.
+            raw["id"] = re.sub(r"[^a-z0-9]+", "_", str(raw.get("title") or "").lower()).strip("_") or "menu_item"
+        if not title_key:
+            kept.append(raw)
+            continue
+        pos = index.get(title_key)
+        if pos is None:
+            index[title_key] = len(kept)
+            kept.append(raw)
+            continue
+        kept[pos] = _prefer_menu_button(kept[pos], raw)
+    return kept
+
+
 class MenuSpec(_Base):
     key: str = "kb_main"
     header: str = ""
@@ -522,6 +573,12 @@ class MenuSpec(_Base):
     footer: str = "Or type your question directly"
     button_text: str = "Show Options"
     buttons: List[MenuButton] = Field(default_factory=list)
+
+    @field_validator("buttons", mode="before")
+    @classmethod
+    def _collapse_duplicate_titles(cls, value: Any) -> Any:
+        """Last-line defence: kit slug ids must not double vertical default titles."""
+        return _dedupe_menu_button_dicts(value) if isinstance(value, list) else value
 
     def visible_buttons(
         self, features: Features, *, in_business_hours: bool = True

@@ -96,6 +96,23 @@ def _resolve_tenant_ids(tenant_id: str = None) -> list:
     return list(candidates)
 
 
+def _ensure_product_media_schema(conn) -> None:
+    """Guarantee media columns exist before insert/update.
+
+    Older faq.db copies (and DBs created before offerings migration) have
+    ``media_url`` but not ``image_url``. Bifurcation then fails on INSERT and
+    WhatsApp never gets a package/catalogue image.
+    """
+    from .core import _ensure_columns
+    _ensure_columns(conn, "products", [
+        ("media_url", "TEXT"),
+        ("media_type", "TEXT DEFAULT 'image'"),
+        ("image_url", "TEXT"),
+        ("attrs_json", "TEXT DEFAULT '{}'"),
+        ("tenant_id", "TEXT"),
+    ])
+
+
 def save_product(name: str, slug: str, category: str = "general",
                  description: str = "", short_description: str = "",
                  price: str = "", mrp: str = "", unit: str = "piece",
@@ -117,6 +134,7 @@ def save_product(name: str, slug: str, category: str = "general",
     if eff_image_url and "image_url" not in attrs:
         attrs["image_url"] = eff_image_url
     with get_db_context() as conn:
+        _ensure_product_media_schema(conn)
         cur = conn.execute(
             """INSERT INTO products (name, slug, category, description, short_description,
                price, mrp, unit, moq, media_url, image_url, media_type, ingredients, sort_order, variants_json,
@@ -359,6 +377,7 @@ def update_product(product_id: int, tenant_id: str = None, **kwargs) -> bool:
     actor = actor_from_context(actor)
 
     with get_db_context() as conn:
+        _ensure_product_media_schema(conn)
         before = conn.execute(
             "SELECT name, slug, category, price, is_active, sort_order FROM products WHERE id = ? AND tenant_id = ?",
             (product_id, _resolve_tenant(tenant_id)),

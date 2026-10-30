@@ -1,0 +1,18 @@
+{
+  "all_healthy": false,
+  "services": {
+    "send2_api": {
+      "url": "https://api.send2.digital/devdesk/AI_chatbot_API_incomingentry",
+      "http_status": 400,
+      "api_status": "unknown_response",
+      "response": "{\"success\":false,\"message\":\"Please provide Username\"}",
+      "ok": false
+    },
+    "hkdk_webhook": {
+      "url": "https://hkdk.events/63akz9xv0bor2a/webhook",
+      "http_status": 200,
+      "response": "{\"status\":\"SUCCESS\",\"message\":\"Request handled by Hookdeck. Check your dashboard to inspect the request: https://dashboard.hookdeck.com/requests/req_fVeXiIKKNgAK1WaA6RY1\",\"request_id\":\"req_fVeXiIKKNgAK1WaA6RY1\"}",
+      "ok": true
+    }
+  }
+}

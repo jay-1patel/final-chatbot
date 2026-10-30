@@ -1,0 +1,8 @@
+[
+  {
+    "file": "backend/routes/admin.py",
+    "uses_secure_filename": false,
+    "joins_upload_dir": true,
+    "mentions_traversal": true
+  }
+]
