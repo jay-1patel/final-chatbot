@@ -1,1 +1,0 @@
-# Security & IP  Mutual NDAs precede deep technical discussions. Custom code and designs transfer to the client after milestone payments, excluding third-party/open-source components which keep their licenses.  Access is least-privilege; secrets stay in vaults; production access is logged.

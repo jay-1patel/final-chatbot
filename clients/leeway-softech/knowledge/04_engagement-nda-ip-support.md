@@ -1,1 +1,0 @@
-# How We Work  Understand → Plan → Build → Integrate → Test & Deploy → Improve.  Engagement models: fixed-price, T&M, dedicated pods. Mutual NDA before deep reviews. Client owns custom IP after milestone settlement. Warranty period plus optional SLA retainers for production support.

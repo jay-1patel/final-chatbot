@@ -1,0 +1,172 @@
+================================================================================
+                    PROJECT UPDATES & CHANGES SUMMARY
+                              Date: 2026-10-30
+================================================================================
+
+OVERVIEW OF WHAT WAS ACHIEVED:
+1. Automated PDF Section Extraction:
+   - When a main PDF is uploaded, the system automatically detects the FAQ section
+     and Knowledge Base section.
+   - It generates two separate small PDFs:
+     * `<filename>_faq.pdf` -> placed in the FAQ section.
+     * `<filename>_kb.pdf` -> placed in the Knowledge Base section.
+   - Internal bot prompt settings (bot persona, guardrails, welcome greetings,
+     and parameter rules) as well as internal source conflict tables are automatically
+     stripped out from the Knowledge Base PDF so that it contains 100% pure
+     customer-facing company knowledge for deep inquiry responses.
+
+2. Strict Tenant Isolation (Admin Panel & WhatsApp Chatbot):
+   - Fixed an issue where queries from other tenants (such as "Sbi") appeared under
+     Prestige Group (Tenant 14 / Tenant 19).
+   - Added automated guards to ensure each tenant only sees and answers their own FAQs.
+   - Cross-tenant keywords, switcher commands, and test inputs are automatically
+     blocked from being recorded as customer knowledge gaps.
+
+3. Complete UI Redesign of Knowledge Gaps Section:
+   - Redesigned the "Top High-Frequency Questions Asked by Customers" card grid.
+   - Removed awkward brown/muddy background tints and cramped spacing.
+   - Added clean card borders, clear customer count badges, line-clamping, and
+     properly aligned "+ 1-Click FAQ" and "Dismiss" buttons.
+
+4. All 5 Properties Catalog & Authentic Image URLs Extraction:
+   - Fixed the issue where only 3 corrupted records appeared in the Properties table
+     (`/records`) instead of the 5 real properties from the PDF.
+   - Eliminated soft hyphens/zero-width space characters (\u200b) and multiline URL breaks.
+   - Extracted all 5 tangible real estate projects with complete pricing, configurations,
+     locations, and amenities:
+     * Prestige Southern Star (Apartment Township, 1-4 BHK, ₹97 Lakhs - ₹3.63 Cr)
+     * Prestige Marigold (Gated Villa Plots, 4,000 sq ft, ₹3.52 Cr)
+     * Prestige Gardenia Estates (Gated Villa Plots, 1,200 - 4,000 sq ft, ₹1.02 Cr - ₹2.90 Cr)
+     * Prestige Thanisandra (Apartments, 2 & 3 BHK, from ₹1.63 Cr & ₹2.12 Cr)
+     * Prestige Tech Platina (Commercial Office Grade-A, ₹90 / sq.ft. Lease)
+   - Extracted and attached authentic image URLs for all 5 properties (both public WebP/JPG
+     links and embedded preview images in /images/catalog/).
+
+5. WhatsApp Menu Buttons Focused Strictly on the PDF:
+   - Resolved the issue where menu items were parsed as 29 junk entries or generic defaults.
+   - Configured strictly the 6 interactive menu buttons defined under [SECTION: WHATSAPP MENU]:
+     1. Explore Properties (2, 3 & 4 BHK luxury residences & villas -> offerings)
+     2. Ongoing Projects (Prime locations, masterplans & tower specs -> offering_details)
+     3. Schedule Site Visit (Guided property tour with sales advisor -> book_callback)
+     4. Price & Payment Plans (Cost sheets, EMI calculations & construction plans -> quote)
+     5. RERA & Legal Sanctions (RERA registration, sanctions & bank approvals -> faq)
+     6. Customer Support (Existing buyer assistance & documentation help -> raise_ticket)
+
+================================================================================
+                     UPDATED FILES & DETAILS OF CHANGES
+================================================================================
+
+1. backend/services/pdf_section_extractor.py (NEW FILE)
+   ----------------------------------------------------
+   - Purpose: Automated extraction and splitting of main uploaded PDFs into
+     focused derivative PDFs.
+   - What was done:
+     * Analyzes PDF pages using font sizes, headings, and keywords to identify
+       FAQ pages and Knowledge Base article pages.
+     * Generates `<name>_faq.pdf` and registers it under module="faq".
+     * Generates `<name>_kb.pdf` and registers it under module="kb".
+     * Added `_strip_persona_and_guardrails()`: Automatically redacts and removes
+       bot persona tables, tone/style parameters, welcome greetings, prompt guardrails,
+       and top conflict/internal tables from the KB PDF so it starts cleanly with articles.
+     * Automatically indexes vector search chunks (FAISS) directly from the clean
+       derivative files and cleans up the raw multi-megabyte parent file entry.
+
+2. backend/database.py (MODIFIED)
+   ------------------------------
+   - Purpose: Database operations for knowledge gaps, tenant isolation, and files.
+   - What was done:
+     * Enhanced `record_unanswered_query()` with cross-tenant validation.
+     * If an incoming customer query matches the name, display name, or slug of
+       any OTHER tenant (e.g., 'sbi', 'dlf', 'meridianbank'), or is an admin/test
+       command (like '#tenant', '#switch'), it is automatically ignored and NOT
+       recorded as a knowledge gap for the active tenant.
+     * Cleaned up invalid cross-tenant entries from the unanswered queries table.
+
+3. backend/routes/admin.py (MODIFIED)
+   ----------------------------------
+   - Purpose: Admin API routes for file uploading and tenant management.
+   - What was done:
+     * Hooked `auto_extract_and_register()` into the document upload background
+       task (`_process_document_background`).
+     * Whenever an admin uploads a PDF in the Uploads section, the extractor
+       automatically creates and registers the FAQ and KB PDFs in their respective
+       tabs.
+
+4. backend/services/auto_bifurcator.py (MODIFIED)
+   ----------------------------------------------
+   - Purpose: Auto-bifurcation pipeline for processing uploaded client files.
+   - What was done:
+     * Integrated `auto_extract_and_register()` into the batch processing pipeline
+       so that bulk document uploads also generate derivative FAQ and KB PDFs.
+     * Added direct table extraction (`find_tables`) for catalog and offerings to
+       reliably extract all 5 properties and stitch wrapped URLs without corruption.
+     * Implemented 4-line tuple parsing for WhatsApp menu items to strictly capture
+       the 6 menu buttons defined in the onboarding guide.
+
+5. routing/message.py (MODIFIED)
+   -----------------------------
+   - Purpose: WhatsApp message routing and AI bot answering pipeline.
+   - What was done:
+     * Added automatic tenant resolution at the entry of `process_message`:
+       ensures that if `tenant_id` is missing in an incoming request, it is
+       immediately resolved from the user's WhatsApp ID (`wa_id`).
+     * Guaranteed that FAQ and Knowledge Base queries always execute with the
+       correct tenant ID, preventing responses from defaulting to Tenant 1.
+
+6. routing/webhook.py (MODIFIED)
+   -----------------------------
+   - Purpose: Inbound WhatsApp webhook listener and interactive reply dispatcher.
+   - What was done:
+     * Added `tenant_id` parameter to `_handle_registry_button()`.
+     * Threaded the tenant ID through interactive button taps and menu clicks,
+       maintaining strict tenant isolation during user interactions.
+
+7. frontend/src/components/tenants/uploads-panel.tsx (MODIFIED)
+   -----------------------------------------------------------
+   - Purpose: React frontend for the Tenant Uploads & Knowledge Gaps console.
+   - What was done:
+     * Overhauled the "Top High-Frequency Questions Asked by Customers" card grid:
+       replaces the cramped, brownish layout with clean modern cards, an auto-ranked
+       header, a fire badge for customer count, and right-aligned buttons.
+     * Polished the unanswered queries list with clean spacing, date/user metadata,
+       status badges (No FAQ Match, Low Confidence), and aligned "+ 1-Click FAQ"
+       and "Dismiss" action buttons.
+
+8. backend/admin_build/assets/index-D7c3zCD_.js (MODIFIED)
+   -------------------------------------------------------
+   - Purpose: Compiled production JavaScript bundle served by the FastAPI backend.
+   - What was done:
+     * Updated the production bundle so the live Admin Panel immediately reflects
+       the new UI improvements without needing a manual build step.
+
+9. clients/14/config.json (MODIFIED)
+   ---------------------------------
+   - Purpose: Client-level WhatsApp configuration profile.
+   - What was done:
+     * Configured the 6 published menu buttons matching the onboarding kit.
+
+10. clients/14/knowledge/ (NEW COLLATERAL FILES)
+    ---------------------------------------------
+    - Purpose: Modular Markdown articles for tenant knowledge base indexing.
+    - Files:
+      * 01_company-overview-profile.md
+      * 02_booking-process-policies-faqs.md
+    - What was done:
+      * Stored clean, structured Markdown summaries extracted from the onboarding
+        collateral for fast retrieval and offline reference.
+
+11. backend/images/catalog/ (NEW ASSET FILES)
+    -----------------------------------------
+    - Purpose: High-resolution property preview images.
+    - Files:
+      * prestige_southern_star.png
+      * prestige_marigold.png
+      * prestige_gardenia_estates.png
+      * prestige_thanisandra.png
+      * prestige_tech_platina.png
+    - What was done:
+      * Extracted embedded preview images directly from Pages 2 and 3 of the
+        onboarding guide PDF to guarantee offline image serving in the Admin Console
+        and fallback rendering.
+
+

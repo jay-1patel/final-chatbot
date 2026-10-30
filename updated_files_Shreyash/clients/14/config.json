@@ -1,0 +1,242 @@
+{
+  "vertical": "real_estate",
+  "display_name": "Prestige Estates Projects Limited",
+  "features": {
+    "cart": false,
+    "buy_now": false,
+    "orders": false,
+    "payments": false,
+    "track_order": false,
+    "returns": false,
+    "brochure_pdf": true,
+    "distributors": false,
+    "offerings": true,
+    "offering_details": true,
+    "services": false,
+    "products": false,
+    "products_schemes": false,
+    "lead_capture": true,
+    "quote": true,
+    "callback": true,
+    "book_appointment": true,
+    "handoff": true,
+    "faq": true,
+    "kb": true,
+    "complaints": true,
+    "campaigns": false,
+    "human_handover": true
+  },
+  "brand": {
+    "name": "Prestige Estates Projects Limited",
+    "bot_name": "Prestige Advisor",
+    "tagline": "Residences, villas, commercial spaces, pricing & site visits",
+    "website": "https://www.prestigeconstructions.com",
+    "support_email": "properties@prestigeconstructions.com",
+    "support_phone": "+91 9800000000",
+    "signature": "14 — At your service."
+  },
+  "vocabulary": {
+    "item_noun": "properties",
+    "item_noun_singular": "property",
+    "browse_label": "Featured Properties",
+    "catalog_label": "Project Brochure",
+    "lead_noun": "site visit request",
+    "enquiry_label": "Schedule Site Visit"
+  },
+  "prompt": {
+    "tone": "reassuring, consultative, and knowledgeable",
+    "industry": "real estate & property development",
+    "listing_type": "properties or projects",
+    "domain_specific_queries": "properties, floor plans, pricing, possession dates, or site visits"
+  },
+  "business_hours": {
+    "timezone": "Asia/Kolkata",
+    "open": "09:30",
+    "close": "18:30",
+    "open_days": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "guardrails": {
+    "escalation_message": "Let me connect you with our team.",
+    "handoff_keywords": [
+      "human",
+      "agent",
+      "person"
+    ]
+  },
+  "tenant_id": "14",
+  "menu": {
+    "key": "kb_main",
+    "header": "Prestige Group",
+    "body": "Welcome to Prestige Group! How can we assist with your property search today?",
+    "footer": "Select an option below or type your question directly.",
+    "button_text": "Select Option",
+    "buttons": [
+      {
+        "id": "explore-properties",
+        "title": "Explore Properties",
+        "description": "2, 3 & 4 BHK luxury residences & villas",
+        "section": "Properties",
+        "icon": "🏢",
+        "image_url": null,
+        "sort_order": 1,
+        "enabled": true,
+        "intent": "offerings"
+      },
+      {
+        "id": "ongoing-projects",
+        "title": "Ongoing Projects",
+        "description": "Prime locations, masterplans & tower specs",
+        "section": "Properties",
+        "icon": "🏗️",
+        "image_url": null,
+        "sort_order": 2,
+        "enabled": true,
+        "intent": "offering_details"
+      },
+      {
+        "id": "schedule-visit",
+        "title": "Schedule Site Visit",
+        "description": "Guided property tour with sales advisor",
+        "section": "Bookings",
+        "icon": "📅",
+        "image_url": null,
+        "sort_order": 3,
+        "enabled": true,
+        "flow": "book_callback"
+      },
+      {
+        "id": "price-payment",
+        "title": "Price & Payment Plans",
+        "description": "Cost sheets, EMI calculations & construction plans",
+        "section": "Bookings",
+        "icon": "💰",
+        "image_url": null,
+        "sort_order": 4,
+        "enabled": true,
+        "flow": "get_quote"
+      },
+      {
+        "id": "rera-legal",
+        "title": "RERA & Legal Sanctions",
+        "description": "RERA registration, sanctions & bank approvals",
+        "section": "Legal",
+        "icon": "⚖️",
+        "image_url": null,
+        "sort_order": 5,
+        "enabled": true,
+        "intent": "rera_legal"
+      },
+      {
+        "id": "customer-support",
+        "title": "Customer Support",
+        "description": "Existing buyer assistance & documentation help",
+        "section": "Support",
+        "icon": "🎧",
+        "image_url": null,
+        "sort_order": 6,
+        "enabled": true,
+        "flow": "raise_ticket"
+      }
+    ]
+  },
+  "intents": [
+    {
+      "name": "pricing_plan",
+      "examples": [
+        "Tell me about LEED Gold rated Grade-A office space",
+        "What is LEED Gold rated Grade-A office space?",
+        "Information regarding LEED Gold rated Grade-A office space"
+      ],
+      "keywords": [
+        "leed",
+        "gold",
+        "rated",
+        "grade-a",
+        "office",
+        "space"
+      ],
+      "flow": "get_quote",
+      "enabled": true,
+      "answer": "Prestige Tech Platina, Kadubeesanahalli, ORR [Confirm]"
+    },
+    {
+      "name": "property_listings",
+      "examples": [
+        "Tell me about Green-certified commercial space",
+        "What is Green-certified commercial space?",
+        "Information regarding Green-certified commercial space"
+      ],
+      "keywords": [
+        "green-certified",
+        "commercial",
+        "space"
+      ],
+      "flow": null,
+      "enabled": true,
+      "answer": "93% of commercial area developed in the last five years is"
+    },
+    {
+      "name": "bot",
+      "examples": [
+        "Tell me about Bot",
+        "What is Bot?",
+        "Information regarding Bot"
+      ],
+      "keywords": [
+        "bot"
+      ],
+      "flow": null,
+      "enabled": true,
+      "answer": "Answer Content"
+    },
+    {
+      "name": "green",
+      "examples": [
+        "Tell me about green",
+        "What is green?",
+        "Information regarding green"
+      ],
+      "keywords": [
+        "green"
+      ],
+      "flow": null,
+      "enabled": true,
+      "answer": "certified [Confirm]"
+    },
+    {
+      "name": "rera_legal",
+      "examples": [
+        "Tell me about RERA-verified",
+        "What is RERA-verified?",
+        "Information regarding RERA-verified"
+      ],
+      "keywords": [
+        "rera-verified"
+      ],
+      "flow": null,
+      "enabled": true,
+      "answer": "project data shared in chat"
+    }
+  ],
+  "flows": [
+    {
+      "name": "book_callback",
+      "success_message": "Thank you! Your consultation request has been scheduled with Prestige Advisor."
+    },
+    {
+      "name": "get_quote",
+      "success_message": "Thank you! Our specialist will prepare a customized quote and follow up promptly."
+    },
+    {
+      "name": "raise_ticket",
+      "success_message": "Your request has been logged. A support ticket has been created and an executive will assist you."
+    }
+  ]
+}

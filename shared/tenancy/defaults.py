@@ -1507,10 +1507,10 @@ DEFAULT_FLOWS: List[Dict[str, Any]] = [
         "intent": "callback_request",
         "requires_feature": "callback",
         "description": "Collect details and schedule a callback with a Google Meeting.",
-        "start_message": "Sure — leave your details and we'll schedule a callback with a Google Meeting.",
+        "start_message": "Sure — leave your details and we'll schedule a callback with a Google Meeting.Type exit to exit the flow",
         "success_message": "Done! Your callback and Google Meeting have been scheduled.",
         "steps": [
-            _say("intro", "Sure — leave your details and we'll schedule a callback with a Google Meeting."),
+            _say("intro", "Sure — leave your details and we'll schedule a callback with a Google Meeting.Type exit to exit the flow"),
             _ask("ask_name", "name", "May I know your name?", validate="name:2",
                  invalid="Could you share your name (at least 2 characters)?"),
             _ask("ask_phone", "phone", "What's the best number to reach you on?",

@@ -36,13 +36,41 @@ def record_unanswered_query(
     if len(cleaned) < 3:
         return None
     lower = cleaned.lower()
-    # Skip common greetings and generic menu navigation triggers
+    # Skip common greetings, admin testing commands, and generic navigation
     if lower in {"hi", "hello", "hey", "menu", "start", "opt out", "stop", "yes", "no", "ok", "okay"}:
+        return None
+    if lower.startswith("#") or lower in {"#tenant", "#tenants", "#switch", "switch", "tenant", "whoami"}:
         return None
 
     effective_tenant = _resolve_tenant(tenant_id) if tenant_id else (get_request_tenant() or "default")
 
     with get_db_context() as conn:
+        # Cross-tenant check: do not record another brand's name/slug as a
+        # knowledge gap for the active tenant (e.g. typing "sbi" while on MMT).
+        try:
+            other_rows = conn.execute(
+                "SELECT id, slug, display_name FROM tenants "
+                "WHERE CAST(id AS TEXT) != ? AND IFNULL(slug, '') != ?",
+                (str(effective_tenant), str(effective_tenant)),
+            ).fetchall()
+            for ot in other_rows:
+                names = {
+                    str(ot["slug"] or "").lower().strip(),
+                    str(ot["display_name"] or "").lower().strip(),
+                    str(ot["slug"] or "").replace("-", " ").lower().strip(),
+                }
+                names.discard("")
+                if lower in names or any(
+                    len(n) >= 2 and (lower == n or lower == f"#{n}") for n in names
+                ):
+                    logger.info(
+                        "Ignoring cross-tenant keyword %r for tenant %s",
+                        cleaned, effective_tenant,
+                    )
+                    return None
+        except Exception as filter_err:
+            logger.debug("Cross-tenant filter check exception: %s", filter_err)
+
         # Throttle duplicate query within 10 minutes for this tenant
         recent = conn.execute(
             """SELECT id FROM unanswered_queries

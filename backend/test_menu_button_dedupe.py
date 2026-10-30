@@ -616,6 +616,65 @@ class MenuButtonDedupeTests(unittest.TestCase):
         )
         self.assertEqual([b.id for b in solo.buttons], ["menu_services", "menu_technologies"])
 
+    def test_vertical_default_fill_keeps_banking_finance_ecommerce_targets(self):
+        """Default fill must keep real intents/flows — not feature flags or enquire→callback."""
+        cases = {
+            "banking": {
+                "menu_products": {"intent": "product_details", "flow": None, "req": "products_schemes"},
+                "menu_cards": {"intent": "product_details", "flow": None, "req": "offering_details"},
+                "menu_eligibility": {"intent": None, "flow": "enquire", "req": "lead_capture"},
+                "menu_branch": {"intent": "branch_locator", "flow": None, "req": None},
+                "menu_human": {"intent": None, "flow": "book_callback", "req": "human_handover"},
+            },
+            "finance": {
+                "menu_services": {"intent": "service_enquiry", "flow": None, "req": "services"},
+                "menu_faq": {"intent": "compliance_query", "flow": None, "req": "faq"},
+                "menu_proposal": {"intent": None, "flow": "get_quote", "req": "quote"},
+                "menu_human": {"intent": None, "flow": "book_callback", "req": "human_handover"},
+            },
+            "ecommerce": {
+                "menu_products": {"intent": "product_details", "flow": None, "req": "products"},
+                "menu_new_arrivals": {"intent": "new_arrivals", "flow": None, "req": None},
+                "menu_about": {"intent": "policy_query", "flow": None, "req": None},
+                "menu_view_cart": {"intent": None, "flow": None, "req": "cart"},
+                "menu_human": {"intent": None, "flow": "book_callback", "req": "human_handover"},
+            },
+        }
+        for vertical, expected in cases.items():
+            with self.subTest(vertical=vertical):
+                items = AutoBifurcator("demo").extract_menu_section(
+                    {"text": "", "tables": []},
+                    vertical=vertical,
+                )
+                buttons = _sanitize_menu_buttons(items, vertical=vertical)
+                by_id = {b["id"]: b for b in buttons}
+                defaults = get_vertical_defaults(vertical)["menu"]["buttons"]
+                self.assertEqual(len(buttons), min(10, len(defaults)))
+                for bid, want in expected.items():
+                    self.assertIn(bid, by_id, f"{vertical} missing {bid}")
+                    got = by_id[bid]
+                    self.assertEqual(got.get("intent"), want["intent"], f"{vertical}/{bid} intent")
+                    self.assertEqual(got.get("flow"), want["flow"], f"{vertical}/{bid} flow")
+                    self.assertEqual(
+                        got.get("requires_feature"),
+                        want["req"],
+                        f"{vertical}/{bid} requires_feature",
+                    )
+
+    def test_enquire_action_does_not_become_book_callback(self):
+        buttons = _sanitize_menu_buttons(
+            [{
+                "id": "menu_eligibility",
+                "title": "Check Eligibility",
+                "description": "Get a quick check",
+                "section": "Talk To Us",
+                "action": "enquire",
+            }],
+            vertical="banking",
+        )
+        self.assertEqual(buttons[0]["flow"], "enquire")
+        self.assertNotEqual(buttons[0].get("flow"), "book_callback")
+
 
 if __name__ == "__main__":
     unittest.main()

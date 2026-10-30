@@ -106,6 +106,44 @@ def _normalize_menu_button_key(value: str) -> str:
     return re.sub(r"[-_\s]+", "_", (value or "").strip().casefold()).strip("_")
 
 
+def _menu_items_from_vertical_defaults(vertical: str, *, limit: int = 10) -> List[Dict[str, Any]]:
+    """Copy vertical default menu rows with real flow/intent (never requires_feature as action)."""
+    try:
+        from shared.tenancy.defaults import get_vertical_defaults
+
+        defaults = list(
+            (get_vertical_defaults(vertical) or {}).get("menu", {}).get("buttons") or []
+        )
+    except Exception:
+        defaults = []
+
+    items: List[Dict[str, Any]] = []
+    for b in defaults[: max(0, limit)]:
+        if not isinstance(b, dict):
+            continue
+        item: Dict[str, Any] = {
+            "id": b.get("id", "menu_item"),
+            "title": str(b.get("title", "Explore"))[:24],
+            "description": str(b.get("description", "View options"))[:72],
+            "section": str(b.get("section", "Explore"))[:24],
+        }
+        # Prefer flow, then intent — never treat a feature flag as the action.
+        if b.get("flow"):
+            item["flow"] = str(b["flow"])
+            item["action"] = str(b["flow"])
+        elif b.get("intent"):
+            item["intent"] = str(b["intent"])
+            item["action"] = str(b["intent"])
+        else:
+            item["action"] = "offerings"
+        if b.get("requires_feature"):
+            item["requires_feature"] = str(b["requires_feature"])
+        if b.get("icon"):
+            item["icon"] = b["icon"]
+        items.append(item)
+    return items
+
+
 def _sanitize_menu_buttons(
     menu_items_raw: List[Any],
     *,
@@ -115,12 +153,15 @@ def _sanitize_menu_buttons(
     defaults: List[Dict[str, Any]] = []
     try:
         from shared.tenancy.defaults import get_vertical_defaults
+        from shared.tenancy.schemas import FEATURE_FLAGS
 
         defaults = list(
             (get_vertical_defaults(vertical) or {}).get("menu", {}).get("buttons") or []
         )
+        feature_flag_names = set(FEATURE_FLAGS)
     except Exception:
         defaults = []
+        feature_flag_names = set()
 
     default_by_norm_id: Dict[str, Dict[str, Any]] = {}
     default_by_title: Dict[str, Dict[str, Any]] = {}
@@ -173,27 +214,51 @@ def _sanitize_menu_buttons(
             "sort_order": len(menu_buttons) + 1,
             "enabled": True if item.get("enabled", True) else False,
         }
+        if item.get("icon") or (matched and matched.get("icon")):
+            button_dict["icon"] = item.get("icon") or matched.get("icon")
+
+        # Explicit flow/intent win. Feature-flag "actions" inherit from the
+        # matched vertical default so banking/finance/ecommerce keep real targets.
+        if item.get("flow"):
+            button_dict["flow"] = str(item["flow"])
+        elif item.get("intent"):
+            button_dict["intent"] = str(item["intent"])
+        elif matched and (
+            action in feature_flag_names
+            or action in ("offerings", "catalog", "offering_details", "products", "services", "faq", "info")
+        ):
+            # Generic / feature-flag actions on a known default row: keep the
+            # vertical's real target (or none, e.g. View Cart is feature-only).
+            if matched.get("flow"):
+                button_dict["flow"] = str(matched["flow"])
+            elif matched.get("intent"):
+                button_dict["intent"] = str(matched["intent"])
         # Map kit "action" labels onto schema fields (MenuButton forbids "action")
-        if action in ("offerings", "catalog", "offering_details", "products", "services"):
-            button_dict["intent"] = "offerings" if action != "services" else "services"
+        elif action in ("offerings", "catalog", "offering_details", "products"):
+            button_dict["intent"] = "offerings"
+        elif action == "services":
+            button_dict["intent"] = "services"
         elif action in ("technologies", "projects", "careers", "benefits"):
             button_dict["intent"] = action
         elif action in ("brochure", "brochure_request", "brochure_pdf"):
             button_dict["intent"] = "brochure_request"
         elif action in ("quote", "get_quote", "pricing"):
             button_dict["flow"] = "get_quote"
-        elif action in ("book_callback", "callback", "enquire", "inquire", "appointment"):
+        elif action in ("book_callback", "callback", "appointment"):
             button_dict["flow"] = "book_callback"
+        elif action in ("enquire", "inquire"):
+            # Banking "Check Eligibility" etc. — must not become book_callback.
+            button_dict["flow"] = "enquire"
         elif action in ("raise_ticket", "support", "ticket", "help"):
             button_dict["flow"] = "raise_ticket"
         elif action in ("faq", "info"):
             button_dict["intent"] = "faq" if b_id == "faq" else b_id
-        elif item.get("flow"):
-            button_dict["flow"] = str(item["flow"])
-        elif item.get("intent"):
-            button_dict["intent"] = str(item["intent"])
         else:
             button_dict["intent"] = b_id
+
+        req = item.get("requires_feature") or (matched.get("requires_feature") if matched else None)
+        if req:
+            button_dict["requires_feature"] = str(req)
 
         menu_buttons.append(button_dict)
 
@@ -781,14 +846,8 @@ def merge_bifurcation_results(*parts: Optional[Dict[str, Any]], tenant_id: str =
         brand["signature"] = f"{brand['name']} — At your service."
 
     if len(merged["menu_items"]) < 3:
-        v_defaults = get_vertical_defaults(merged["vertical"]) or {}
-        for b in (v_defaults.get("menu", {}) or {}).get("buttons", [])[:6]:
-            merged["menu_items"].append({
-                "id": b.get("id", "menu_item"),
-                "title": str(b.get("title", "Explore"))[:24],
-                "description": str(b.get("description", "View options"))[:72],
-                "section": str(b.get("section", "Explore"))[:24],
-                "action": b.get("flow") or b.get("requires_feature") or b.get("intent") or "offerings",
-            })
+        merged["menu_items"].extend(
+            _menu_items_from_vertical_defaults(merged["vertical"], limit=10)
+        )
 
     return merged

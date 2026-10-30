@@ -867,10 +867,45 @@ async def process_message(user_text: str, wa_id: str = None, raw_message: dict =
             )
         except Exception:
             pass
-        answer = (
-            "Hmm, I couldn't find a solid answer for that one 🤔 "
-            "Try rephrasing, or tap below and our team will jump in to help! 🙋"
-        )
+        # Mirror B2C unrelated-query policy: IT → meeting invite text;
+        # other verticals → support phone/email/website.
+        try:
+            from bots.customer_b2c.workflows import (
+                _is_it_tenant,
+                _support_details_text,
+            )
+            if _is_it_tenant(wa_id or "", tenant_id):
+                # Start meeting collection quietly; do not narrate the miss.
+                try:
+                    try:
+                        from services import flow_runner
+                    except ImportError:
+                        from backend.services import flow_runner
+                    outcome = flow_runner.start_flow(
+                        wa_id or "", "book_callback", tenant_id=tenant_id,
+                    )
+                    msgs = outcome.get("messages") or [] if outcome.get("handled") else []
+                    parts = []
+                    for m in msgs:
+                        if isinstance(m, str) and m.strip():
+                            parts.append(m.strip())
+                        elif isinstance(m, dict) and (m.get("text") or "").strip():
+                            parts.append(m["text"].strip())
+                    answer = "\n\n".join(parts) if parts else (
+                        "Sure — leave your details and we'll schedule a callback "
+                        "with a Google Meeting.Type exit to exit the flow"
+                    )
+                except Exception:
+                    answer = (
+                        "Sure — leave your details and we'll schedule a callback "
+                        "with a Google Meeting.Type exit to exit the flow"
+                    )
+            else:
+                answer = _support_details_text(wa_id or "", tenant_id)
+        except Exception:
+            answer = (
+                ""
+            )
         data = {}
 
     result["answer"] = answer

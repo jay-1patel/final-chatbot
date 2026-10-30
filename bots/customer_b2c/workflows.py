@@ -228,6 +228,108 @@ PROMPT_TYPE_HI_FOR_MENU = (
     "I didn't catch that. Please type *hi* (or hello / hey) to open the menu."
 )
 
+_IT_VERTICALS = frozenset({"it_software", "it"})
+
+
+def _tenant_profile_for(wa_id: str, tenant_id: str | None = None):
+    """Best-effort tenant profile for unrelated-query fallbacks."""
+    try:
+        from shared.tenancy.loader import get_tenant_profile
+        from shared.tenancy.resolver import resolve_effective_tenant_id
+        tid = tenant_id or resolve_effective_tenant_id(wa_id)
+        if tid:
+            return get_tenant_profile(tid), tid
+    except Exception:
+        pass
+    return None, tenant_id
+
+
+def _is_it_tenant(wa_id: str, tenant_id: str | None = None) -> bool:
+    profile, _ = _tenant_profile_for(wa_id, tenant_id)
+    if not profile:
+        return False
+    return str(getattr(profile, "vertical", "") or "").strip().lower() in _IT_VERTICALS
+
+
+def _support_details_text(wa_id: str, tenant_id: str | None = None) -> str:
+    """Support contact blurb for non-IT tenants when KB/FAQ has no answer."""
+    profile, _ = _tenant_profile_for(wa_id, tenant_id)
+    brand = getattr(profile, "brand", None) if profile else None
+    name = (getattr(brand, "name", None) or "our team").strip() or "our team"
+    lines = [
+        "I don't have that in our knowledge base.",
+        f"Please contact *{name}* support directly:",
+    ]
+    phone = str(getattr(brand, "support_phone", "") or "").strip() if brand else ""
+    email = str(getattr(brand, "support_email", "") or "").strip() if brand else ""
+    website = str(getattr(brand, "website", "") or "").strip() if brand else ""
+    if phone:
+        lines.append(f"📞 {phone}")
+    if email:
+        lines.append(f"✉️ {email}")
+    if website:
+        lines.append(f"🌐 {website}")
+    if not (phone or email or website):
+        lines.append("Please type *hi* for the menu, or ask our team for help.")
+    else:
+        lines.append("\nOr type *hi* to open the menu.")
+    return "\n".join(lines)
+
+
+async def _send_flow_messages(wa_id: str, messages: list) -> None:
+    from services.whatsapp_sender import send_text_message, send_button_message
+
+    for msg in messages or []:
+        if isinstance(msg, dict) and msg.get("type") == "buttons":
+            await send_button_message(wa_id, msg.get("text", ""), msg.get("buttons", []))
+        elif isinstance(msg, dict) and msg.get("text"):
+            await send_text_message(wa_id, msg.get("text"))
+        elif isinstance(msg, str) and msg.strip():
+            await send_text_message(wa_id, msg)
+
+
+async def _handle_unrelated_query(
+    wa_id: str, message: str, tenant_id: str | None = None,
+) -> dict:
+    """When the question is outside tenant data: IT → meeting, else support contacts."""
+    from services.whatsapp_sender import send_text_message
+    from . import config as cfg
+
+    if _is_it_tenant(wa_id, tenant_id):
+        try:
+            try:
+                from services import flow_runner
+            except ImportError:
+                from backend.services import flow_runner
+            outcome = flow_runner.start_flow(
+                wa_id, "book_callback", tenant_id=tenant_id,
+            )
+            if outcome.get("handled") and outcome.get("messages"):
+                await _send_flow_messages(wa_id, outcome.get("messages") or [])
+                logger.info(
+                    "UNKNOWN_QUERY_IT_MEETING | wa_id=%s | tenant=%s | q=%r",
+                    wa_id, tenant_id, (message or "")[:80],
+                )
+                return {
+                    "status": "meeting_flow_started",
+                    "new_state": cfg.B2C_MAIN_MENU_STATE,
+                    "context": {},
+                }
+        except Exception as exc:
+            logger.warning("IT meeting fallback failed for %s: %s", wa_id, exc)
+
+    text = _support_details_text(wa_id, tenant_id)
+    await send_text_message(wa_id, text)
+    logger.info(
+        "UNKNOWN_QUERY_SUPPORT_DETAILS | wa_id=%s | tenant=%s | q=%r",
+        wa_id, tenant_id, (message or "")[:80],
+    )
+    return {
+        "status": "support_details",
+        "new_state": cfg.B2C_MAIN_MENU_STATE,
+        "context": {},
+    }
+
 
 async def _prompt_type_hi_for_menu(wa_id: str) -> dict:
     """Guide the user to send a greeting so the main menu opens."""
@@ -976,14 +1078,8 @@ async def _fallback_to_rag(
             )
         except Exception as e:
             logger.debug(f"Knowledge gap recording failed: {e}")
-        # Unrecognized / not applicable → tell them to type hi for the menu.
-        logger.info(
-            "UNKNOWN_QUERY_PROMPT_HI | wa_id=%s | tenant=%s | q=%r",
-            wa_id,
-            tid,
-            (message or "")[:80],
-        )
-        return await _prompt_type_hi_for_menu(wa_id)
+        # Outside this tenant's data: IT → schedule a meeting; others → support contacts.
+        return await _handle_unrelated_query(wa_id, message, tenant_id=tid)
 
     # If no interactive buttons were returned, attach tenant-aware contextual follow-up buttons
     if not (interactive and interactive.get("buttons")):

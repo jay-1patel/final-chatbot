@@ -1,0 +1,3 @@
+# Company Overview
+
+Prestige Estates Projects Limited, operating as **Prestige Group**, is a listed real‑estate developer headquartered in Bangalore. With over 190 completed projects across 13 Indian cities, the company delivers residential, commercial, retail and hospitality spaces. FY 2023‑24 saw delivery of ~25.55 million sq ft and sales of ₹21,040 Cr. The group is listed on NSE and BSE and maintains a strong focus on quality, sustainability and customer service.

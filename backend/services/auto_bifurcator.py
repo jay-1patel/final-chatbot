@@ -145,6 +145,7 @@ from services.bifurcation_extract import (  # noqa: E402,F401
     _guess_vertical,
     _is_placeholder_brand_value,
     _menu_button_id,
+    _menu_items_from_vertical_defaults,
     _normalize_menu_button_key,
     _normalize_phone,
     _sanitize_business_hours,
@@ -1142,31 +1143,10 @@ class AutoBifurcator:
 
 
 
-        # If no items found, load vertical defaults
+        # If no items found, load vertical defaults (full WhatsApp list, up to 10)
 
         if len(menu_items) < 3:
-
-            v_defaults = get_vertical_defaults(vertical) or {}
-
-            def_menu = v_defaults.get("menu", {}).get("buttons", [])
-
-            for b in def_menu[:6]:
-
-                menu_items.append({
-
-                    "id": b.get("id", "menu_item"),
-
-                    "title": b.get("title", "Explore")[:24],
-
-                    "description": b.get("description", "View options")[:72],
-
-                    "section": b.get("section", "Explore")[:24],
-
-                    "action": b.get("flow") or b.get("requires_feature") or "offerings",
-
-                })
-
-
+            menu_items.extend(_menu_items_from_vertical_defaults(vertical, limit=10))
 
         # WhatsApp list menus support up to 10 rows; preserve all extracted
         # items within that limit instead of silently dropping the last two.
@@ -2753,6 +2733,29 @@ class AutoBifurcator:
                     public_url = host_via_public_base(
                         content, filename, subdir=module
                     )
+                    # Split FAQ/KB pages into derivative PDFs; keep the parent
+                    # for bifurcation (cleanup_original=False).
+                    try:
+                        from services.pdf_section_extractor import auto_extract_and_register
+                        ext_res = auto_extract_and_register(
+                            source_filepath=filepath,
+                            original_filename=filename,
+                            tenant_id=self.tenant_id,
+                            actor=self.actor,
+                            cleanup_original=False,
+                        )
+                        if ext_res.get("faq_pdf") or ext_res.get("kb_pdf"):
+                            logger.info(
+                                "AUTO_BIFURCATOR_PDF_EXTRACTED | %s | faq=%s | kb=%s",
+                                filename,
+                                ext_res.get("faq_pdf"),
+                                ext_res.get("kb_pdf"),
+                            )
+                    except Exception as sec_err:
+                        logger.warning(
+                            "Auto-extraction of PDF sections failed in auto_bifurcator: %s",
+                            sec_err,
+                        )
                 save_admin_file(
                     filename,
                     ext,

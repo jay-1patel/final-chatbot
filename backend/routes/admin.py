@@ -814,6 +814,31 @@ def _process_document_background(
                 clear_response_cache()
             except Exception:
                 pass
+
+            # Auto-split onboarding/main PDFs into FAQ + KB derivative files.
+            if ext.lower() == ".pdf" and os.path.exists(filepath):
+                try:
+                    from services.pdf_section_extractor import auto_extract_and_register
+                    extraction_result = auto_extract_and_register(
+                        source_filepath=filepath,
+                        original_filename=filename,
+                        tenant_id=tenant_id,
+                        actor={
+                            "username": "auto_extractor",
+                            "role": "system",
+                            "tenant_id": tenant_id,
+                        },
+                    )
+                    logger.info(
+                        "PDF_SECTION_EXTRACTION | %s | faq=%s | kb=%s",
+                        filename,
+                        extraction_result.get("faq_pdf"),
+                        extraction_result.get("kb_pdf"),
+                    )
+                except Exception as _ext_err:
+                    logger.warning(
+                        "PDF section extraction failed for %s: %s", filename, _ext_err
+                    )
     except Exception as exc:
         logger.error(f"ASYNC_INGESTION_FAILED | {filename}: {exc}", exc_info=True)
         update_admin_file_status(
