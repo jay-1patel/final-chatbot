@@ -56,17 +56,16 @@ RRF_K                = 60
 RRF_WEIGHTS          = {"dense": 0.6, "sparse": 0.4}
 
 
-def _resolve_tenant_id(tenant_id=None) -> str:
-    """The tenant a search is scoped to. Resolves slug or name to the database tenant ID,
-    falling back to default tenant ID so chunks match regardless of slug vs numeric id format."""
+def _canonical_tenant_id(tenant_id=None) -> str:
+    """Map a slug / name / id to the registry tenant id — never apply Active Test.
+
+    Used when comparing chunk ownership. Applying the frontend Active Test
+    override here would make every chunk look like the activated tenant and
+    leak cross-brand FAQ/KB into answers.
+    """
     tid = str(tenant_id or "").strip()
     if not tid:
-        try:
-            from shared.tenancy.resolver import resolve_default_tenant
-            _default = resolve_default_tenant()
-            tid = str(_default).strip() if _default else ""
-        except Exception:
-            tid = "1"
+        return ""
     if tid.isdigit():
         return tid
     try:
@@ -86,13 +85,34 @@ def _resolve_tenant_id(tenant_id=None) -> str:
             ).fetchone()
             if row:
                 return str(row[0])
-            # If there's only 1 active tenant in DB, use its ID
-            single = conn.execute("SELECT id FROM tenants WHERE status = 'active' LIMIT 2").fetchall()
-            if len(single) == 1:
-                return str(single[0][0])
     except Exception:
         pass
     return tid
+
+
+def _resolve_tenant_id(tenant_id=None) -> str:
+    """The tenant a search is scoped to. Resolves slug or name to the database tenant ID.
+
+    Frontend Active Test Tenant wins over DEFAULT_TENANT_ID and empty callers so
+    FAQ/KB answers reflect only the activated brand's rows. Never use this helper
+    to interpret a *chunk's* stored tenant_id — use :func:`_canonical_tenant_id`.
+    """
+    try:
+        from shared.tenancy.resolver import active_test_tenant_id
+        active = active_test_tenant_id()
+        if active:
+            tenant_id = active
+    except Exception:
+        pass
+    tid = str(tenant_id or "").strip()
+    if not tid:
+        try:
+            from shared.tenancy.resolver import resolve_default_tenant
+            _default = resolve_default_tenant()
+            tid = str(_default).strip() if _default else ""
+        except Exception:
+            tid = ""
+    return _canonical_tenant_id(tid) if tid else ""
 
 
 def _tenant_matches(meta_tid, target_tid) -> bool:
@@ -100,35 +120,47 @@ def _tenant_matches(meta_tid, target_tid) -> bool:
 
     Empty / NULL chunk tenant_ids never match a concrete tenant search — that
     previously leaked global/default rows into every Leeway-variant query.
+    Empty target also matches nothing: never search "all tenants" by accident.
+
+    Chunk and target ids are canonicalized *without* Active Test override so
+    a MakeMyTrip search cannot absorb Leeway rows (and vice versa).
     """
     if not target_tid:
-        return True
+        return False
     m_str = str(meta_tid or "").strip()
     t_str = str(target_tid or "").strip()
     if not m_str:
         return False
     if m_str == t_str:
         return True
-    # Compare resolved numeric/slug IDs when both sides resolve.
-    m_res = _resolve_tenant_id(m_str)
-    t_res = _resolve_tenant_id(t_str)
+    m_res = _canonical_tenant_id(m_str)
+    t_res = _canonical_tenant_id(t_str)
     if m_res and t_res and m_res == t_res:
         return True
     return False
 
 
 def _tenant_from_payload(payload: dict) -> str | None:
-    """Best-effort tenant for an inbound query payload: explicit tenant_id
-    first, then the user's conversation state, else None (the search then
-    falls back to the default tenant)."""
+    """Best-effort tenant for an inbound query payload.
+
+    Active Test Tenant (frontend) wins, then explicit tenant_id, then the
+    effective user routing — never a cross-tenant default.
+    """
+    try:
+        from shared.tenancy.resolver import active_test_tenant_id
+        active = active_test_tenant_id()
+        if active:
+            return active
+    except Exception:
+        pass
     tid = str(payload.get("tenant_id") or "").strip()
     if tid:
         return tid
     wa_id = payload.get("wa_id") or payload.get("from") or payload.get("phone")
     if wa_id:
         try:
-            from shared.tenancy.store import tenant_id_for_user
-            tid = tenant_id_for_user(wa_id)
+            from shared.tenancy.resolver import resolve_effective_tenant_id
+            tid = resolve_effective_tenant_id(str(wa_id))
         except Exception:
             tid = None
         if tid:
@@ -1270,6 +1302,34 @@ async def handle_faq_query(payload: dict) -> dict:
     }
     is_follow_up = len(message.split()) <= 4 or bool(query_words & follow_up_cues)
 
+    # Exact main-menu title taps (e.g. "Custom Itinerary") are not follow-ups.
+    # Expanding them with a prior "Hi" produces junk like "Hi Custom Itinerary"
+    # and can pull the wrong tenant's FAQ/KB into the answer.
+    menu_title_tap = False
+    try:
+        from shared.tenancy.loader import get_tenant_profile
+        _prof = get_tenant_profile(_resolve_tenant_id(tenant_id))
+        _needle = re.sub(
+            r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F]",
+            "",
+            (message or ""),
+        )
+        _needle = " ".join(_needle.strip().lower().split())
+        for _b in getattr(getattr(_prof, "menu", None), "buttons", None) or []:
+            _title = re.sub(
+                r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F]",
+                "",
+                getattr(_b, "title", None) or "",
+            )
+            _title = " ".join(_title.strip().lower().split())
+            if _title and _title == _needle:
+                menu_title_tap = True
+                break
+    except Exception:
+        menu_title_tap = False
+    if menu_title_tap:
+        is_follow_up = False
+
     msg_dest = _detect_destination(message)
     if (active_pkg_name or active_pkg_dest) and (not msg_dest or msg_dest == target_dest):
         if is_follow_up or active_pkg_name.lower() not in message.lower():
@@ -1279,7 +1339,21 @@ async def handle_faq_query(payload: dict) -> dict:
             logger.info(f"FAQ_QUERY_ANCHORED_PACKAGE | wa_id={wa_id} | pkg='{anchor}' -> search_query='{search_query}'")
     elif history_turns and is_follow_up:
         last_user_turn = (history_turns[-1].get("user") or "").strip()
-        if last_user_turn and last_user_turn.lower() != message.lower():
+        # Never prefix with a greeting ("Hi Custom Itinerary") — that polluted
+        # retrieval and mixed brands when Active Test Tenant was set.
+        last_is_greeting = False
+        try:
+            from routing.classifier import is_greeting
+            last_is_greeting = bool(is_greeting(last_user_turn))
+        except Exception:
+            last_is_greeting = last_user_turn.lower().strip() in {
+                "hi", "hello", "hey", "hii", "helo", "hola", "yo",
+            }
+        if (
+            last_user_turn
+            and last_user_turn.lower() != message.lower()
+            and not last_is_greeting
+        ):
             search_query = f"{last_user_turn} {message}"
             logger.info(f"FAQ_QUERY_EXPANDED | wa_id={wa_id} | from='{message}' -> to='{search_query}'")
 

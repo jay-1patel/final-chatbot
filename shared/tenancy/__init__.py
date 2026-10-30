@@ -39,7 +39,12 @@ from .records import (
     default_columns_for,
     sync_columns,
 )
-from .resolver import bind_phone_id, resolve_tenant_for_phone, resolve_tenant_from_payload
+from .resolver import (
+    active_test_tenant_id,
+    bind_phone_id,
+    resolve_tenant_for_phone,
+    resolve_tenant_from_payload,
+)
 from .schemas import (
     FEATURE_FLAGS,
     STEP_TYPES,
@@ -79,6 +84,7 @@ __all__ = [
     "lint_profile", "lint_tenant",
     # resolver
     "resolve_tenant_from_payload", "resolve_tenant_for_phone", "bind_phone_id",
+    "active_test_tenant_id",
     # gating
     "require", "is_enabled", "guard", "refusal_message", "FeatureDisabled",
     "intent_allowed", "intent_refusal",

@@ -1,14 +1,14 @@
 {
   "tenant_id": "leeway-softech",
-  "vertical": "it_software",
+  "vertical": "ecommerce",
   "display_name": "Leeway Softech",
   "brand": {
     "name": "Leeway Softech",
-    "bot_name": "Leeway Tech Advisor",
-    "tagline": "Innovative Technology. Creative Work. Trusted Delivery.",
+    "bot_name": "Leeway Assistant",
+    "tagline": "Your trusted partner for AI engineering & digital transformation",
     "website": "https://leewaysoftech.com",
     "support_email": "sales@leewaysoftech.com",
-    "support_phone": "+91 8000305305",
+    "support_phone": "+91 86907 83030",
     "signature": "Leeway Softech — At your service.",
     "legal_name": "Leeway Softech Private Limited",
     "headquarters": "Ahmedabad, Gujarat, India",
@@ -32,30 +32,30 @@
     "orders": false,
     "track_order": false,
     "returns": false,
-    "brochure_pdf": true,
+    "brochure_pdf": false,
     "distributors": false,
     "offerings": true,
     "offering_details": true,
     "lead_capture": true,
-    "quote": true,
-    "callback": true,
-    "book_appointment": true,
+    "quote": false,
+    "callback": false,
+    "book_appointment": false,
     "handoff": true,
     "faq": true,
     "kb": true,
-    "complaints": true,
+    "complaints": false,
     "campaigns": false,
     "human_handover": true,
-    "services": true,
+    "services": false,
     "payments": false,
     "products": false,
     "products_schemes": false
   },
   "vocabulary": {
-    "item_noun": "services",
-    "item_noun_singular": "service",
-    "browse_label": "Our Services",
-    "catalog_label": "Service Brochure",
+    "item_noun": "products",
+    "item_noun_singular": "product",
+    "browse_label": "Browse Products",
+    "catalog_label": "View Brochure",
     "catalog_noun": "services",
     "brochure_label": "Company Profile",
     "brochure_noun": "company profile",
@@ -70,7 +70,7 @@
   "business_hours": {
     "timezone": "Asia/Kolkata",
     "always_open": false,
-    "open": "09:30",
+    "open": "09:00",
     "close": "19:00",
     "open_days": [
       0,
@@ -193,7 +193,7 @@
       ],
       "enabled": true,
       "description": "What services / offerings we provide",
-      "answer": "• Here's what Leeway Softech offers:\n• *AI Chatbot Development* — Custom AI chatbots, FAQ/KB, human handoff, analytics | Stack: WhatsApp/Web, NLP, RAG | Tim (INR 75,000 - 3.5 Lakh)\n• *Generative AI Development* — LLM apps, agents, private RAG, evaluation and guardrails | Stack: OpenAI, LangChain, RAG, (INR 1.5 Lakh - 8 Lakh)\n• *WhatsApp Business API Integration* — Green-tick setup, bots, broadcasts, CRM sync | Stack: Meta Cloud API, templates, webhooks (INR 25,000 - 1.5 Lakh)\n• *CPaaS / Omnichannel Messaging* — Unified messaging APIs, campaigns, delivery reports (120+ projects) | Stack: SMS, Email, W (Pay per use / Platform plan)\n• *Enterprise Software Development* — Custom enterprise apps, workflows, SSO, audit trails | Stack: Node, Python, .NET, microser (INR 3 Lakh - 25 Lakh)\n• *Web & Mobile App Development* — Portals, iOS and Android apps, push, offline (60+ apps) | Stack: React, Next.js, Flutter, (INR 1 Lakh - 12 Lakh)\n• *Digital Growth & Marketing* — Technical SEO, growth marketing, authority building (200+ campaigns) | Stack: SEO, content (Campaign / retainer)\n• *Enterprise Hosting & Security* — Pen-testing, encryption, 24/7 monitoring, compliance (0 breaches) | Stack: Hosting, SSL, a (From INR 50,000 / month)\n• Ask for details on any item, or tap *Get a Quote* / *Request a Callback*."
+      "answer": "• Here's what Leeway Softech offers:\n• *Custom AI & Generative LLMs* — Custom AI & Generative LLMs\n• *WhatsApp Business CPaaS* — WhatsApp Business CPaaS\n• *Custom SaaS & App Eng* — Custom SaaS & App Eng\n• *Cloud & DevOps Setup* — Cloud & DevOps Setup\n• Ask for details on any item, or tap *Get a Quote* / *Request a Callback*."
     },
     {
       "name": "pricing-enquiry",
@@ -211,31 +211,27 @@
       ],
       "enabled": true,
       "description": "Pricing and packages",
-      "answer": "• Pricing depends on scope, volume, and packaging.\n• *AI Chatbot Development* — Custom AI chatbots, FAQ/KB, human handoff, analytics | Stack: WhatsApp/Web, NLP, RAG | Tim (INR 75,000 - 3.5 Lakh)\n• *Generative AI Development* — LLM apps, agents, private RAG, evaluation and guardrails | Stack: OpenAI, LangChain, RAG, (INR 1.5 Lakh - 8 Lakh)\n• *WhatsApp Business API Integration* — Green-tick setup, bots, broadcasts, CRM sync | Stack: Meta Cloud API, templates, webhooks (INR 25,000 - 1.5 Lakh)\n• *CPaaS / Omnichannel Messaging* — Unified messaging APIs, campaigns, delivery reports (120+ projects) | Stack: SMS, Email, W (Pay per use / Platform plan)\n• *Enterprise Software Development* — Custom enterprise apps, workflows, SSO, audit trails | Stack: Node, Python, .NET, microser (INR 3 Lakh - 25 Lakh)\n• *Web & Mobile App Development* — Portals, iOS and Android apps, push, offline (60+ apps) | Stack: React, Next.js, Flutter, (INR 1 Lakh - 12 Lakh)\n• *Digital Growth & Marketing* — Technical SEO, growth marketing, authority building (200+ campaigns) | Stack: SEO, content (Campaign / retainer)\n• *Enterprise Hosting & Security* — Pen-testing, encryption, 24/7 monitoring, compliance (0 breaches) | Stack: Hosting, SSL, a (From INR 50,000 / month)\n• Share your requirements and we'll send a tailored quote — tap *Get a Quote*."
+      "answer": "• Pricing depends on scope, volume, and packaging.\n• *Custom AI & Generative LLMs* — Custom AI & Generative LLMs\n• *WhatsApp Business CPaaS* — WhatsApp Business CPaaS\n• *Custom SaaS & App Eng* — Custom SaaS & App Eng\n• *Cloud & DevOps Setup* — Cloud & DevOps Setup\n• Share your requirements and we'll send a tailored quote — tap *Get a Quote*."
     }
   ],
   "guardrails": {
     "never_state": [
-      "true"
+      "Never offer unauthorized commercial discounts; Never promise unlisted completion dates; Never ask for server credentials or passwords."
     ],
     "escalate_keywords": [
       "human",
       "agent",
       "manager",
       "dispute",
-      "representative",
-      "fraud",
-      "lawsuit",
-      "data breach",
-      "urgent outage"
+      "representative"
     ],
-    "escalation_message": "Connecting you to a Leeway specialist now.",
+    "escalation_message": "Transfer to a senior solutions advisor when user asks for 'human', 'agent', or expresses a technical escalation / dispute.",
     "handoff_keywords": [
       "human",
       "agent",
       "person"
     ],
-    "tone": "professional",
+    "tone": "Consultative, professional, technically accurate, and brand-aligned",
     "forbidden_terms": [
       "OTP",
       "password",
@@ -267,13 +263,13 @@
     },
     {
       "name": "book_callback",
-      "success_message": "Thank you! Your consultation request has been scheduled with Leeway Tech Advisor."
+      "success_message": "Thank you! Your consultation request has been scheduled with Leeway Assistant."
     }
   ],
   "menu": {
     "key": "kb_main",
     "header": "Leeway Softech",
-    "body": "Welcome to Leeway Softech — how can we help today?",
+    "body": "\"Welcome to Leeway Softech! How can I assist you with your AI & software needs today?\"",
     "footer": "Select an option or type your query directly",
     "button_text": "Select Option",
     "buttons": [
@@ -368,19 +364,54 @@
         "flow": "raise_ticket"
       },
       {
-        "id": "menu_human",
-        "title": "Talk to Human",
-        "description": "Chat with a Leeway specialist",
-        "section": "📞 Talk To Us",
-        "icon": "🙋",
-        "sort_order": 9,
+        "id": "our_offerings",
+        "title": "Our Offerings",
+        "description": "Browse AI engineering, CPaaS, SaaS & cloud services",
+        "section": "Offerings",
+        "sort_order": 1,
+        "enabled": true,
+        "intent": "offerings"
+      },
+      {
+        "id": "pricing_quote",
+        "title": "Pricing & Quote",
+        "description": "Request custom estimates tailored to your project scope",
+        "section": "Pricing",
+        "sort_order": 2,
+        "enabled": true,
+        "flow": "get_quote"
+      },
+      {
+        "id": "schedule_a_callback",
+        "title": "Schedule a Callback",
+        "description": "Connect directly with an AI & Software Specialist",
+        "section": "Contact",
+        "sort_order": 3,
         "enabled": true,
         "flow": "book_callback"
+      },
+      {
+        "id": "knowledge_faqs",
+        "title": "Knowledge & FAQs",
+        "description": "Common technical questions, SLAs & ISO security compliance",
+        "section": "FAQs",
+        "sort_order": 4,
+        "enabled": true,
+        "intent": "knowledge_faqs"
+      },
+      {
+        "id": "customer_support",
+        "title": "Customer Support",
+        "description": "Raise a support ticket or speak with a live engineer",
+        "section": "Support",
+        "sort_order": 5,
+        "enabled": true,
+        "flow": "raise_ticket"
       }
     ]
   },
   "prompt": {
-    "tone": "professional and confident",
+    "tone": "Consultative, professional, technically accurate, and brand-aligned",
     "keywords": [
       "government",
       "bfsi",
@@ -404,9 +435,9 @@
       "retainers"
     ],
     "domain_specific_topics": "Primary industries: Government, BFSI, Education, Hospitality, Enterprise; Core capabilities: AI, software, CPaaS, WhatsApp API, web, mobile, cloud; Lead context: Use case, timeline, budget band, existing stack; Delivery model: Fixed-price, T&M;, dedicated pods, retainers",
-    "industry": "software and IT services",
-    "listing_type": "services or solutions",
-    "domain_specific_queries": "services, technologies, timelines, pricing, or support"
+    "industry": "retail and e-commerce",
+    "listing_type": "products",
+    "domain_specific_queries": "products, prices, stock, delivery, returns, or payment"
   },
   "waba_phone_hint": "+91 8690783030",
   "domain_answers": [

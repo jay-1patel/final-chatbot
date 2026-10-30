@@ -51,6 +51,19 @@ def _active_test_override() -> Optional[str]:
     return None
 
 
+def active_test_tenant_id() -> Optional[str]:
+    """Frontend-activated tenant, or None.
+
+    When set, this is the *only* tenant the bot may answer as — it overrides
+    DEFAULT_TENANT_ID, phone bindings, and stale per-user stamps. Admin APIs
+    that pass an explicit tenant for editing still use that explicit id.
+    """
+    override = _active_test_override()
+    if not override:
+        return None
+    return _registered_active_tenant(override)
+
+
 def canonical_tenant_id(tenant_id: Optional[str]) -> Optional[str]:
     """Map id / slug / display aliases to the tenant registry slug (or id)."""
     raw = str(tenant_id or "").strip()
@@ -97,11 +110,11 @@ def resolve_effective_tenant_id(
     inactive tenants return None; inbound traffic must never default to
     another tenant.
     """
-    override = _active_test_override() if allow_test_override else None
-    if override:
-        active_override = _registered_active_tenant(override)
+    if allow_test_override:
+        active_override = active_test_tenant_id()
         if active_override:
-            logger.info(
+            # One debug line per call is enough; INFO spam made logs unreadable.
+            logger.debug(
                 "ACTIVE_TEST_TENANT | routing wa_id=%s to %s (ignoring hint=%s)",
                 wa_id or "?", active_override, tenant_id,
             )
@@ -122,15 +135,13 @@ def resolve_tenant_from_payload(payload: Dict[str, Any]) -> Optional[str]:
     immediately changes which bot answers, even if SEND2 / Meta phone ids are
     still bound to another tenant. With no override, route by phone binding.
     """
-    override = _active_test_override()
-    if override:
-        active_override = _registered_active_tenant(override)
-        if active_override:
-            logger.info(
-                "ACTIVE_TEST_TENANT | routing inbound webhook to %s",
-                active_override,
-            )
-            return active_override
+    active_override = active_test_tenant_id()
+    if active_override:
+        logger.debug(
+            "ACTIVE_TEST_TENANT | routing inbound webhook to %s",
+            active_override,
+        )
+        return active_override
 
     for phone_id in _extract_phone_ids(payload or {}):
         active_tenant = resolve_tenant_for_phone(
@@ -197,7 +208,7 @@ def resolve_default_tenant() -> Optional[str]:
     """The tenant an unrecognised request belongs to.
 
     Resolution order:
-      1. ``_active_test_override()`` if active test tenant is toggled
+      1. Frontend Active Test Tenant (absolute override of DEFAULT_TENANT_ID)
       2. ``DEFAULT_TENANT_ID`` from the environment, if that tenant is registered
       3. the single active tenant, when exactly one is registered
 
@@ -205,9 +216,9 @@ def resolve_default_tenant() -> Optional[str]:
     and none is configured, we return None instead of guessing (or falling back
     to a leftover "default"/leeway pack). Callers must handle None.
     """
-    override = _active_test_override()
-    if override:
-        return override
+    active_override = active_test_tenant_id()
+    if active_override:
+        return active_override
 
     from . import store
 

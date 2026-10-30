@@ -88,6 +88,64 @@ def _clean(text: str) -> str:
     return " ".join((text or "").strip().lower().split())
 
 
+def _tenant_menu_titles(tenant_id: str | None) -> set[str]:
+    """Cleaned enabled menu button titles for one tenant (empty on failure)."""
+    if not tenant_id:
+        return set()
+    try:
+        from shared.tenancy.loader import get_tenant_profile
+        profile = get_tenant_profile(tenant_id)
+        buttons = getattr(getattr(profile, "menu", None), "buttons", None) or []
+    except Exception:
+        return set()
+    titles: set[str] = set()
+    for button in buttons:
+        if getattr(button, "enabled", True) is False:
+            continue
+        title = _clean(getattr(button, "title", None) or "")
+        if title:
+            titles.add(title)
+    return titles
+
+
+def _is_stale_foreign_menu_tap(message: str, tenant_id: str | None) -> bool:
+    """True when the tap matches another tenant's menu but not the active one.
+
+    Single-number testing leaves old WhatsApp list messages on screen. Tapping
+    an old \"Our Services\" / \"Explore Offerings\" row while a different brand
+    (or a republished menu) is active must re-home to the current menu.
+    """
+    needle = _clean(message)
+    if not needle or not tenant_id:
+        return False
+    current = _tenant_menu_titles(tenant_id)
+    if needle in current:
+        return False
+    try:
+        from shared.tenancy import store
+        others = store.list_tenants() or []
+    except Exception:
+        others = []
+    for record in others:
+        other_id = str(record.get("slug") or record.get("id") or "").strip()
+        if not other_id or other_id == tenant_id:
+            continue
+        if needle in _tenant_menu_titles(other_id):
+            return True
+    # Same phone, same tenant after vertical/menu republish: old browse titles
+    # like \"Our Services\" still open if we only check other tenants.
+    try:
+        try:
+            from services.offerings_flow import _OFFERING_TITLE_PHRASES
+        except ImportError:
+            from backend.services.offerings_flow import _OFFERING_TITLE_PHRASES
+        if needle in _OFFERING_TITLE_PHRASES:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _cfg():
     from . import config
     return config
@@ -298,6 +356,22 @@ async def handle_b2c_message(
     # ── Main menu / start ─────────────────────────────────────────────────────
     if state == cfg.B2C_MAIN_MENU_STATE or not state:
         clean_msg = _clean(message)
+        # Old list rows from a previous active-test tenant stay on WhatsApp.
+        # Re-home the user onto the current brand menu instead of answering
+        # with the wrong catalogue / a mixed-brand experience.
+        if _is_stale_foreign_menu_tap(message, tenant_id):
+            logger.info(
+                "STALE_FOREIGN_MENU_TAP | wa_id=%s | tenant=%s | q=%r",
+                wa_id, tenant_id, (message or "")[:80],
+            )
+            return await _send_main_menu(
+                wa_id,
+                tenant_id=tenant_id,
+                body_prefix=(
+                    "That option was from a previous brand menu. "
+                    "Here is the *current* menu:\n\n"
+                ),
+            )
         if clean_msg in ("main menu", "menu", "start", "hi", "hello", "hey", "show options", "options") or message in ("Main Menu", "main_menu", "menu_main"):
             try:
                 try:
@@ -976,8 +1050,8 @@ async def _kb_answer(wa_id: str, query: str, tenant_id: str | None = None) -> st
     # Resolve tenant_id if not provided
     if tenant_id is None:
         try:
-            from shared.tenancy.resolver import resolve_tenant_for_user
-            tenant_id = resolve_tenant_for_user(wa_id)
+            from shared.tenancy.resolver import resolve_effective_tenant_id
+            tenant_id = resolve_effective_tenant_id(wa_id)
         except Exception:
             tenant_id = None
     

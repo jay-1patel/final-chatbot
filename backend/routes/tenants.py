@@ -172,6 +172,72 @@ def _public_tenant(record: dict) -> dict:
     return out
 
 
+def _latest_test_wa_id() -> Optional[str]:
+    """Most recent real WhatsApp number from chat history (skip simulator ids)."""
+    try:
+        with get_db_context() as conn:
+            row = conn.execute(
+                """
+                SELECT wa_id FROM chat_history
+                WHERE wa_id GLOB '[0-9]*' AND length(wa_id) >= 10
+                ORDER BY id DESC LIMIT 1
+                """
+            ).fetchone()
+        if not row:
+            return None
+        wa_id = str(row["wa_id"] if hasattr(row, "keys") else row[0] or "").strip()
+        return wa_id or None
+    except Exception as exc:
+        logger.debug("latest test wa_id lookup failed: %s", exc)
+        return None
+
+
+def _push_active_test_menu(tenant_id: str) -> Optional[str]:
+    """Send the newly activated tenant menu to the last WhatsApp tester."""
+    wa_id = _latest_test_wa_id()
+    if not wa_id:
+        return None
+
+    from bots.customer_b2c.menus import get_main_menu
+    from routing.whatsapp import send_whatsapp_list_menu, send_whatsapp_message
+    from routing.whatsapp import send_whatsapp_interactive, normalize_reply_buttons
+    from shared.tenancy.loader import get_tenant_profile
+
+    profile = get_tenant_profile(tenant_id)
+    brand = (
+        (profile.brand.name if profile and profile.brand else None)
+        or getattr(profile, "display_name", None)
+        or tenant_id
+    )
+    send_whatsapp_message(
+        wa_id,
+        f"✅ Now testing *{brand}*. Previous brand menus no longer apply — use this one:",
+        tenant_id=tenant_id,
+    )
+    menu = get_main_menu(wa_id, tenant_id=tenant_id)
+    if menu.get("type") == "buttons":
+        send_whatsapp_interactive(
+            wa_id,
+            menu.get("text", "Options"),
+            normalize_reply_buttons(menu.get("buttons", [])),
+            tenant_id=tenant_id,
+        )
+    else:
+        send_whatsapp_list_menu(
+            to=wa_id,
+            header_text=menu.get("header", brand),
+            body_text=menu.get("body", "What would you like to explore today?"),
+            button_text=menu.get("button_text", "Show Options"),
+            sections=menu.get("sections", []),
+            tenant_id=tenant_id,
+        )
+    logger.info(
+        "ACTIVE_TEST_TENANT_MENU_PUSHED | tenant=%s | wa_id=%s",
+        tenant_id, wa_id,
+    )
+    return wa_id
+
+
 # ── registry ──────────────────────────────────────────────────────────────
 
 @router.get("")
@@ -213,7 +279,15 @@ def set_current_active_test_tenant(
         "ACTIVE_TEST_TENANT_CHANGED | tenant=%s | by=%s",
         stored, current_admin.get("username"),
     )
-    return {"ok": True, "active_test_tenant": stored}
+    # Push the new brand menu to the last WhatsApp tester so old list rows from
+    # the previous tenant are not the latest message on screen.
+    pushed_to = None
+    if stored:
+        try:
+            pushed_to = _push_active_test_menu(stored)
+        except Exception as exc:
+            logger.warning("ACTIVE_TEST_TENANT menu push failed: %s", exc)
+    return {"ok": True, "active_test_tenant": stored, "menu_pushed_to": pushed_to}
 
 
 @router.post("/auto-onboard-preview")

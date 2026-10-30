@@ -60,6 +60,21 @@ class OfferingsRequestTests(unittest.TestCase):
                     msg=f"should match browse title {title!r}",
                 )
 
+    def test_foreign_browse_title_ignored_when_profile_has_row(self):
+        # Ecommerce Leeway menu says \"Our Offerings\"; an old WhatsApp list
+        # still showing \"Our Services\" must NOT open the catalogue.
+        keys = {"browse_offerings", "our offerings", "Our Offerings"}
+        with patch.object(offerings_flow, "_offerings_button_keys", return_value=keys):
+            self.assertFalse(
+                offerings_flow.is_offerings_request("tid", "Our Services")
+            )
+            self.assertFalse(
+                offerings_flow.is_offerings_request("tid", "🛠️ Our Services")
+            )
+            self.assertTrue(
+                offerings_flow.is_offerings_request("tid", "Our Offerings")
+            )
+
     def test_brochure_button_not_treated_as_browse(self):
         btn = type("B", (), {
             "enabled": True, "id": "menu_brochure", "title": "Brochure",

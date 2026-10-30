@@ -26,10 +26,21 @@ _kb_tenant_indexes: Dict[str, tuple] = {}
 
 
 def _resolve_tenant_id(tenant_id=None) -> str:
-    """The tenant a search/write is scoped to. Falls back to the registered
-    default tenant or active test tenant so legacy callers keep serving the
-    intended data instead of leaking across tenants."""
+    """The tenant a search/write is scoped to.
+
+    Frontend Active Test Tenant fills empty callers (bot paths) so KB answers
+    cannot fall back to another brand. Explicit tenant_id from admin uploads
+    is preserved so publishing to brand B still works while Active Test is A.
+    """
     tid = str(tenant_id or "").strip()
+    if not tid:
+        try:
+            from shared.tenancy.resolver import active_test_tenant_id
+            active = active_test_tenant_id()
+            if active:
+                tid = str(active).strip()
+        except Exception:
+            pass
     if not tid:
         try:
             from shared.tenancy.resolver import resolve_default_tenant

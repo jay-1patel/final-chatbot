@@ -49,16 +49,25 @@ def get_main_menu(wa_id: str = "", tenant_id: Optional[str] = None) -> dict:
             if p.menu and p.menu.body:
                 body_text = p.menu.body
             if p.menu and p.menu.buttons:
-                sorted_buttons = sorted(p.menu.buttons, key=lambda b: getattr(b, "sort_order", 0))
-                for b in sorted_buttons:
-                    if getattr(b, "enabled", True):
-                        title = (getattr(b, "title", None) or "").strip()[:24]
-                        desc = (getattr(b, "description", None) or "").strip()[:72]
-                        section = (getattr(b, "section", None) or "General").strip()[:24]
-                        icon = (getattr(b, "icon", None) or "").strip()
-                        bid = getattr(b, "id", None) or f"menu_{title.lower().replace(' ', '_')}"
-                        if title:
-                            items.append(MenuItem(id=bid, title=title, description=desc, section=section, icon=icon))
+                # Honor feature gates (and skip title-less kit leftovers). One
+                # section keeps WhatsApp under its 3-section limit.
+                visible = p.menu.visible_buttons(p.features)
+                for b in visible:
+                    title = (getattr(b, "title", None) or "").strip()[:24]
+                    if not title:
+                        continue
+                    desc = (getattr(b, "description", None) or "").strip()[:72]
+                    icon = (getattr(b, "icon", None) or "").strip()
+                    bid = getattr(b, "id", None) or f"menu_{title.lower().replace(' ', '_')}"
+                    items.append(
+                        MenuItem(
+                            id=bid,
+                            title=title,
+                            description=desc,
+                            section="Options",
+                            icon=icon,
+                        )
+                    )
     except Exception as e:
         logger.warning(f"Could not load profile menu for tenant '{resolved_tid}': {e}")
 

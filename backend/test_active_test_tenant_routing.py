@@ -12,6 +12,8 @@ for path in (BACKEND_DIR, PROJECT_ROOT):
         sys.path.insert(0, path)
 
 from shared.tenancy.resolver import (
+    active_test_tenant_id,
+    resolve_default_tenant,
     resolve_effective_tenant_id,
     resolve_tenant_from_payload,
     resolve_tenant_for_phone,

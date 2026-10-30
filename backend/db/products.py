@@ -23,19 +23,21 @@ def _resolve_tenant(tenant_id: str = None) -> str:
     """Resolve the effective tenant using the same chain as WhatsApp routing.
 
     Resolution order:
-      1. Explicit ``tenant_id`` argument
-      2. Request-scoped tenant (set by auth / route layer)
-      3. Active test tenant (single-number testing mode)
-      4. Single active tenant or DEFAULT_TENANT_ID — never falls back to a
-         synthetic "default" when multiple tenants exist.
+      1. Frontend Active Test Tenant (when set — overrides empty callers)
+      2. Explicit ``tenant_id`` argument (admin pages editing one brand)
+      3. Single active tenant or DEFAULT_TENANT_ID — never a synthetic "default"
 
-    Returns an empty string when no tenant can be resolved (never returns
-    a stale test-override value from DB).
+    Returns an empty string when no tenant can be resolved.
     """
+    try:
+        from shared.tenancy.resolver import active_test_tenant_id
+        active = active_test_tenant_id()
+        if active and not str(tenant_id or "").strip():
+            return str(active).strip()
+    except Exception:
+        pass
     if str(tenant_id or "").strip():
         return str(tenant_id).strip()
-    # Defer to the central resolver which handles request-scope + test
-    # override + single-active-all-in-one.
     try:
         from shared.tenancy.resolver import resolve_default_tenant
         val = resolve_default_tenant()
@@ -55,10 +57,14 @@ def _resolve_tenant_ids(tenant_id: str = None) -> list:
     raw = str(tenant_id or "").strip()
     if not raw:
         try:
-            from shared.tenancy.resolver import resolve_default_tenant
-            val = resolve_default_tenant()
-            if val:
-                raw = str(val).strip()
+            from shared.tenancy.resolver import active_test_tenant_id, resolve_default_tenant
+            active = active_test_tenant_id()
+            if active:
+                raw = str(active).strip()
+            else:
+                val = resolve_default_tenant()
+                if val:
+                    raw = str(val).strip()
         except Exception:
             raw = os.environ.get("DEFAULT_TENANT_ID", "") or ""
 

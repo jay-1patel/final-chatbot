@@ -53,6 +53,19 @@ FEATURE_FLAGS = (
     "human_handover",
 )
 
+# Menu / intent rows that declare a flow must keep that flow's feature live.
+# Kits often ship ``Custom Itinerary → get_quote`` while leaving ``quote=false``,
+# which shows the button then dumps the tap into FAQ.
+_FLOW_FEATURE_HINTS: Dict[str, str] = {
+    "get_quote": "quote",
+    "book_callback": "callback",
+    "book_appointment": "book_appointment",
+    "enquire": "lead_capture",
+    "raise_ticket": "complaints",
+    "place_order": "orders",
+    "track_order": "track_order",
+}
+
 VERTICALS = (
     "ecommerce",
     "it_software",
@@ -588,6 +601,8 @@ class MenuSpec(_Base):
         for b in self.buttons:
             if not b.enabled:
                 continue
+            if not (getattr(b, "title", None) or "").strip():
+                continue
             if b.requires_feature and not features.is_on(b.requires_feature):
                 continue
             if b.out_of_hours_only and in_business_hours:
@@ -790,6 +805,42 @@ class TenantProfile(_Base):
         if dupes:
             raise ValueError(f"duplicate intent names: {dupes}")
         return v
+
+    @model_validator(mode="after")
+    def _sync_features_from_menu_flows(self):
+        """Turn on features required by published menu/intent flows.
+
+        A visible ``Custom Itinerary`` row with ``flow=get_quote`` must not be
+        blocked by ``features.quote=false`` — that path falls through to FAQ and
+        mixes tenant answers.
+        """
+        flow_by_name = {f.name: f for f in self.flows}
+
+        def _enable_for_flow(flow_name: Optional[str]) -> None:
+            name = (flow_name or "").strip()
+            if not name:
+                return
+            flow = flow_by_name.get(name)
+            flag = (
+                ((flow.requires_feature if flow else None) or "").strip()
+                or _FLOW_FEATURE_HINTS.get(name)
+            )
+            if not flag or flag not in FEATURE_FLAGS:
+                return
+            if not self.features.is_on(flag):
+                setattr(self.features, flag, True)
+
+        for button in self.menu.buttons:
+            if getattr(button, "enabled", True) is False:
+                continue
+            _enable_for_flow(getattr(button, "flow", None))
+
+        for intent in self.intents:
+            if not getattr(intent, "enabled", True):
+                continue
+            _enable_for_flow(getattr(intent, "flow", None))
+
+        return self
 
     # ── lookups ───────────────────────────────────────────────────────────
     def flow(self, name: str) -> Optional[FlowSpec]:

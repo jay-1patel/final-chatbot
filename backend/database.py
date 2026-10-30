@@ -1792,18 +1792,37 @@ def _default_tenant_id(conn) -> str:
     if len(rows) == 1:
         return rows[0]["id"]
     if rows:
-        # Ambiguous. Pick deterministically and say so: the alternative is
-        # leaving content owned by a tenant that does not exist, which makes it
-        # invisible to every tenant-scoped search. Re-running init_db after
-        # DEFAULT_TENANT_ID is set re-points these rows, because the repair
-        # below also re-tags rows owned by unknown tenants.
+        # Ambiguous multi-tenant DB: never silently claim untagged rows for the
+        # alphabetically first tenant (that mixed Leeway FAQ into MMT tests).
+        # Prefer the active-test tenant when set; otherwise leave a sentinel so
+        # the backfill only repairs truly orphaned ids, not cross-brand content.
+        try:
+            active = conn.execute(
+                "SELECT value FROM app_settings WHERE key = 'active_test_tenant'"
+            ).fetchone()
+            active_tid = (
+                str(active["value"] if hasattr(active, "keys") else active[0] or "").strip()
+                if active else ""
+            )
+            if active_tid and any(
+                (r["id"] if hasattr(r, "keys") else r[0]) == active_tid for r in rows
+            ):
+                logger.warning(
+                    "DEFAULT_TENANT_ID is not set and %d tenants are registered; "
+                    "using active_test_tenant=%r for untagged content backfill. "
+                    "Set DEFAULT_TENANT_ID to pin this permanently.",
+                    len(rows), active_tid,
+                )
+                return active_tid
+        except Exception:
+            pass
         logger.warning(
             "DEFAULT_TENANT_ID is not set and %d tenants are registered; "
-            "tagging untagged content as %r. Set DEFAULT_TENANT_ID and re-run "
-            "init_db to correct it.",
-            len(rows), rows[0]["id"],
+            "leaving untagged content alone (no auto-claim). Set "
+            "DEFAULT_TENANT_ID and re-run init_db to assign orphans.",
+            len(rows),
         )
-        return rows[0]["id"]
+        return ""
     return configured or "default"
 
 
@@ -1833,59 +1852,65 @@ def _init_embedding_tenancy(conn):
     # longer registered, so setting DEFAULT_TENANT_ID and re-running init_db
     # re-points previously mis-tagged data.
     resolved = _default_tenant_id(conn)
-    for table in ("cached_embeddings", "faq_dataset", "knowledge_base",
-                  "admin_files", "admin_chat_messages", "campaigns", "distributors",
-                  "chat_history", "complaints"):
-        cur = conn.execute(
-            f"UPDATE {table} SET tenant_id = ? "
-            f"WHERE tenant_id IS NULL OR TRIM(tenant_id) = '' "
-            f"   OR tenant_id NOT IN (SELECT id FROM tenants)",
-            (resolved,),
+    if not resolved:
+        logger.info(
+            "content tenant backfill skipped: DEFAULT_TENANT_ID unset with "
+            "multiple tenants (refusing to auto-claim rows)"
         )
-        if cur.rowcount:
-            logger.info("%s: tagged %s rows as %s", table, cur.rowcount, resolved)
-    # products is special: UNIQUE(tenant_id, slug) is enforced (see
-    # _migrate_products_per_tenant_slug), and NULL tenant ids are distinct under
-    # UNIQUE — so a blanket re-tag could force two same-slug rows into one
-    # tenant and crash init_db. Re-tag row by row; on collision, suffix the slug
-    # rather than dropping data or failing startup.
-    stray = conn.execute(
-        "SELECT id, slug FROM products "
-        "WHERE tenant_id IS NULL OR TRIM(tenant_id) = '' "
-        "   OR tenant_id NOT IN (SELECT id FROM tenants) ORDER BY id"
-    ).fetchall()
-    moved = 0
-    for row in stray:
-        try:
-            conn.execute(
-                "UPDATE products SET tenant_id = ? WHERE id = ?",
-                (resolved, row["id"]),
+    else:
+        for table in ("cached_embeddings", "faq_dataset", "knowledge_base",
+                      "admin_files", "admin_chat_messages", "campaigns", "distributors",
+                      "chat_history", "complaints"):
+            cur = conn.execute(
+                f"UPDATE {table} SET tenant_id = ? "
+                f"WHERE tenant_id IS NULL OR TRIM(tenant_id) = '' "
+                f"   OR tenant_id NOT IN (SELECT id FROM tenants)",
+                (resolved,),
             )
-            moved += 1
-            continue
-        except sqlite3.IntegrityError:
-            pass
-        base = (row["slug"] or "product").strip() or "product"
-        for k in range(1, 100):
-            candidate = (f"{base}-retagged-{row['id']}" if k == 1
-                         else f"{base}-retagged-{row['id']}-{k}")
+            if cur.rowcount:
+                logger.info("%s: tagged %s rows as %s", table, cur.rowcount, resolved)
+        # products is special: UNIQUE(tenant_id, slug) is enforced (see
+        # _migrate_products_per_tenant_slug), and NULL tenant ids are distinct under
+        # UNIQUE — so a blanket re-tag could force two same-slug rows into one
+        # tenant and crash init_db. Re-tag row by row; on collision, suffix the slug
+        # rather than dropping data or failing startup.
+        stray = conn.execute(
+            "SELECT id, slug FROM products "
+            "WHERE tenant_id IS NULL OR TRIM(tenant_id) = '' "
+            "   OR tenant_id NOT IN (SELECT id FROM tenants) ORDER BY id"
+        ).fetchall()
+        moved = 0
+        for row in stray:
             try:
                 conn.execute(
-                    "UPDATE products SET tenant_id = ?, slug = ? WHERE id = ?",
-                    (resolved, candidate, row["id"]),
+                    "UPDATE products SET tenant_id = ? WHERE id = ?",
+                    (resolved, row["id"]),
                 )
                 moved += 1
-                break
-            except sqlite3.IntegrityError:
                 continue
-        else:
-            logger.warning(
-                "products id=%s: cannot re-tag to %s without a slug collision; "
-                "left untagged", row["id"], resolved,
-            )
-    if moved:
-        logger.info("products: tagged %s rows as %s (collision-safe)", moved, resolved)
-    logger.info("content tenant backfill target: %s", resolved)
+            except sqlite3.IntegrityError:
+                pass
+            base = (row["slug"] or "product").strip() or "product"
+            for k in range(1, 100):
+                candidate = (f"{base}-retagged-{row['id']}" if k == 1
+                             else f"{base}-retagged-{row['id']}-{k}")
+                try:
+                    conn.execute(
+                        "UPDATE products SET tenant_id = ?, slug = ? WHERE id = ?",
+                        (resolved, candidate, row["id"]),
+                    )
+                    moved += 1
+                    break
+                except sqlite3.IntegrityError:
+                    continue
+            else:
+                logger.warning(
+                    "products id=%s: cannot re-tag to %s without a slug collision; "
+                    "left untagged", row["id"], resolved,
+                )
+        if moved:
+            logger.info("products: tagged %s rows as %s (collision-safe)", moved, resolved)
+        logger.info("content tenant backfill target: %s", resolved)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS ix_cached_embeddings_tenant "
         "ON cached_embeddings(tenant_id)"

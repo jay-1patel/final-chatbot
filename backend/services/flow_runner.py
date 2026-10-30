@@ -464,10 +464,22 @@ def flow_for_button(wa_id: str, button_id: str, tenant_id=None):
         )
         if matched and getattr(b, "flow", None):
             flow = profile.flow(b.flow)
-            if flow and (not flow.requires_feature or profile.feature_on(flow.requires_feature)):
+            # Published menu rows are authoritative: if the user can see/tap the
+            # button, start its flow. Feature flags are synced from menu flows
+            # on profile load; do not dump the tap into FAQ/RAG.
+            if flow:
+                if flow.requires_feature and not profile.feature_on(flow.requires_feature):
+                    logger.warning(
+                        "Button %s starts flow %s with feature %s off — "
+                        "honoring menu tap anyway",
+                        raw_id, b.flow, flow.requires_feature,
+                    )
                 return flow.name
-            logger.info("Button %s wants flow %s but its feature is off — "
-                        "falling through to the default pipeline", raw_id, b.flow)
+            logger.info(
+                "Button %s wants flow %s but flow is missing from profile — "
+                "falling through to the default pipeline",
+                raw_id, b.flow,
+            )
 
     # Direct flow lookup by flow name
     direct_flow = profile.flow(clean_id) or profile.flow(raw_id)

@@ -160,9 +160,22 @@ async def _process_captured_message(wa_id: str, message: str, tenant_id: str = N
 
         set_request_tenant(effective_tenant)
         touch_customer(effective_tenant, wa_id, "")
-        logger.info("ORCH_TENANT | wa_id=%s | tenant=%s", wa_id, effective_tenant)
+        try:
+            from shared.tenancy.resolver import active_test_tenant_id
+            _active = active_test_tenant_id()
+        except Exception:
+            _active = None
+        if _active and _active == effective_tenant:
+            logger.info(
+                "ORCH_TENANT | wa_id=%s | tenant=%s | source=active_test_tenant",
+                wa_id, effective_tenant,
+            )
+        else:
+            logger.info("ORCH_TENANT | wa_id=%s | tenant=%s", wa_id, effective_tenant)
         try:
             from backend.services import state_manager as sm
+            # Stamp this WhatsApp user to the activated tenant so FAQ/KB
+            # never fall back to another brand mid-conversation.
             sm.set_tenant(wa_id, effective_tenant)
         except Exception:
             try:
@@ -468,6 +481,36 @@ async def _process_captured_message(wa_id: str, message: str, tenant_id: str = N
                 }
         except Exception as exc:
             logger.debug(f"brochure request failed for {wa_id}: {exc}")
+
+        # 1b2. Stale WhatsApp list rows from a previous brand / old menu publish.
+        # Must run *before* offerings browse — otherwise a foreign \"Our Services\"
+        # tap still opens the active tenant catalogue (feels like multi-reply).
+        try:
+            from bots.customer_b2c.workflows import _is_stale_foreign_menu_tap
+            if _is_stale_foreign_menu_tap(message, tenant_id):
+                logger.info(
+                    "STALE_FOREIGN_MENU_TAP | wa_id=%s | tenant=%s | q=%r",
+                    wa_id, tenant_id, (message or "")[:80],
+                )
+                from bots.customer_b2c.workflows import _send_main_menu
+                await _send_main_menu(
+                    wa_id,
+                    tenant_id=tenant_id,
+                    body_prefix=(
+                        "That option was from a previous brand menu. "
+                        "Here is the *current* menu:\n\n"
+                    ),
+                )
+                return {
+                    "status": "processed",
+                    "messages": drain_captured(),
+                    "new_state": "B2C_MAIN_MENU",
+                    "human_handover": False,
+                    "user_type": "b2c",
+                    "error": None,
+                }
+        except Exception as exc:
+            logger.debug(f"stale foreign menu check failed for {wa_id}: {exc}")
 
         # 1c. Tour package browsing: the package catalogue (list menu), a
         # package card with its booking button, and the booking enquiry.

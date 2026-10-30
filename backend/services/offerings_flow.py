@@ -877,16 +877,22 @@ def is_offerings_request(tenant_id: str, text: str, pressed_id: str = "") -> boo
     if not raw_id and raw_text.startswith("menu_"):
         raw_id = raw_text
 
+    # Only the *current* tenant's browse row may open its catalogue. A global
+    # phrase match used to treat an old list tap like "Our Services" as browse
+    # for whatever brand is active — that feels like "one tap, many menus".
     profile_keys = _offerings_button_keys(tenant_id)
     if raw_id and (raw_id in profile_keys or _normalize(raw_id) in profile_keys):
         return True
     needle = _normalize(raw_text)
     if needle and (raw_text in profile_keys or needle in profile_keys):
         return True
-    if needle and needle in _OFFERING_TITLE_PHRASES:
-        return True
-    if raw_id and raw_id in _OFFERING_MENU_IDS:
-        return True
+
+    # Fallback only when this tenant has no offerings browse row configured.
+    if not profile_keys:
+        if needle and needle in _OFFERING_TITLE_PHRASES:
+            return True
+        if raw_id and raw_id in _OFFERING_MENU_IDS:
+            return True
 
     return False
 

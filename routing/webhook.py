@@ -836,6 +836,12 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     if payload.get("object") != "whatsapp_business_account":
+        # Hookdeck tee/outbound echoes often land here with object=None — they
+        # are not inbound customer messages and must not trigger a bot reply.
+        logger.info(
+            "WEBHOOK_IGNORED_NON_WABA | object=%r | bytes=%d",
+            payload.get("object"), len(raw_payload),
+        )
         log_webhook("incoming", "/webhook", raw_payload[:2000], 200, f"Ignored non-WABA object: {payload.get('object')}")
         return {"status": "ignored", "object": payload.get("object")}
 
