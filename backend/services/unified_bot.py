@@ -345,29 +345,38 @@ class UnifiedBotService:
 
             if faq_matches:
                 context = "\n\n---\n\n".join(m.get('content', '') for m in faq_matches if m.get('content'))
-                # Synthesize with LLM if available
-                from routing.config import GROQ_API_URL, GROQ_API_KEY, GROQ_MODEL, BRAND_NAME
-                if GROQ_API_KEY and context:
+                # Synthesize with local Ollama only
+                from routing.config import OLLAMA_API_URL, OLLAMA_MODEL, BRAND_NAME
+                if context:
                     try:
                         import requests
-                        headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
                         prompt = (
                             f"You are a helpful assistant for {BRAND_NAME}. "
                             f"Answer the user's question clearly, warmly, and concisely using ONLY the context below. "
                             f"Use bullet points if listing multiple items. Keep your reply between 100 and 350 words (maximum 2,500 characters) so it fits in a single WhatsApp message.\n\nContext:\n{context[:3000]}"
                         )
                         payload = {
-                            "model": GROQ_MODEL,
+                            "model": OLLAMA_MODEL,
                             "messages": [
                                 {"role": "system", "content": prompt},
-                                {"role": "user", "content": message}
+                                {"role": "user", "content": message},
                             ],
-                            "temperature": 0.2,
-                            "max_tokens": 1500
+                            "stream": False,
+                            "think": False,
+                            "options": {"temperature": 0.2, "num_predict": 1500},
                         }
-                        resp = requests.post(GROQ_API_URL, json=payload, headers=headers, timeout=15)
+                        resp = requests.post(
+                            OLLAMA_API_URL,
+                            json=payload,
+                            headers={
+                                "Content-Type": "application/json",
+                                "ngrok-skip-browser-warning": "true",
+                            },
+                            timeout=120,
+                        )
                         if resp.status_code == 200:
-                            content = resp.json()["choices"][0]["message"]["content"].strip()
+                            msg = resp.json().get("message") or {}
+                            content = (msg.get("content") or "").strip()
                             if content:
                                 return content
                     except Exception as llm_err:

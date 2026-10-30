@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials
+from starlette.concurrency import run_in_threadpool
 
 from routes.auth import get_current_admin, require_tenant_access, security
 
@@ -100,13 +101,15 @@ def download_onboarding_kit(vertical: str, fmt: str):
 async def _parse_stage_upload_payload(
     request: Request,
     file: Optional[UploadFile],
-) -> tuple[list, Optional[str]]:
+) -> tuple[list, Optional[str], str]:
     """Parse multipart/JSON upload body used by both global and tenant stage routes.
 
-    Returns ``(files_payload, optional_tenant_id_from_body)``.
+    Returns ``(files_payload, optional_tenant_id_from_body, lane)``.
+    ``lane`` is ``kit`` for Option B (filled industry kit) or ``any`` for Option A.
     """
     files_payload: List[Dict[str, Any]] = []
     body_tenant: Optional[str] = None
+    lane = "any"
     content_type = request.headers.get("content-type", "")
 
     if file:
@@ -120,6 +123,9 @@ async def _parse_stage_upload_payload(
         maybe_tid = form.get("tenant_id")
         if maybe_tid and isinstance(maybe_tid, str):
             body_tenant = maybe_tid.strip()
+        maybe_lane = form.get("lane")
+        if maybe_lane and isinstance(maybe_lane, str) and maybe_lane.strip().lower() in ("kit", "any"):
+            lane = maybe_lane.strip().lower()
         for field_name in ("file", "files", "document"):
             uploaded = form.getlist(field_name)
             for uf in uploaded:
@@ -133,6 +139,9 @@ async def _parse_stage_upload_payload(
         body = await request.json()
         if isinstance(body.get("tenant_id"), str) and body.get("tenant_id").strip():
             body_tenant = body["tenant_id"].strip()
+        raw_lane = str(body.get("lane") or "any").strip().lower()
+        if raw_lane in ("kit", "any"):
+            lane = raw_lane
         raw_files = body.get("files") or []
         for rf in raw_files:
             files_payload.append({
@@ -140,7 +149,7 @@ async def _parse_stage_upload_payload(
                 "content": rf.get("content", ""),
             })
 
-    return files_payload, body_tenant
+    return files_payload, body_tenant, lane
 
 
 @router.post("/onboarding/stage")
@@ -154,7 +163,7 @@ async def stage_onboarding_document_global(
     ``tenant_id`` is provided in the JSON/multipart body, the staged draft is
     tagged for that tenant so publish can target any company.
     """
-    files_payload, body_tenant = await _parse_stage_upload_payload(request, file)
+    files_payload, body_tenant, lane = await _parse_stage_upload_payload(request, file)
     if not files_payload:
         raise HTTPException(status_code=400, detail="No document provided to stage")
 
@@ -162,8 +171,12 @@ async def stage_onboarding_document_global(
     from services.auto_bifurcator import AutoBifurcator
     bifurcator = AutoBifurcator(tenant_id=target_tenant)
     try:
-        staged = bifurcator.stage_files(files_payload)
+        # Ollama multi-pass — must not block the asyncio event loop (port 9000 hang).
+        staged = await run_in_threadpool(
+            lambda: bifurcator.stage_files(files_payload, lane=lane),
+        )
         staged["tenant_id"] = target_tenant
+        staged["lane"] = lane
         return staged
     except Exception as exc:
         logger.error("Global onboarding document staging failed: %s", exc, exc_info=True)
@@ -178,7 +191,7 @@ async def stage_onboarding_document_tenant(
     principal: dict = Depends(require_tenant_access()),
 ):
     """Parse any document for a specific tenant (works for every tenant slug/id)."""
-    files_payload, _ = await _parse_stage_upload_payload(request, file)
+    files_payload, _, lane = await _parse_stage_upload_payload(request, file)
     if not files_payload:
         raise HTTPException(status_code=400, detail="No document provided to stage")
 
@@ -190,8 +203,11 @@ async def stage_onboarding_document_tenant(
     actor = principal.get("actor") or {"username": "admin", "role": "super_admin", "tenant_id": tid}
     bifurcator = AutoBifurcator(tenant_id=tid, actor=actor)
     try:
-        staged = bifurcator.stage_files(files_payload)
+        staged = await run_in_threadpool(
+            lambda: bifurcator.stage_files(files_payload, lane=lane),
+        )
         staged["tenant_id"] = tid
+        staged["lane"] = lane
         return staged
     except Exception as exc:
         logger.error("Tenant onboarding document staging failed for %s: %s", tid, exc, exc_info=True)
@@ -237,11 +253,13 @@ async def publish_onboarding_bifurcation(
         draft["business_hours"] = _sanitize_business_hours(draft["business_hours"])
 
     try:
-        summary = bifurcator.apply_bifurcation(
-            bifurcation=draft,
-            raw_files=[],
-            auto_publish=True,
-            careful_brand_merge=False,
+        summary = await run_in_threadpool(
+            lambda: bifurcator.apply_bifurcation(
+                bifurcation=draft,
+                raw_files=[],
+                auto_publish=True,
+                careful_brand_merge=False,
+            )
         )
         summary["tenant_id"] = tid
         return {

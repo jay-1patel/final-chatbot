@@ -268,81 +268,34 @@ def _provider_specs(system_prompt: str, user_prompt: str) -> List[Dict[str, Any]
             "Content-Type": "application/json",
             "ngrok-skip-browser-warning": "true",
         },
-        "timeout": float(os.environ.get("OLLAMA_TIMEOUT", 180)),
+        "timeout": float(os.environ.get("OLLAMA_TIMEOUT", 300)),
         "payload": {
             "model": ollama_model,
             "messages": messages,
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0.1, "num_ctx": 8192},
+            "think": False,
+            "options": {
+                "temperature": 0.1,
+                "num_ctx": 8192,
+                "num_predict": 4096,
+            },
         },
     })
-
-    # 2. Groq (optional)
-    groq_key = os.environ.get("GROQ_API_KEY") or getattr(cfg, "GROQ_API_KEY", None)
-    if groq_key:
-        groq_url = (
-            os.environ.get("GROQ_API_URL")
-            or getattr(cfg, "GROQ_API_URL", None)
-            or "https://api.groq.com/openai/v1/chat/completions"
-        )
-        groq_model = (
-            os.environ.get("GROQ_MODEL")
-            or getattr(cfg, "GROQ_MODEL", None)
-            or "openai/gpt-oss-20b"
-        )
-        specs.append({
-            "name": "groq",
-            "url": groq_url,
-            "headers": {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-            "timeout": 45.0,
-            "payload": {
-                "model": groq_model,
-                "messages": messages,
-                "temperature": 0.1,
-                "max_tokens": 4096,
-                "response_format": {"type": "json_object"},
-            },
-        })
-
-    # 3. Mistral (optional)
-    mistral_key = os.environ.get("MISTRAL_API_KEY") or getattr(cfg, "MISTRAL_API_KEY", None)
-    if mistral_key:
-        mistral_url = (
-            os.environ.get("MISTRAL_API_URL")
-            or getattr(cfg, "MISTRAL_API_URL", None)
-            or "https://api.mistral.ai/v1/chat/completions"
-        )
-        mistral_model = (
-            os.environ.get("MISTRAL_MODEL")
-            or getattr(cfg, "MISTRAL_MODEL", None)
-            or "open-mistral-7b"
-        )
-        specs.append({
-            "name": "mistral",
-            "url": mistral_url,
-            "headers": {"Authorization": f"Bearer {mistral_key}", "Content-Type": "application/json"},
-            "timeout": 45.0,
-            "payload": {
-                "model": mistral_model,
-                "messages": messages,
-                "temperature": 0.1,
-                "max_tokens": 4096,
-            },
-        })
 
     return specs
 
 
 def _extract_content(data: Dict[str, Any]) -> str:
-    """Normalize Ollama (/api/chat) and OpenAI-compatible response bodies."""
+    """Normalize Ollama /api/chat response body (content or thinking)."""
     message = data.get("message")
     if isinstance(message, dict):
-        return message.get("content") or ""
-    try:
-        return data["choices"][0]["message"]["content"] or ""
-    except Exception:
-        return ""
+        return (
+            (message.get("content") or "").strip()
+            or (message.get("thinking") or "").strip()
+            or (message.get("reasoning") or "").strip()
+        )
+    return ""
 
 
 def _parse_json_payload(raw_text: str) -> Optional[Dict[str, Any]]:

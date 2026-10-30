@@ -18,9 +18,6 @@ from routing.config import (
     DB_PATH, EMBEDDING_MODEL_PATH, BRAND_NAME, SUPPORT_EMAIL, SUPPORT_PHONE,
     BRAND_WEBSITE, OLLAMA_API_URL, OLLAMA_MODEL, OLLAMA_BASE_URL,
     BRAND_TAGLINE, SIGNATURE,
-    GROQ_API_URL, GROQ_API_KEY, GROQ_MODEL,
-    MISTRAL_API_URL, MISTRAL_API_KEY, MISTRAL_MODEL,
-    API_PROVIDER,
 )
 from database import save_embeddings
 from services.response_formatters import WhatsAppFormatter, MessageType, smart_format
@@ -371,19 +368,11 @@ Remember: You must output ONLY valid JSON. No markdown, no code blocks, no expla
 
 
 def _get_ordered_providers() -> list:
-    all_providers = {
-        "groq": ("groq", GROQ_API_URL, GROQ_MODEL, GROQ_API_KEY, "openai"),
-        "mistral": ("mistral", MISTRAL_API_URL, MISTRAL_MODEL, MISTRAL_API_KEY, "openai"),
-        "ollama": ("ollama", OLLAMA_BASE_URL, OLLAMA_MODEL, "no-key-needed", "ollama"),
-    }
-    preferred = (os.getenv("API_PROVIDER") or API_PROVIDER or "groq").lower()
-    ordered = []
-    if preferred in all_providers:
-        ordered.append(all_providers[preferred])
-    for p_name, p_cfg in all_providers.items():
-        if p_name != preferred:
-            ordered.append(p_cfg)
-    return ordered
+    """Ollama only — no Groq/Mistral cloud providers."""
+    base = (OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")
+    return [
+        ("ollama", base, OLLAMA_MODEL or "qwen3:8b", "no-key-needed", "ollama"),
+    ]
 
 
 async def _generate_direct_llm_answer(
@@ -439,8 +428,9 @@ MANDATORY LENGTH: Keep the entire response between 100 and 350 words (maximum 2,
 
 async def _call_llm_provider(name, url, model, api_key, api_type, system_prompt, user_query) -> str:
     logger.info(f"LLM_CALL | provider={name} | model={model} | url={url}")
-    # Fast connect timeout so unavailable local servers fail fast instead of hanging for 30s
-    client_timeout = httpx.Timeout(connect=3.0, read=30.0, write=10.0, pool=3.0)
+    # Local Ollama can take minutes on large FAQ prompts; connect stays short.
+    read_s = float(os.getenv("OLLAMA_TIMEOUT", "300"))
+    client_timeout = httpx.Timeout(connect=5.0, read=read_s, write=30.0, pool=5.0)
     async with httpx.AsyncClient(timeout=client_timeout) as client:
         if api_type == "ollama":
             payload = {
@@ -1193,18 +1183,28 @@ async def handle_faq_query(payload: dict) -> dict:
         except Exception as e:
             logger.debug(f"Could not load recent history for {wa_id}: {e}")
 
-    # ── Check active pending package from state ────
+    # ── Check active pending package / offering from state ────
+    # Prefer offerings_flow pending_product (universal browse), then package_flow.
     active_pkg = {}
     if wa_id:
         try:
-            from services.package_flow import pending_package
-            active_pkg = pending_package(wa_id) or {}
-        except Exception:
             try:
-                from backend.services.package_flow import pending_package
+                from services.offerings_flow import pending_product
+            except ImportError:
+                from backend.services.offerings_flow import pending_product
+            active_pkg = pending_product(wa_id) or {}
+        except Exception:
+            active_pkg = {}
+        if not active_pkg:
+            try:
+                from services.package_flow import pending_package
                 active_pkg = pending_package(wa_id) or {}
             except Exception:
-                active_pkg = {}
+                try:
+                    from backend.services.package_flow import pending_package
+                    active_pkg = pending_package(wa_id) or {}
+                except Exception:
+                    active_pkg = {}
 
     active_pkg_name = (active_pkg.get("name") or "").strip()
     active_pkg_dest = (active_pkg.get("destination") or "").strip()

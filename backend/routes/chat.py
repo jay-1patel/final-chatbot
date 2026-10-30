@@ -86,23 +86,15 @@ def _upload_to_catbox(content: bytes, filename: str) -> str | None:
 
 
 def _upload_to_imghippo(content: bytes, filename: str) -> str | None:
-    """Upload file to imghippo, returns public URL."""
-    if not IMGHIPPO_API_KEY:
-        return None
+    """Upload file for WhatsApp: free img402/BasePic (+ ImgHippo if credited).
+
+    Kept under this name because auto_bifurcator / tenant_files import it.
+    """
     try:
-        resp = httpx.post(
-            IMGHIPPO_API_URL,
-            headers={"X-API-Key": IMGHIPPO_API_KEY},
-            files={"file": (filename, content, "application/octet-stream")},
-            timeout=30,
-        )
-        if resp.is_success:
-            data = resp.json()
-            if data.get("success") or data.get("status") == 200:
-                return (data.get("data") or {}).get("url")
-    except Exception as e:
-        logger.error(f"Imghippo upload failed: {e}")
-    return None
+        from services.media_host import upload_public_media
+    except ImportError:
+        from backend.services.media_host import upload_public_media
+    return upload_public_media(content, filename)
 
 
 def _guess_media_type(filename: str, content_type: str = "") -> str:
@@ -198,15 +190,25 @@ async def send_message(
         filename = uploaded_file.filename or "file"
         file_ct = getattr(uploaded_file, "content_type", "") or ""
 
-        # Upload to hosting service
-        media_url = _upload_to_catbox(file_content, filename)
-        if not media_url:
-            media_url = _upload_to_imghippo(file_content, filename)
-        if not media_url:
-            raise HTTPException(status_code=500, detail="File upload failed")
-
-        # Determine media type
+        # Host publicly so Meta/send2 can fetch the file.
+        # Images → img402/BasePic (free); PDFs → Cloudflare PUBLIC_BASE_URL.
         media_type = _guess_media_type(filename, file_ct)
+        subdir = "chat_attachments" if media_type != "image" else "product_images"
+        try:
+            from services.media_host import upload_public_media
+        except ImportError:
+            from backend.services.media_host import upload_public_media
+        media_url = upload_public_media(
+            file_content, filename, file_ct, subdir=subdir
+        )
+        if not media_url:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "File upload failed. For PDFs set a live PUBLIC_BASE_URL "
+                    "(Cloudflare tunnel). For images, img402/BasePic must be reachable."
+                ),
+            )
 
         # Send media via send2.digital
         result = _send_media_via_send2(wa_id, media_type, media_url, caption=message or None)

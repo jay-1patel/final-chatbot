@@ -5,11 +5,11 @@
   "brand": {
     "name": "Leeway Softech",
     "bot_name": "Leeway Tech Advisor",
-    "tagline": "Innovative Technology. Creative Work. Trusted Delivery. — AI, software & CPaaS since 2012",
+    "tagline": "Innovative Technology. Creative Work. Trusted Delivery.",
     "website": "https://leewaysoftech.com",
     "support_email": "sales@leewaysoftech.com",
-    "support_phone": "+91 8690783030",
-    "signature": "Leeway Softech — Building software that moves business forward.",
+    "support_phone": "+91 8000305305",
+    "signature": "Leeway Softech — At your service.",
     "legal_name": "Leeway Softech Private Limited",
     "headquarters": "Ahmedabad, Gujarat, India",
     "global_reach": "USA, UK, UAE, Canada, Australia, India",
@@ -55,7 +55,7 @@
     "item_noun": "services",
     "item_noun_singular": "service",
     "browse_label": "Our Services",
-    "catalog_label": "Services",
+    "catalog_label": "Service Brochure",
     "catalog_noun": "services",
     "brochure_label": "Company Profile",
     "brochure_noun": "company profile",
@@ -86,19 +86,14 @@
   "intents": [
     {
       "name": "technologies",
-      "answer": "• *Leeway tech stack* (selected after requirement analysis): • *Frontend:* React.js, Next.js, Vue.js, Angular, TypeScript, Tailwind CSS • *Backend:* Node.js, Python (FastAPI / Django), Golang, Laravel, .NET Core • *AI & ML:* OpenAI (GPT APIs), LangChain, PyTorch, TensorFlow, Hugging Face, Vertex AI, Azure OpenAI • *Mobile:* iOS (Swift), Android (Kotlin), React Native, Flutter • *Data:* PostgreSQL, MySQL, MongoDB, DynamoDB, Firebase, Snowflake, BigQuery, Redis • *Cloud & DevOps:* AWS, Azure, GCP, Docker, Kubernetes, CI/CD • Ask which stack fits your product — tap *Get a Quote* or *Technologies* in the menu.",
+      "answer": "Frontend: React/Next/Vue/Angular. Backend: Node/Python/Golang/.NET. AI: OpenAI, LangChain, PyTorch. Mobile: Flutter/RN. Cloud: AWS/Azure/GCP.",
       "examples": [
-        "what technologies do you use",
-        "what is your tech stack",
-        "which tools do you work with"
+        "what technologies do you work with",
+        "what is your tech stack"
       ],
       "keywords": [
         "technologies",
-        "technology",
         "tech stack",
-        "stack",
-        "framework",
-        "tools",
         "react",
         "python",
         "flutter",
@@ -109,62 +104,50 @@
     },
     {
       "name": "projects",
-      "answer": "• *Portfolio & impact:* • 1500+ clients · 14 years · 120+ CPaaS projects · 60+ apps · 45+ AI solutions • *Trusted names:* Tata Tele, BHEL, Powergrid, Bandhan Bank, Club Mahindra, Airport Authority, Indian Railway, RITES, Jindal, Lodha, universities & education boards • *Industries:* Government & PSU, BFSI, Education, Hospitality, Enterprise, Politics, Retail & e-commerce • *Highlight:* MoU with Government of Gujarat for AI (pathway for 250+ jobs) • Detailed case studies shared on request with client permission — ask for a walkthrough.",
+      "answer": "1500+ clients · 14 years · Tata Tele, BHEL, Powergrid, Bandhan Bank, Club Mahindra, AAI, Railways, Lodha. MoU with Govt of Gujarat for AI.",
       "examples": [
-        "show me your projects",
-        "who have you built for",
-        "any case studies"
+        "show me your work",
+        "who have you built for"
       ],
       "keywords": [
         "projects",
-        "project",
         "portfolio",
         "case study",
-        "case studies",
         "clients",
-        "our work",
-        "experience"
+        "our work"
       ],
       "enabled": true,
       "description": "Projects"
     },
     {
       "name": "careers",
-      "answer": "💼 *Careers at Leeway Softech* • We're hiring across sales, product, design, QA, support and operations. • *Sample openings:* Sales Executive (2–4 yrs, Mumbai/Bhavnagar), BDM (2–5 yrs, Mumbai), QA Tester (1–2 yrs, Bhavnagar), UI/UX Designer (1–2 yrs, Bhavnagar), L1/L2 Support (2–4 yrs, Delhi), Senior HR/Accountant/IT Manager as posted. • Apply: https://leewaysoftech.com/careers — PDF resume max 2 MB, or email HR with the role in the subject. • Culture: Life @ Leeway — festivals, anniversaries, trips and team events.",
+      "answer": "Hiring across sales, QA, design, support. Apply https://leewaysoftech.com/careers with PDF resume (max 2 MB).",
       "keywords": [
-        "career",
         "careers",
         "job",
         "hiring",
         "vacancy",
-        "internship",
-        "open role",
-        "join us"
+        "internship"
       ],
       "examples": [
         "are you hiring",
-        "job openings",
-        "careers at leeway",
-        "internship"
+        "job openings at your company"
       ],
       "enabled": true,
       "description": "Careers"
     },
     {
       "name": "benefits",
-      "answer": "• *Why teams choose Leeway Softech:* • *Certified security & quality* — ISO 9001:2015, ISO/IEC 27001:2013, CMMI Level 3 • *Proven at scale* — 1,500+ clients across India • *Government-grade trust* — MoU with Government of Gujarat for AI • *True end-to-end* — CPaaS, software, AI and cloud under one partner • Dedicated POC, transparent delivery, NDA/IP-friendly contracts, post-go-live support • Offices: Mumbai (corporate), Bhavnagar (registered), Delhi/NCR, Ahmedabad",
+      "answer": "ISO/CMMI certified, 1500+ clients, Gujarat AI MoU, end-to-end from CPaaS to full software builds, NDA/IP-friendly.",
       "keywords": [
         "benefits",
-        "why choose you",
-        "why work with you",
+        "why choose",
         "advantages",
-        "perks",
         "differentiators"
       ],
       "examples": [
         "why should we work with you",
-        "what are the benefits",
-        "why choose leeway"
+        "what are the benefits"
       ],
       "enabled": true,
       "description": "Benefits"
@@ -210,7 +193,7 @@
       ],
       "enabled": true,
       "description": "What services / offerings we provide",
-      "answer": "• Here's what Leeway Softech offers:\n• *Generative AI Development* — LLM apps, agents, private RAG, evaluation & guardrails (₹1.5 Lakh - 8 Lakh / Project)\n• *AI Chatbot Development* — Flows, FAQ/KB, handoff, analytics, multilingual options (₹75,000 - 3.5 Lakh)\n• *Machine Learning Solutions* — Predictive models, NLP, ranking, model ops handoff (₹2 Lakh - 10 Lakh)\n• *Computer Vision Solutions* — Detection, OCR, quality inspection, dashboards (₹2 Lakh - 8 Lakh)\n• *AI Workflow Automation* — Document processing, approvals, system integrations (₹1 Lakh - 5 Lakh)\n• *Enterprise Software Development* — Custom enterprise apps, workflows, SSO, audit trails (₹3 Lakh - 25 Lakh)\n• *SaaS Product Development* — MVP to scale: tenancy, roles, subscriptions, analytics (₹4 Lakh - 30 Lakh)\n• *Web Application Development* — Responsive portals, APIs, admin consoles, SEO basics (₹1 Lakh - 10 Lakh)\n• Ask for details on any item, or tap *Get a Quote* / *Request a Callback*."
+      "answer": "• Here's what Leeway Softech offers:\n• *AI Chatbot Development* — Custom AI chatbots, FAQ/KB, human handoff, analytics | Stack: WhatsApp/Web, NLP, RAG | Tim (INR 75,000 - 3.5 Lakh)\n• *Generative AI Development* — LLM apps, agents, private RAG, evaluation and guardrails | Stack: OpenAI, LangChain, RAG, (INR 1.5 Lakh - 8 Lakh)\n• *WhatsApp Business API Integration* — Green-tick setup, bots, broadcasts, CRM sync | Stack: Meta Cloud API, templates, webhooks (INR 25,000 - 1.5 Lakh)\n• *CPaaS / Omnichannel Messaging* — Unified messaging APIs, campaigns, delivery reports (120+ projects) | Stack: SMS, Email, W (Pay per use / Platform plan)\n• *Enterprise Software Development* — Custom enterprise apps, workflows, SSO, audit trails | Stack: Node, Python, .NET, microser (INR 3 Lakh - 25 Lakh)\n• *Web & Mobile App Development* — Portals, iOS and Android apps, push, offline (60+ apps) | Stack: React, Next.js, Flutter, (INR 1 Lakh - 12 Lakh)\n• *Digital Growth & Marketing* — Technical SEO, growth marketing, authority building (200+ campaigns) | Stack: SEO, content (Campaign / retainer)\n• *Enterprise Hosting & Security* — Pen-testing, encryption, 24/7 monitoring, compliance (0 breaches) | Stack: Hosting, SSL, a (From INR 50,000 / month)\n• Ask for details on any item, or tap *Get a Quote* / *Request a Callback*."
     },
     {
       "name": "pricing-enquiry",
@@ -228,36 +211,31 @@
       ],
       "enabled": true,
       "description": "Pricing and packages",
-      "answer": "• Pricing depends on scope, volume, and packaging.\n• *Generative AI Development* — LLM apps, agents, private RAG, evaluation & guardrails (₹1.5 Lakh - 8 Lakh / Project)\n• *AI Chatbot Development* — Flows, FAQ/KB, handoff, analytics, multilingual options (₹75,000 - 3.5 Lakh)\n• *Machine Learning Solutions* — Predictive models, NLP, ranking, model ops handoff (₹2 Lakh - 10 Lakh)\n• *Computer Vision Solutions* — Detection, OCR, quality inspection, dashboards (₹2 Lakh - 8 Lakh)\n• *AI Workflow Automation* — Document processing, approvals, system integrations (₹1 Lakh - 5 Lakh)\n• *Enterprise Software Development* — Custom enterprise apps, workflows, SSO, audit trails (₹3 Lakh - 25 Lakh)\n• *SaaS Product Development* — MVP to scale: tenancy, roles, subscriptions, analytics (₹4 Lakh - 30 Lakh)\n• *Web Application Development* — Responsive portals, APIs, admin consoles, SEO basics (₹1 Lakh - 10 Lakh)\n• Share your requirements and we'll send a tailored quote — tap *Get a Quote*."
+      "answer": "• Pricing depends on scope, volume, and packaging.\n• *AI Chatbot Development* — Custom AI chatbots, FAQ/KB, human handoff, analytics | Stack: WhatsApp/Web, NLP, RAG | Tim (INR 75,000 - 3.5 Lakh)\n• *Generative AI Development* — LLM apps, agents, private RAG, evaluation and guardrails | Stack: OpenAI, LangChain, RAG, (INR 1.5 Lakh - 8 Lakh)\n• *WhatsApp Business API Integration* — Green-tick setup, bots, broadcasts, CRM sync | Stack: Meta Cloud API, templates, webhooks (INR 25,000 - 1.5 Lakh)\n• *CPaaS / Omnichannel Messaging* — Unified messaging APIs, campaigns, delivery reports (120+ projects) | Stack: SMS, Email, W (Pay per use / Platform plan)\n• *Enterprise Software Development* — Custom enterprise apps, workflows, SSO, audit trails | Stack: Node, Python, .NET, microser (INR 3 Lakh - 25 Lakh)\n• *Web & Mobile App Development* — Portals, iOS and Android apps, push, offline (60+ apps) | Stack: React, Next.js, Flutter, (INR 1 Lakh - 12 Lakh)\n• *Digital Growth & Marketing* — Technical SEO, growth marketing, authority building (200+ campaigns) | Stack: SEO, content (Campaign / retainer)\n• *Enterprise Hosting & Security* — Pen-testing, encryption, 24/7 monitoring, compliance (0 breaches) | Stack: Hosting, SSL, a (From INR 50,000 / month)\n• Share your requirements and we'll send a tailored quote — tap *Get a Quote*."
     }
   ],
   "guardrails": {
     "never_state": [
-      "unconfirmed project prices",
-      "guaranteed delivery dates without SOW",
-      "client names without permission",
-      "discounts not approved by sales",
-      "security certifications you do not hold"
+      "true"
     ],
     "escalate_keywords": [
+      "human",
+      "agent",
+      "manager",
+      "dispute",
+      "representative",
       "fraud",
-      "legal",
       "lawsuit",
-      "urgent",
-      "complaint",
-      "breach",
-      "data leak"
+      "data breach",
+      "urgent outage"
     ],
-    "escalation_message": "This needs a human — connecting you with our team now. A specialist will follow up shortly.",
+    "escalation_message": "Connecting you to a Leeway specialist now.",
     "handoff_keywords": [
       "human",
       "agent",
-      "person",
-      "manager",
-      "call me",
-      "speak to someone"
+      "person"
     ],
-    "tone": "professional and confident",
+    "tone": "professional",
     "forbidden_terms": [
       "OTP",
       "password",
@@ -295,7 +273,7 @@
   "menu": {
     "key": "kb_main",
     "header": "Leeway Softech",
-    "body": "Welcome to Leeway Softech! Ask about services, tech stack, projects, careers — or request a quote / callback.",
+    "body": "Welcome to Leeway Softech — how can we help today?",
     "footer": "Select an option or type your query directly",
     "button_text": "Select Option",
     "buttons": [
@@ -358,76 +336,99 @@
         "sort_order": 5,
         "enabled": true,
         "intent": "benefits"
+      },
+      {
+        "id": "menu_brochure",
+        "title": "Service Brochure",
+        "description": "Download our capability brochure",
+        "section": "🏢 Company",
+        "icon": "📄",
+        "sort_order": 6,
+        "enabled": true,
+        "intent": "offerings"
+      },
+      {
+        "id": "menu_callback",
+        "title": "Book a Callback",
+        "description": "Have our team call you back",
+        "section": "📞 Talk To Us",
+        "icon": "📞",
+        "sort_order": 7,
+        "enabled": true,
+        "flow": "book_callback"
+      },
+      {
+        "id": "menu_support",
+        "title": "Support",
+        "description": "Existing client support tickets",
+        "section": "📞 Talk To Us",
+        "icon": "🆘",
+        "sort_order": 8,
+        "enabled": true,
+        "flow": "raise_ticket"
+      },
+      {
+        "id": "menu_human",
+        "title": "Talk to Human",
+        "description": "Chat with a Leeway specialist",
+        "section": "📞 Talk To Us",
+        "icon": "🙋",
+        "sort_order": 9,
+        "enabled": true,
+        "flow": "book_callback"
       }
     ]
   },
   "prompt": {
     "tone": "professional and confident",
     "keywords": [
-      "react",
-      "next.js",
-      "node.js",
-      "python",
-      "flutter",
-      "aws",
-      "azure",
-      "gcp",
-      "ai/ml",
-      "devops",
-      "mixed — fixed-price",
-      "time & materials",
-      "dedicated pods / retainers",
-      "projects from ₹75",
-      "000 · dedicated pods from ₹1.8 lakh/month",
-      "60-day defect warranty",
-      "optional sla retainers for monitoring",
-      "patches & feature velocity",
-      "iso 9001:2015",
-      "iso/iec 27001:2013",
-      "cmmi level 3",
-      "mumbai (corporate)",
-      "bhavnagar (registered)",
-      "delhi/ncr",
-      "ahmedabad"
+      "government",
+      "bfsi",
+      "education",
+      "hospitality",
+      "enterprise",
+      "ai",
+      "software",
+      "cpaas",
+      "whatsapp api",
+      "web",
+      "mobile",
+      "cloud",
+      "use case",
+      "timeline",
+      "budget band",
+      "existing stack",
+      "fixed-price",
+      "t&m",
+      "dedicated pods",
+      "retainers"
     ],
-    "domain_specific_topics": "Technologies / tech stack: React, Next.js, Node.js, Python, Flutter, AWS, Azure, GCP, AI/ML, DevOps; Engagement models: Mixed — Fixed-price, Time & materials, Dedicated pods / retainers; Typical engagement size: Projects from ₹75,000 · dedicated pods from ₹1.8 Lakh/month; After-sales / AMC / SLA: 60-day defect warranty; optional SLA retainers for monitoring, patches & feature velocity; Certifications: ISO 9001:2015, ISO/IEC 27001:2013, CMMI Level 3; Offices: Mumbai (corporate), Bhavnagar (registered), Delhi/NCR, Ahmedabad; Founded / scale: Founded 2012 · 1500+ clients · AI MoU with Government of Gujarat"
+    "domain_specific_topics": "Primary industries: Government, BFSI, Education, Hospitality, Enterprise; Core capabilities: AI, software, CPaaS, WhatsApp API, web, mobile, cloud; Lead context: Use case, timeline, budget band, existing stack; Delivery model: Fixed-price, T&M;, dedicated pods, retainers",
+    "industry": "software and IT services",
+    "listing_type": "services or solutions",
+    "domain_specific_queries": "services, technologies, timelines, pricing, or support"
   },
   "waba_phone_hint": "+91 8690783030",
   "domain_answers": [
     {
-      "label": "Technologies / tech stack",
-      "help": "Chips the bot understands",
-      "value": "React, Next.js, Node.js, Python, Flutter, AWS, Azure, GCP, AI/ML, DevOps"
+      "label": "Primary industries",
+      "help": "Sectors you serve",
+      "value": "Government, BFSI, Education, Hospitality, Enterprise"
     },
     {
-      "label": "Engagement models",
-      "help": "How you contract",
-      "value": "Mixed — Fixed-price, Time & materials, Dedicated pods / retainers"
+      "label": "Core capabilities",
+      "help": "Keywords for classifier",
+      "value": "AI, software, CPaaS, WhatsApp API, web, mobile, cloud"
     },
     {
-      "label": "Typical engagement size",
-      "help": "Budget framing for quotes",
-      "value": "Projects from ₹75,000 · dedicated pods from ₹1.8 Lakh/month"
+      "label": "Lead context",
+      "help": "What sales needs",
+      "value": "Use case, timeline, budget band, existing stack"
     },
     {
-      "label": "After-sales / AMC / SLA",
-      "help": "Post go-live support",
-      "value": "60-day defect warranty; optional SLA retainers for monitoring, patches & feature velocity"
-    },
-    {
-      "label": "Certifications",
-      "help": "Trust signals",
-      "value": "ISO 9001:2015, ISO/IEC 27001:2013, CMMI Level 3"
-    },
-    {
-      "label": "Offices",
-      "help": "Locations shown on Benefits",
-      "value": "Mumbai (corporate), Bhavnagar (registered), Delhi/NCR, Ahmedabad"
-    },
-    {
-      "label": "Founded / scale",
-      "help": "Credibility stats",
-      "value": "Founded 2012 · 1500+ clients · AI MoU with Government of Gujarat"
+      "label": "Delivery model",
+      "help": "How you engage",
+      "value": "Fixed-price, T&M;, dedicated pods, retainers"
     }
   ]
 }

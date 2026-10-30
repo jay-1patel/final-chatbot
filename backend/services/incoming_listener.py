@@ -30,6 +30,7 @@ from routing.whatsapp import (
     send_whatsapp_message,
     send_whatsapp_interactive,
     send_whatsapp_list_menu,
+    send_whatsapp_cta_url,
     normalize_reply_buttons,
 )
 
@@ -119,20 +120,33 @@ def _claim_inbound(message_id: str, wa_id: str) -> bool:
         return True  # fail open — prefer answering once over dropping
 
 
-def _is_duplicate_content(wa_id: str, text: str) -> bool:
-    """Content fingerprint for the poller path.
+def _release_inbound(message_id: str) -> None:
+    """Allow a later poll to retry after process/send failed post-claim."""
+    _processed_message_ids.discard(message_id)
+    try:
+        try:
+            from services.dedup import release_inbound_claim
+        except ImportError:
+            from backend.services.dedup import release_inbound_claim
+        release_inbound_claim(message_id)
+    except Exception as e:
+        logger.warning(f"Could not release inbound id {message_id}: {e}")
 
-    Uses the full poll window (not the short webhook race TTL) so historical
-    rows Send2 re-returns every 5s stay quiet without re-answering ``Hi``.
+
+def _is_duplicate_content(wa_id: str, text: str) -> bool:
+    """Content fingerprint for the Meta webhook ↔ poller race only.
+
+    Historical rows Send2 re-lists every poll are suppressed by message-id
+    dedup (``processed_inbound_messages``). Using the full 15-minute poll
+    window here incorrectly silenced legitimate new ``Hi`` / menu taps.
     """
     try:
         try:
             from services.dedup import is_duplicate_content
         except ImportError:
             from backend.services.dedup import is_duplicate_content
-        return is_duplicate_content(
-            wa_id, text, window_seconds=max(60, POLL_WINDOW_MINUTES * 60)
-        )
+        # Keep this short: only covers push-vs-poll dual delivery lag.
+        return is_duplicate_content(wa_id, text, window_seconds=30)
     except Exception as e:
         logger.debug(f"content dedup unavailable: {e}")
         return False
@@ -212,6 +226,7 @@ async def _send_reply(wa_id: str, messages: list, tenant_id: str = None) -> None
         {"type": "document", "media_url": "...", "filename": "..."}
         {"type": "buttons", "text": "...", "buttons": [...], "header_media": {...}}
         {"type": "list", "header": "...", "body": "...", "button_text": "...", "sections": [...]}
+        {"type": "cta_url", "text": "...", "cta_url": "...", "display_text": "...", "image_url": "..."}
     """
     for msg in messages:
         if msg.get("sent_live"):
@@ -243,6 +258,36 @@ async def _send_reply(wa_id: str, messages: list, tenant_id: str = None) -> None
                     logger.info(
                         f"Sent document reply to {wa_id}: name={msg.get('filename') or ''} url={url[:80]}"
                     )
+
+            elif msg_type == "cta_url":
+                # send2 interactive cta_url: image header + description + one URL button
+                image_url = _resolve_send_url(msg.get("image_url") or "") or None
+                cta_url = (msg.get("cta_url") or "").strip()
+                body = msg.get("text") or ""
+                display = msg.get("display_text") or "Learn More"
+                footer = msg.get("footer_text") or None
+                if cta_url:
+                    ok = send_whatsapp_cta_url(
+                        to=wa_id,
+                        body_text=body,
+                        cta_url=cta_url,
+                        display_text=display,
+                        image_url=image_url,
+                        footer_text=footer,
+                        tenant_id=tenant_id,
+                    )
+                    logger.info(
+                        "Sent cta_url reply to %s: ok=%s display=%r has_image=%s",
+                        wa_id, ok, display, bool(image_url),
+                    )
+                elif image_url:
+                    send_whatsapp_message(wa_id, image_url, msg_type="image")
+                    if body:
+                        send_whatsapp_message(wa_id, body)
+                    logger.info(f"Sent image+text fallback (no cta url) to {wa_id}")
+                elif body:
+                    send_whatsapp_message(wa_id, body)
+                    logger.info(f"Sent text fallback (cta_url missing) to {wa_id}")
 
             elif msg_type == "buttons":
                 text = msg.get("text", "")
@@ -525,13 +570,16 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                         else:
                             logger.info(f"Processed {wa_id} but no outgoing messages")
 
-                        # Mark as processed only after the reply was sent so a
-                        # crash mid-send retries instead of dropping the answer.
+                        # Claim already reserved the id; keep the durable mark and
+                        # chat/poll audit only after a successful process+send path.
                         _record_processed(message_id, wa_id)
                         _record_chat(wa_id, sender_name, text, outgoing)
                         _record_poll(wa_id, text)
 
                     except Exception as e:
+                        # Claim runs before send to stop double-answers; release so
+                        # the next poll can retry instead of permanently dropping.
+                        _release_inbound(message_id)
                         logger.error(f"Failed to process message from {wa_id}: {e}", exc_info=True)
 
                 if skipped_known:

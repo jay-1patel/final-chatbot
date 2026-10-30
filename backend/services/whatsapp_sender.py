@@ -131,6 +131,19 @@ def _live_sender(kind: str, tenant_id: str = None):
                 sections=sections,
                 tenant_id=tenant_id,
             )
+        if kind == "cta_url":
+            from routing.whatsapp import send_whatsapp_cta_url
+            def _cta(wa_id, body, cta_url, display_text="Learn More", image_url=None, footer_text=None):
+                return send_whatsapp_cta_url(
+                    to=wa_id,
+                    body_text=body,
+                    cta_url=cta_url,
+                    display_text=display_text,
+                    image_url=image_url,
+                    footer_text=footer_text,
+                    tenant_id=tenant_id,
+                )
+            return _cta
     except Exception as e:  # pragma: no cover - depends on app runtime
         logger.warning(f"live sender import failed for {kind}: {e}")
     return None
@@ -282,6 +295,68 @@ async def send_button_message(wa_id: str, body: str, buttons: list,
         _record({
             "type": "buttons", "text": body or "", "buttons": buttons or [],
             "header_media": header_media or None, "sent_live": False,
+        })
+        return False
+
+
+async def send_cta_url_message(
+    wa_id: str,
+    body: str,
+    cta_url: str,
+    display_text: str = "Learn More",
+    image_url: str = None,
+    footer_text: str = None,
+    tenant_id: str = None,
+) -> bool:
+    """Send (or capture) an interactive CTA URL card with optional image header.
+
+    Must not be mixed with reply buttons in the same payload (send2 rule).
+    """
+    logger.info(
+        "SEND_CTA_URL | to=%s | has_image=%s | display=%r | url_len=%s",
+        wa_id, bool(image_url), display_text, len(cta_url or ""),
+    )
+    sender = _live_sender("cta_url", tenant_id)
+    if sender is None:
+        _record({
+            "type": "cta_url",
+            "text": body or "",
+            "cta_url": cta_url or "",
+            "display_text": display_text or "",
+            "image_url": image_url or "",
+            "footer_text": footer_text or "",
+            "sent_live": False,
+        })
+        return True
+    try:
+        sent = bool(sender(
+            wa_id,
+            body or "",
+            cta_url or "",
+            display_text or "Learn More",
+            image_url,
+            footer_text,
+        ))
+        _record({
+            "type": "cta_url",
+            "text": body or "",
+            "cta_url": cta_url or "",
+            "display_text": display_text or "",
+            "image_url": image_url or "",
+            "footer_text": footer_text or "",
+            "sent_live": sent,
+        })
+        return sent
+    except Exception as e:
+        logger.error(f"SEND_CTA_URL_FAILED | to={wa_id} | error={e}")
+        _record({
+            "type": "cta_url",
+            "text": body or "",
+            "cta_url": cta_url or "",
+            "display_text": display_text or "",
+            "image_url": image_url or "",
+            "footer_text": footer_text or "",
+            "sent_live": False,
         })
         return False
 

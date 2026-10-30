@@ -727,61 +727,65 @@ class UrlAutoOnboarder:
         }
 
     def _call_llm(self, system_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
-        """Call LLM with fallback for JSON output."""
-        groq_key = os.getenv("GROQ_API_KEY")
-        if groq_key:
-            try:
-                import requests
-                for model in ("openai/gpt-oss-120b", "openai/gpt-oss-20b", "llama3-70b-8192"):
-                    resp = requests.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                        json={
-                            "model": model,
-                            "messages": [
-                                {"role": "system", "content": system_prompt},
-                                {"role": "user", "content": user_prompt},
-                            ],
-                            "response_format": {"type": "json_object"},
-                            "temperature": 0.1,
-                            "max_tokens": 4096,
-                        },
-                        timeout=45,
-                    )
-                    if resp.status_code == 200:
-                        content = resp.json()["choices"][0]["message"]["content"]
-                        match = re.search(r"(\{.*\})", content, re.DOTALL)
-                        if match:
-                            return json.loads(match.group(1))
-            except Exception as e:
-                logger.warning("Groq extraction error: %s", e)
+        """Call local Ollama only for JSON extraction (no Groq/Mistral)."""
+        import requests
 
-        mistral_key = os.getenv("MISTRAL_API_KEY")
-        if mistral_key:
-            try:
-                import requests
-                resp = requests.post(
-                    "https://api.mistral.ai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {mistral_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": os.getenv("MISTRAL_MODEL", "open-mistral-7b"),
-                        "messages": [
-                            {"role": "system", "content": system_prompt + "\nOUTPUT ONLY RAW JSON."},
-                            {"role": "user", "content": user_prompt},
-                        ],
+        try:
+            from routing import config as _cfg
+            ollama_base = getattr(_cfg, "OLLAMA_BASE_URL", None) or os.getenv(
+                "OLLAMA_BASE_URL", "http://localhost:11434"
+            )
+            ollama_url = getattr(_cfg, "OLLAMA_API_URL", None) or (
+                ollama_base.rstrip("/") + "/api/chat"
+            )
+            ollama_mdl = getattr(_cfg, "OLLAMA_MODEL", None) or "qwen3:8b"
+        except Exception:
+            ollama_url = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat")
+            ollama_mdl = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+
+        timeout = float(os.getenv("OLLAMA_TIMEOUT", "300"))
+        try:
+            resp = requests.post(
+                ollama_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "ngrok-skip-browser-warning": "true",
+                },
+                json={
+                    "model": ollama_mdl,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "format": "json",
+                    "stream": False,
+                    "think": False,
+                    "options": {
                         "temperature": 0.1,
-                        "max_tokens": 4096,
+                        "num_ctx": 8192,
+                        "num_predict": 4096,
                     },
-                    timeout=45,
+                },
+                timeout=timeout,
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "Ollama URL onboard HTTP %s | model=%s | body=%s",
+                    resp.status_code,
+                    ollama_mdl,
+                    (resp.text or "")[:200],
                 )
-                if resp.status_code == 200:
-                    content = resp.json()["choices"][0]["message"]["content"]
-                    match = re.search(r"(\{.*\})", content, re.DOTALL)
-                    if match:
-                        return json.loads(match.group(1))
-            except Exception as e:
-                logger.warning("Mistral extraction error: %s", e)
-
+                return None
+            message = resp.json().get("message") or {}
+            content = (
+                (message.get("content") or "").strip()
+                or (message.get("thinking") or "").strip()
+            )
+            match = re.search(r"(\{.*\})", content, re.DOTALL)
+            if match:
+                return json.loads(match.group(1))
+        except Exception as e:
+            logger.warning("Ollama URL onboard error: %s", e)
         return None
 
     def _heuristic_extraction(self, crawl_res: Dict[str, Any], domain: str) -> Dict[str, Any]:

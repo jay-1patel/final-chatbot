@@ -1,1 +1,3 @@
-# Leeway Softech Private Limited Founded **2012**. Tagline: *Innovative Technology. Creative Work. Trusted Delivery.* **Contacts:** sales@leewaysoftech.com · +91 8690783030 (consultation) · +91 8000305305 (support) **Web:** https://leewaysoftech.com · CIN: U72900GJ2012PTC071245 **Certifications:** ISO 9001:2015, ISO/IEC 27001:2013, CMMI Level 3. **Offices:** Mumbai corporate · Bhavnagar registered · Delhi/NCR · Ahmedabad. **Impact:** 1500+ clients, 14 years, 120+ CPaaS projects, 60+ apps, 45+ AI solutions.
+# Company Overview & Trust Signals
+
+Leeway Softech Pvt Ltd founded 2012. Tagline: Innovative Technology. Creative Work. Trusted Delivery. Contacts: sales@leewaysoftech.com · +91 8690783030 · +91 8000305305. Web: https://leewaysoftech.com. CIN U72900GJ2012PTC071245. Certifications: ISO 9001:2015, ISO/IEC 27001:2013, CMMI Level 3. Offices: Mumbai, Bhavnagar, Delhi/NCR, Ahmedabad. Impact: 1500+ clients, 14 years, 120+ CPaaS, 60+ apps, 45+ AI.

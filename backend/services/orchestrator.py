@@ -51,6 +51,16 @@ async def _send_b2c_menu(wa_id: str, tenant_id: str = None):
     from bots.customer_b2c import menus
     from services.whatsapp_sender import send_list_menu, send_button_message
 
+    # Greeting / main menu clears pending offering follow-up context.
+    try:
+        try:
+            from services.offerings_flow import clear_offerings_context
+        except ImportError:
+            from backend.services.offerings_flow import clear_offerings_context
+        clear_offerings_context(wa_id)
+    except Exception:
+        pass
+
     menu_payload = menus.get_main_menu(wa_id, tenant_id=tenant_id)
     if menu_payload.get("type") == "buttons":
         await send_button_message(
@@ -427,6 +437,38 @@ async def _process_captured_message(wa_id: str, message: str, tenant_id: str = N
                         "error": None,
                     }
 
+        # 1b. Brochure / PDF ask — only files uploaded as brochure (admin_files /
+        # profile brochure_url). Never product image cards or extracted media.
+        try:
+            try:
+                from services.brochure_service import is_brochure_ask, send_relevant_brochure
+            except ImportError:
+                from backend.services.brochure_service import is_brochure_ask, send_relevant_brochure
+            if is_brochure_ask(message, tenant_id=tenant_id):
+                pressed = message if (message or "").startswith("menu_") else None
+                sent = send_relevant_brochure(
+                    wa_id,
+                    query=message,
+                    tenant_id=tenant_id,
+                    button_id=pressed,
+                )
+                if not sent:
+                    await send_text_message(
+                        wa_id,
+                        "Sorry, I don't have a brochure PDF available right now. "
+                        "Please type *hi* for the menu, or ask our team.",
+                    )
+                return {
+                    "status": "processed",
+                    "messages": drain_captured(),
+                    "new_state": "B2C_MAIN_MENU",
+                    "human_handover": False,
+                    "user_type": "b2c",
+                    "error": None,
+                }
+        except Exception as exc:
+            logger.debug(f"brochure request failed for {wa_id}: {exc}")
+
         # 1c. Tour package browsing: the package catalogue (list menu), a
         # package card with its booking button, and the booking enquiry.
         # Runs after the running flow (a live form keeps the reply) but
@@ -572,20 +614,21 @@ async def _process_captured_message(wa_id: str, message: str, tenant_id: str = N
         if not new_state or not new_state.startswith(new_state_prefix):
             new_state = f"{new_state_prefix}{new_state}" if new_state else current_state
 
+        # UPSERT — webhook + poller can both create the row; plain INSERT races
+        # with UNIQUE(wa_id) and drops the reply after WhatsApp already got it.
+        ctx_json = json.dumps(updated_context)
         with get_db_context() as conn:
-            if user_state:
-                # Update only state/context; preserve human_handover and lang.
-                conn.execute(
-                    "UPDATE user_states SET state=?, context_json=?, updated_at=CURRENT_TIMESTAMP "
-                    "WHERE wa_id=?",
-                    (new_state, json.dumps(updated_context), wa_id),
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO user_states (wa_id, state, context_json, lang, updated_at) "
-                    "VALUES (?, ?, ?, 'en', CURRENT_TIMESTAMP)",
-                    (wa_id, new_state, json.dumps(updated_context)),
-                )
+            conn.execute(
+                """
+                INSERT INTO user_states (wa_id, state, context_json, lang, updated_at)
+                VALUES (?, ?, ?, 'en', CURRENT_TIMESTAMP)
+                ON CONFLICT(wa_id) DO UPDATE SET
+                    state = excluded.state,
+                    context_json = excluded.context_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (wa_id, new_state, ctx_json),
+            )
 
     messages = drain_captured()
 

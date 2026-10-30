@@ -21,6 +21,7 @@ import os
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, BackgroundTasks
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials
+from starlette.concurrency import run_in_threadpool
 
 from database import (
     delete_admin_file,
@@ -211,7 +212,10 @@ async def auto_bifurcate_tenant_files(
 
     bifurcator = AutoBifurcator(tenant_id=tenant_id, actor=uploader)
     try:
-        result = bifurcator.process_files(files_payload, auto_publish=auto_publish)
+        # Heavy OCR + multi-pass LLM — never run on the event loop or port 9000 hangs.
+        result = await run_in_threadpool(
+            bifurcator.process_files, files_payload, auto_publish
+        )
         return result
     except Exception as exc:
         logger.error("Auto-bifurcation failed for tenant %s: %s", tenant_id, exc, exc_info=True)
@@ -275,7 +279,9 @@ async def auto_bifurcate_existing_files(
 
     bifurcator = AutoBifurcator(tenant_id=tenant_id, actor=uploader)
     try:
-        result = bifurcator.process_files(files_payload, auto_publish=auto_publish)
+        result = await run_in_threadpool(
+            bifurcator.process_files, files_payload, auto_publish
+        )
         return result
     except Exception as exc:
         logger.error("Auto-bifurcation on existing files failed for tenant %s: %s", tenant_id, exc, exc_info=True)

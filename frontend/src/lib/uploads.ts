@@ -441,20 +441,21 @@ export const onboardingKitsApi = {
   list: (signal?: AbortSignal) =>
     api.get<{ templates: OnboardingTemplate[] }>('/api/admin/onboarding-kits/list', signal),
 
-  stageGlobal: async (file: File) => {
+  stageGlobal: async (file: File, lane: 'any' | 'kit' = 'any') => {
     assertValidUploadFile(file)
     const content = await readAsBase64(file)
     return api.post<StagedOnboardingDraft>('/api/admin/onboarding/stage', {
       files: [{ filename: file.name, content }],
+      lane,
     })
   },
 
-  stageTenant: async (tenantId: string, file: File) => {
+  stageTenant: async (tenantId: string, file: File, lane: 'any' | 'kit' = 'any') => {
     assertValidUploadFile(file)
     const content = await readAsBase64(file)
     return api.post<StagedOnboardingDraft>(
       `/api/admin/tenants/${encodeURIComponent(tenantId)}/onboarding/stage`,
-      { files: [{ filename: file.name, content }] },
+      { files: [{ filename: file.name, content }], lane },
     )
   },
 
