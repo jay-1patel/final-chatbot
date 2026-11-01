@@ -29,6 +29,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Activate PII masking for all log output (masks phone numbers + emails)
+from services.logging_config import configure_logging as _configure_logging
+_configure_logging()
+
 from routing.config import ROUTER_PORT
 from routing import classify_query
 from routing.message import forward_to_bot
@@ -140,6 +144,16 @@ async def lifespan(app: FastAPI):
     handoff_task = asyncio.create_task(handoff_timeout_monitor(handoff_stop_event))
     logger.info("[STARTUP] Handoff timeout monitor started (1h auto-revert)")
 
+    # Start the WhatsApp outbox drain (retries failed sends every 30s)
+    outbox_stop_event = asyncio.Event()
+    outbox_task = asyncio.create_task(outbox_drain_monitor(outbox_stop_event))
+    logger.info("[STARTUP] WhatsApp outbox drain started (30s retry interval)")
+
+    # Start the scheduled campaign auto-fire monitor (checks every 60s)
+    campaign_stop_event = asyncio.Event()
+    campaign_task = asyncio.create_task(campaign_scheduler_monitor(campaign_stop_event))
+    logger.info("[STARTUP] Scheduled campaign auto-fire monitor started (60s poll)")
+
     # Start the cart/checkout TTL cleanup loop (7-day carts, 15-min checkouts)
     cart_cleanup_stop_event = asyncio.Event()
     cart_cleanup_task = asyncio.create_task(cart_cleanup_monitor(cart_cleanup_stop_event))
@@ -171,6 +185,33 @@ async def lifespan(app: FastAPI):
         incoming_task = None
         incoming_stop_event = None
 
+    # ── Feature inventory log ────────────────────────────────────────────
+    # Printed once at startup so post-deployment errors can be traced to a
+    # specific feature. Each line has a status: OK / DISABLED / WARNING.
+    _features = [
+        ("PII masking (phones/emails in logs)",     "OK"),
+        ("WhatsApp inbound poller",                 "OK" if (incoming_task is not None) else "DISABLED"),
+        ("WhatsApp outbox drain (30s retry)",       "OK"),
+        ("Handoff timeout monitor (1h auto-revert)","OK"),
+        ("Cart/checkout TTL cleanup (1h)",          "OK"),
+        ("Scheduled campaign auto-fire (60s poll)", "OK"),
+        ("Website re-crawl scheduler (30m poll)",   "OK"),
+        ("Human handover WhatsApp notify",          "OK" if os.environ.get("HANDOFF_TIMEOUT_NOTIFY","0")=="1" else "DISABLED (set HANDOFF_TIMEOUT_NOTIFY=1 to enable)"),
+        ("Active-test-tenant menu auto-push",       "OK" if os.environ.get("ACTIVE_TEST_MENU_PUSH","0")=="1" else "DISABLED (set ACTIVE_TEST_MENU_PUSH=1 to enable)"),
+        ("Admin WhatsApp notifications",            "OK" if os.environ.get("ADMIN_NOTIFICATION_MODE","log")=="send" else "LOG-ONLY (set ADMIN_NOTIFICATION_MODE=send to enable)"),
+        ("HTTPS redirect",                          "OK" if FORCE_HTTPS else "DISABLED (set FORCE_HTTPS=true in prod)"),
+        ("Rate limiting",                           "OK" if RATE_LIMIT_ENABLED else "DISABLED"),
+        ("FAQ index",                               "OK"),
+        ("KB/RAG index",                            "OK"),
+        ("Audit logs (admin mutations)",            "OK"),
+        ("Outbox callback reminders",               "WARNING: not implemented — callback_notifications table exists but no sender"),
+        ("Per-tenant WABA credentials",             "WARNING: all tenants share one WABA (SEND2_USERNAME/PASSWORD)"),
+    ]
+    logger.info("[FEATURE_INVENTORY] ── Startup feature checklist ──────────────────────")
+    for name, status in _features:
+        logger.info("[FEATURE_INVENTORY]  %-50s %s", name, status)
+    logger.info("[FEATURE_INVENTORY] ──────────────────────────────────────────────────")
+
     try:
         yield
     finally:
@@ -178,6 +219,18 @@ async def lifespan(app: FastAPI):
         handoff_task.cancel()
         try:
             await handoff_task
+        except asyncio.CancelledError:
+            pass
+        outbox_stop_event.set()
+        outbox_task.cancel()
+        try:
+            await outbox_task
+        except asyncio.CancelledError:
+            pass
+        campaign_stop_event.set()
+        campaign_task.cancel()
+        try:
+            await campaign_task
         except asyncio.CancelledError:
             pass
         cart_cleanup_stop_event.set()
@@ -200,6 +253,122 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 pass
         logger.info("[SHUTDOWN] Server stopped")
+
+
+async def campaign_scheduler_monitor(stop_event: asyncio.Event = None) -> None:
+    """Fire scheduled campaigns whose scheduled_at has passed.
+
+    Polls every 60 seconds. Transitions each due campaign from 'scheduled'
+    to 'sending' (via the existing blast logic) so it is never fired twice.
+    """
+    while not (stop_event and stop_event.is_set()):
+        try:
+            from database import get_db_context
+            now = __import__("datetime").datetime.utcnow().isoformat()
+            with get_db_context() as conn:
+                due = conn.execute(
+                    "SELECT * FROM campaigns "
+                    "WHERE status = 'scheduled' AND scheduled_at <= ? "
+                    "ORDER BY scheduled_at ASC LIMIT 20",
+                    (now,),
+                ).fetchall()
+            for row in due:
+                campaign_id = row["id"]
+                tenant_id = row["tenant_id"]
+                try:
+                    await asyncio.to_thread(_fire_scheduled_campaign, dict(row), tenant_id, campaign_id)
+                    logger.info(
+                        "CAMPAIGN_SCHEDULER_FIRED | tenant=%s | campaign=%s | scheduled_at=%s",
+                        tenant_id, campaign_id, row["scheduled_at"],
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "CAMPAIGN_SCHEDULER_FAIL | tenant=%s | campaign=%s | %s",
+                        tenant_id, campaign_id, exc, exc_info=True,
+                    )
+                    from database import get_db_context as _gdc
+                    with _gdc() as conn:
+                        conn.execute(
+                            "UPDATE campaigns SET status='failed', updated_at=? WHERE id=? AND tenant_id=?",
+                            (__import__("datetime").datetime.utcnow().isoformat(), campaign_id, tenant_id),
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(f"CAMPAIGN_SCHEDULER_MONITOR_FAIL: {exc}")
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=60)
+        except asyncio.TimeoutError:
+            continue
+        except asyncio.CancelledError:
+            raise
+
+
+def _fire_scheduled_campaign(row: dict, tenant_id: str, campaign_id: int) -> None:
+    """Synchronous: build audience + blast the campaign (runs in thread)."""
+    import json
+    from database import get_db_context
+    from routes.campaigns import _audience_wa_ids, _blast_campaign, _async_campaign_blast
+    from datetime import datetime
+
+    audience = row.get("audience_type", "distributors")
+    criteria = None
+    with get_db_context() as conn:
+        if audience == "segments":
+            seg = conn.execute(
+                "SELECT * FROM segments WHERE id = ? AND tenant_id = ?",
+                (row.get("segment_id"), tenant_id),
+            ).fetchone()
+            if seg:
+                try:
+                    criteria = json.loads(seg.get("criteria_json") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    criteria = {}
+                audience = seg.get("audience_type") or "distributors"
+        wa_ids = _audience_wa_ids(conn, tenant_id, audience, criteria)
+
+    if not wa_ids:
+        with get_db_context() as conn:
+            conn.execute(
+                "UPDATE campaigns SET status='completed', updated_at=? WHERE id=? AND tenant_id=?",
+                (datetime.utcnow().isoformat(), campaign_id, tenant_id),
+            )
+        logger.warning(
+            "CAMPAIGN_SCHEDULER_EMPTY | tenant=%s | campaign=%s | no audience",
+            tenant_id, campaign_id,
+        )
+        return
+
+    with get_db_context() as conn:
+        conn.execute(
+            "UPDATE campaigns SET status='sending', target_count=?, updated_at=? WHERE id=? AND tenant_id=?",
+            (len(wa_ids), datetime.utcnow().isoformat(), campaign_id, tenant_id),
+        )
+
+    sent, failed, skipped = _blast_campaign(row, tenant_id, wa_ids)
+
+    final_status = "completed" if sent > 0 else "failed"
+    with get_db_context() as conn:
+        conn.execute(
+            "UPDATE campaigns SET status=?, sent=?, failed=?, updated_at=? WHERE id=? AND tenant_id=?",
+            (final_status, sent, failed, datetime.utcnow().isoformat(), campaign_id, tenant_id),
+        )
+
+
+async def outbox_drain_monitor(stop_event: asyncio.Event = None) -> None:
+    """Drain the WhatsApp outbox every 30 seconds, retrying failed sends."""
+    while not (stop_event and stop_event.is_set()):
+        try:
+            from services.whatsapp_outbox import drain_outbox
+            await asyncio.to_thread(drain_outbox)
+        except Exception as exc:
+            logger.error(f"OUTBOX_DRAIN_MONITOR_FAIL: {exc}")
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            continue
+        except asyncio.CancelledError:
+            raise
 
 
 async def cart_cleanup_monitor(stop_event: asyncio.Event = None) -> None:

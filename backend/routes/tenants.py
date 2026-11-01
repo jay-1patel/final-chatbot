@@ -211,7 +211,20 @@ def _latest_test_wa_id() -> Optional[str]:
 
 
 def _push_active_test_menu(tenant_id: str) -> Optional[str]:
-    """Send the newly activated tenant menu to the last WhatsApp tester."""
+    """Send the newly activated tenant menu to the last WhatsApp tester.
+
+    Gated by ACTIVE_TEST_MENU_PUSH env var (default 0 = disabled) to prevent
+    accidental sends to real customers when an admin switches tenants.
+    Set ACTIVE_TEST_MENU_PUSH=1 in .env to enable.
+    """
+    import os as _os
+    if _os.getenv("ACTIVE_TEST_MENU_PUSH", "0") != "1":
+        logger.info(
+            "ACTIVE_TEST_TENANT_MENU_PUSH_SKIPPED | tenant=%s | set ACTIVE_TEST_MENU_PUSH=1 to enable",
+            tenant_id,
+        )
+        return None
+
     wa_id = _latest_test_wa_id()
     if not wa_id:
         return None

@@ -396,6 +396,23 @@ def init_db():
             "ON whatsapp_send_log(tenant_id, wa_id, created_at)"
         )
         conn.execute(
+            """CREATE TABLE IF NOT EXISTS whatsapp_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wa_id VARCHAR(20) NOT NULL,
+                message_type VARCHAR(20) NOT NULL,
+                payload TEXT NOT NULL,
+                status VARCHAR(20) DEFAULT 'pending',
+                attempts INTEGER DEFAULT 0,
+                next_retry TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                sent_at TIMESTAMP
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_outbox_status_retry "
+            "ON whatsapp_outbox(status, next_retry)"
+        )
+        conn.execute(
             """CREATE TABLE IF NOT EXISTS complaints (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ticket_id TEXT UNIQUE NOT NULL,
