@@ -1300,9 +1300,10 @@ def _blast_campaign(row, tenant_id: str, wa_ids: list) -> tuple:
             skipped += 1
             continue
         try:
+            rendered = _render_campaign_message(d, fallbacks, {"name": names.get(wa_id, "")})
             ok = send_whatsapp_message(
                 wa_id,
-                _render_campaign_message(d, fallbacks, {"name": names.get(wa_id, "")}),
+                rendered,
                 tenant_id=tenant_id,
             )
             # Pacing throttle (25 msgs/sec) to avoid carrier/WABA rate limiting
@@ -1310,8 +1311,19 @@ def _blast_campaign(row, tenant_id: str, wa_ids: list) -> tuple:
         except Exception as exc:
             logger.warning(f"campaign send to {wa_id} failed: {exc}")
             ok = False
+            rendered = ""
         if ok:
             sent += 1
+            try:
+                from services.send_log import log_whatsapp_send, REASON_CAMPAIGN
+                log_whatsapp_send(
+                    wa_id=wa_id,
+                    tenant_id=tenant_id,
+                    reason=REASON_CAMPAIGN,
+                    snippet=(rendered or "")[:120],
+                )
+            except Exception:
+                pass
         else:
             failed += 1
     return sent, failed, skipped

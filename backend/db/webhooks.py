@@ -19,7 +19,17 @@ from .core import (
 WEBHOOK_LOG_MAX_ROWS = 5000
 
 
-def log_webhook(direction, endpoint, payload, status_code=None, notes=None, response_time_ms=None):
+def log_webhook(
+    direction,
+    endpoint,
+    payload,
+    status_code=None,
+    notes=None,
+    response_time_ms=None,
+    wa_id=None,
+    tenant_id=None,
+    message_id=None,
+):
     # SECURITY FIX: Store payload hash instead of raw payload to prevent sensitive data leakage
     try:
         payload_str = json.dumps(payload) if not isinstance(payload, str) else payload
@@ -28,8 +38,23 @@ def log_webhook(direction, endpoint, payload, status_code=None, notes=None, resp
         payload_size = len(payload_str)
         with get_db_context() as conn:
             conn.execute(
-                "INSERT INTO webhook_logs (direction, endpoint, payload_hash, payload_size, status_code, notes, response_time_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (direction, endpoint, payload_hash, payload_size, status_code, notes, response_time_ms, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                "INSERT INTO webhook_logs "
+                "(direction, endpoint, payload_hash, payload_size, status_code, notes, "
+                "response_time_ms, wa_id, tenant_id, message_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    direction,
+                    endpoint,
+                    payload_hash,
+                    payload_size,
+                    status_code,
+                    notes,
+                    response_time_ms,
+                    wa_id,
+                    tenant_id,
+                    message_id,
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
             )
             _trim_webhook_logs(conn)
     except Exception as e:
@@ -88,8 +113,13 @@ def was_inbound_processed(message_id: str, channel: str = "send2") -> bool:
             ).fetchone()
             return row2 is not None
     except Exception as e:
-        logger.error(f"was_inbound_processed check failed for {message_id}: {e}")
-        return False
+        # Fail closed: treat as already processed so a locked DB cannot
+        # re-answer the poller's 15-minute window.
+        logger.error(
+            "DEDUP_FAIL_CLOSED | was_inbound_processed check failed for %s: %s",
+            message_id, e,
+        )
+        return True
 
 
 def mark_inbound_processed(message_id: str, wa_id: str, channel: str = "send2") -> None:

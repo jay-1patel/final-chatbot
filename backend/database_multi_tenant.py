@@ -1,10 +1,13 @@
 """
-[DEPRECATED / LEGACY PROTOTYPE]
+[DEPRECATED — DO NOT USE FOR LIVE DEBUGGING OR NEW FEATURES]
+
 Multi-Tenant Database Layer (Integer Tenant IDs)
 
-NOTE: The canonical, active multi-tenant layer is in `backend/database.py` and
-`shared/tenancy/`, which uses string slug tenant_ids (e.g. 'troogood', 'meridianbank').
-This file is preserved solely for backward compatibility with unmounted legacy prototypes.
+Canonical tenancy is ``backend/database.py`` + ``shared/tenancy/`` (TEXT slug
+tenant ids, ``mobile_number`` + ``waba_phone_id``). This module is never
+initialized by ``backend/main.py`` (`initialize_multi_tenant_db` has no caller).
+
+If you are chasing a production bug, ignore this file. See ``OPS_RUNBOOK.md``.
 """
 
 import os

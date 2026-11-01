@@ -84,10 +84,24 @@ class TenantCreate(BaseModel):
     slug: str = ""
     vertical: str = "generic"
     display_name: str = ""
+    mobile_number: str = ""
     waba_phone_id: str = ""
     status: str = "active"
     website: str = ""
     auto_scrape: bool = True
+
+    @field_validator("mobile_number")
+    @classmethod
+    def _check_mobile_number(cls, value: str) -> str:
+        v = (value or "").strip()
+        if not v:
+            raise ValueError(
+                "mobile_number is required (tenant WhatsApp / business mobile with country code)"
+            )
+        try:
+            return tenancy_store.normalize_mobile_number(v)
+        except ValueError as exc:
+            raise ValueError(str(exc))
 
     @field_validator("waba_phone_id")
     @classmethod
@@ -105,6 +119,10 @@ class TenantCreate(BaseModel):
 
 class PhoneBind(BaseModel):
     waba_phone_id: str
+
+
+class MobileBind(BaseModel):
+    mobile_number: str
 
 
 class ProfileDraft(BaseModel):
@@ -231,6 +249,16 @@ def _push_active_test_menu(tenant_id: str) -> Optional[str]:
             sections=menu.get("sections", []),
             tenant_id=tenant_id,
         )
+    try:
+        from services.send_log import log_whatsapp_send, REASON_ACTIVE_TEST_MENU
+        log_whatsapp_send(
+            wa_id=wa_id,
+            tenant_id=tenant_id,
+            reason=REASON_ACTIVE_TEST_MENU,
+            snippet=f"active_test_menu:{brand}",
+        )
+    except Exception:
+        pass
     logger.info(
         "ACTIVE_TEST_TENANT_MENU_PUSHED | tenant=%s | wa_id=%s",
         tenant_id, wa_id,
@@ -392,11 +420,18 @@ def create_tenant(
     with get_db_context() as conn:
         if tenancy_store.find_registry_conflict(tid, slug):
             raise HTTPException(status_code=409, detail=f"tenant '{tid}' already exists")
+        clash = tenancy_store.find_tenant_by_mobile(body.mobile_number)
+        if clash and clash != tid:
+            raise HTTPException(
+                status_code=409,
+                detail=f"mobile_number already registered to tenant '{clash}'",
+            )
         tenancy_store.ensure_tenant(
             tid,
             slug=slug,
             vertical=body.vertical,
             waba_phone_id=body.waba_phone_id,
+            mobile_number=body.mobile_number,
             display_name=body.display_name,
             status=body.status,
             conn=conn,
@@ -1102,6 +1137,38 @@ def bind_phone(
             details={"configured": bool(body.waba_phone_id.strip())},
         )
     return {"ok": True, "tenant_id": tenant_id, "waba_phone_id": body.waba_phone_id}
+
+
+@router.post("/{tenant_id}/mobile-number")
+def bind_mobile(
+    tenant_id: str,
+    body: MobileBind,
+    principal: dict = Depends(require_tenant_access()),
+):
+    """Set the required business mobile for a tenant (separate from Meta phone-id)."""
+    _admin_only(principal)
+    if not tenancy_store.get_tenant(tenant_id):
+        raise HTTPException(status_code=404, detail="tenant not found")
+    try:
+        mobile = tenancy_store.normalize_mobile_number(body.mobile_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    with get_db_context() as conn:
+        if not tenancy_store.set_mobile_number(tenant_id, mobile, conn=conn):
+            raise HTTPException(
+                status_code=409,
+                detail="mobile_number already bound to another tenant",
+            )
+        record_admin_audit_event(
+            conn,
+            action="tenant_mobile_bound",
+            actor=principal,
+            resource_type="tenant",
+            resource_id=tenant_id,
+            tenant_id=tenant_id,
+            details={"mobile_number": mobile},
+        )
+    return {"ok": True, "tenant_id": tenant_id, "mobile_number": mobile}
 
 
 @router.put("/{tenant_id}/webhook-secret")

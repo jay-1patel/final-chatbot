@@ -208,10 +208,10 @@ def ensure_conversation_row(wa_id: str) -> None:
     try:
         with get_db_context() as conn:
             conn.execute(
-                """INSERT INTO user_states (wa_id, tenant_id, state, context_json, collected, status)
+                """INSERT INTO user_states (tenant_id, wa_id, state, context_json, collected, status)
                    VALUES (?, ?, 'B2C_MAIN_MENU', '{}', '{}', ?)
-                   ON CONFLICT(wa_id) DO NOTHING""",
-                (wa_id, t_id, STATUS_BOT),
+                   ON CONFLICT(tenant_id, wa_id) DO NOTHING""",
+                (t_id, wa_id, STATUS_BOT),
             )
     except Exception as e:
         logger.error(f"ensure_conversation_row failed for {wa_id}: {e}")

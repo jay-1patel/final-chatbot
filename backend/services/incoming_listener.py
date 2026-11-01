@@ -100,8 +100,14 @@ def _was_processed(message_id: str) -> bool:
         from database import was_inbound_processed
         return was_inbound_processed(message_id)
     except Exception as e:
-        logger.warning(f"Could not check processed id {message_id}: {e}")
-        return False
+        # Fail closed: assume already processed so a locked DB cannot re-answer
+        # the last 15 minutes of poll history.
+        logger.error(
+            "DEDUP_FAIL_CLOSED | could not check processed id %s — treating as seen: %s",
+            message_id, e,
+        )
+        _processed_message_ids.add(message_id)
+        return True
 
 
 def _claim_inbound(message_id: str, wa_id: str) -> bool:
@@ -116,8 +122,12 @@ def _claim_inbound(message_id: str, wa_id: str) -> bool:
             _processed_message_ids.add(message_id)
         return claimed
     except Exception as e:
-        logger.warning(f"Could not claim inbound id {message_id}: {e}")
-        return True  # fail open — prefer answering once over dropping
+        logger.error(
+            "DEDUP_FAIL_CLOSED | could not claim inbound id %s — skipping: %s",
+            message_id, e,
+        )
+        _processed_message_ids.add(message_id)
+        return False
 
 
 def _release_inbound(message_id: str) -> None:
@@ -361,6 +371,24 @@ async def _send_reply(wa_id: str, messages: list, tenant_id: str = None) -> None
         except Exception as e:
             logger.error(f"Failed to send {msg_type} reply to {wa_id}: {e}", exc_info=True)
 
+    try:
+        from services.send_log import log_whatsapp_send, REASON_REPLY
+        snippet = ""
+        for m in messages:
+            if m.get("sent_live"):
+                continue
+            snippet = (m.get("text") or m.get("body") or m.get("type") or "")[:120]
+            if snippet:
+                break
+        log_whatsapp_send(
+            wa_id=wa_id,
+            tenant_id=tenant_id,
+            reason=REASON_REPLY,
+            snippet=snippet or f"{len(messages)} message(s)",
+        )
+    except Exception:
+        pass
+
 
 async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
     """Poll send2.digital for new incoming WhatsApp messages.
@@ -520,11 +548,35 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                         continue
 
                     if not text:
-                        # send2.digital's incoming-report API returns Message=null when a user taps
-                        # a WhatsApp quick-reply button. Re-send the tenant's main menu so the user
-                        # can pick an option whose title will come back as text on the next poll.
-                        if str(status).strip().lower() == "received":
-                            logger.info(f"Handling unmapped button click (null text) from {wa_id} id={message_id[:20]}")
+                        # send2 sometimes returns Message=null for button taps. Only
+                        # re-send the menu when an interactive id/title is present;
+                        # bare empty rows must not blast menus (looks unsolicited).
+                        interactive_hint = (
+                            msg.get("Button")
+                            or msg.get("button")
+                            or msg.get("button_id")
+                            or msg.get("ButtonId")
+                            or msg.get("List")
+                            or msg.get("list_id")
+                            or msg.get("ListId")
+                            or msg.get("Interactive")
+                            or msg.get("interactive")
+                            or msg.get("Type")
+                            or msg.get("type")
+                        )
+                        interactive_ok = bool(
+                            interactive_hint
+                            and str(interactive_hint).strip().lower()
+                            not in ("", "null", "none", "text", "received")
+                        )
+                        if (
+                            str(status).strip().lower() == "received"
+                            and interactive_ok
+                        ):
+                            logger.info(
+                                "Handling interactive null-text from %s id=%s hint=%s",
+                                wa_id, message_id[:20], str(interactive_hint)[:40],
+                            )
                             try:
                                 from routing.whatsapp import send_whatsapp_list_menu
                                 from bots.customer_b2c.menus import get_main_menu
@@ -545,10 +597,30 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                                         button_text=menu_data.get("button_text", "Show Options"),
                                         sections=menu_data.get("sections", []),
                                     )
-                                logger.info(f"Re-sent tenant menu to {wa_id} after null-text button click")
+                                try:
+                                    from services.send_log import log_whatsapp_send
+                                    log_whatsapp_send(
+                                        wa_id=wa_id,
+                                        tenant_id=tenant_id,
+                                        reason="null_menu",
+                                        trigger_message_id=message_id,
+                                        snippet="main_menu_resend",
+                                    )
+                                except Exception:
+                                    pass
+                                logger.info(
+                                    "Re-sent tenant menu to %s after interactive null-text",
+                                    wa_id,
+                                )
                             except Exception as ex:
                                 logger.error(f"Failed to handle null message fallback: {ex}")
-                            _record_processed(message_id, wa_id)
+                        else:
+                            logger.info(
+                                "Skipping empty inbound (no interactive payload) "
+                                "wa_id=%s id=%s status=%s",
+                                wa_id, message_id[:20], status,
+                            )
+                        _record_processed(message_id, wa_id)
                         continue
 
                     logger.info(f"New message from {wa_id}: {text[:80]}... (id={message_id[:20]}...)")

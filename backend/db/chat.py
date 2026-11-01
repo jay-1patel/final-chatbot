@@ -40,13 +40,26 @@ def save_chat(wa_id, sender_name, message, response, route="faq", tenant_id=None
         logger.warning(f"json_history mirror failed for {wa_id}: {e}")
 
 
-def get_recent_history(wa_id: str, limit: int = 5, ttl_minutes: int = 30):
+def get_recent_history(
+    wa_id: str,
+    limit: int = 5,
+    ttl_minutes: int = 30,
+    tenant_id: Optional[str] = None,
+):
+    tid = tenant_id or _current_tenant.get() or _resolve_tenant()
     with get_db_context() as conn:
-        rows = conn.execute(
-            "SELECT message, response, created_at FROM chat_history "
-            "WHERE wa_id = ? ORDER BY created_at DESC LIMIT ?",
-            (wa_id, limit),
-        ).fetchall()
+        if tid:
+            rows = conn.execute(
+                "SELECT message, response, created_at FROM chat_history "
+                "WHERE tenant_id = ? AND wa_id = ? ORDER BY created_at DESC LIMIT ?",
+                (tid, wa_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT message, response, created_at FROM chat_history "
+                "WHERE wa_id = ? ORDER BY created_at DESC LIMIT ?",
+                (wa_id, limit),
+            ).fetchall()
     if not rows:
         return []
     rows.reverse()

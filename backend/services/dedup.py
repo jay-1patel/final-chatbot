@@ -65,8 +65,13 @@ def _l2_check_and_set(message_id: str, wa_id: str) -> bool:
             )
             return cur.rowcount == 0  # ignored insert = already existed
     except Exception as e:
-        logger.error(f"Dedup L2 DB error for {message_id}: {e}")
-        return False  # fail open — never lose a customer message
+        # Fail closed: treat as already seen so we do not re-answer old poll rows
+        # when SQLite is locked / unavailable. L1 already stamped this worker.
+        logger.error(
+            "DEDUP_FAIL_CLOSED | L2 DB error for %s — treating as duplicate: %s",
+            message_id, e,
+        )
+        return True
 
 
 def is_duplicate(message_id: str, wa_id: str) -> bool:
@@ -86,11 +91,16 @@ def try_claim_message(message_id: str, wa_id: str, channel: str = "send2") -> bo
     Used by the send2 poller so it cannot race the Meta webhook (which claims
     via ``is_duplicate`` before processing). Check-then-mark after send left a
     window where both paths answered the same "hi".
+
+    On DB failure: fail closed (return False) and keep the id in the L1 cache so
+    this worker does not re-answer until the durable ledger is writable again.
     """
     if not message_id:
         return True  # no id → fall through to content fingerprint
-    if _l1_check_and_set(message_id):
+    if message_id in _l1_cache and _l1_cache[message_id] >= time.time():
         return False
+    # Stamp L1 only after a successful durable claim — unless DB fails, in which
+    # case we stamp L1 and refuse the claim (fail closed).
     try:
         with get_db_context() as conn:
             row = conn.execute(
@@ -98,12 +108,14 @@ def try_claim_message(message_id: str, wa_id: str, channel: str = "send2") -> bo
                 (message_id,),
             ).fetchone()
             if row is not None:
+                _l1_check_and_set(message_id)
                 return False
             row2 = conn.execute(
                 "SELECT 1 FROM webhook_dedup WHERE message_id = ? LIMIT 1",
                 (message_id,),
             ).fetchone()
             if row2 is not None:
+                _l1_check_and_set(message_id)
                 return False
             cur = conn.execute(
                 "INSERT OR IGNORE INTO processed_inbound_messages (message_id, wa_id, channel) "
@@ -115,10 +127,18 @@ def try_claim_message(message_id: str, wa_id: str, channel: str = "send2") -> bo
                 "VALUES (?, ?, CURRENT_TIMESTAMP)",
                 (message_id, wa_id),
             )
-            return cur.rowcount > 0
+            if cur.rowcount > 0:
+                _l1_check_and_set(message_id)
+                return True
+            _l1_check_and_set(message_id)
+            return False
     except Exception as e:
-        logger.error(f"try_claim_message failed for {message_id}: {e}")
-        return True  # fail open
+        logger.error(
+            "DEDUP_FAIL_CLOSED | try_claim_message failed for %s — skipping until DB recovers: %s",
+            message_id, e,
+        )
+        _l1_check_and_set(message_id)
+        return False
 
 
 def release_inbound_claim(message_id: str) -> None:

@@ -1,50 +1,74 @@
 """24h session-open helpers data access — extracted from backend/database.py."""
-import os
-import json
-import re
-import sqlite3
-import logging
-import hashlib
-from datetime import datetime, timedelta, timezone
-from contextlib import contextmanager
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Optional
 
 from .core import (
-    DB_PATH, BASE_DIR, PROJECT_ROOT, logger, get_db, get_db_context,
-    _ensure_columns, _loads_json, _current_tenant, set_request_tenant,
-    get_request_tenant
+    get_db_context,
+    _current_tenant, get_request_tenant
 )
 
 
-def update_session_inbound(wa_id: str):
+def _resolve_tenant_id(wa_id: str, tenant_id: Optional[str] = None) -> str:
+    tid = (tenant_id or get_request_tenant() or _current_tenant.get() or "").strip()
+    if tid:
+        return tid
+    try:
+        with get_db_context() as conn:
+            row = conn.execute(
+                "SELECT tenant_id FROM user_sessions WHERE wa_id = ? "
+                "AND tenant_id IS NOT NULL AND TRIM(tenant_id) != '' "
+                "LIMIT 1",
+                (wa_id,),
+            ).fetchone()
+            if row and row["tenant_id"]:
+                return str(row["tenant_id"])
+    except Exception:
+        pass
+    try:
+        from shared.tenancy.resolver import resolve_default_tenant
+        return resolve_default_tenant()
+    except Exception:
+        import os
+        return os.environ.get("DEFAULT_TENANT_ID", "default")
+
+
+def update_session_inbound(wa_id: str, tenant_id: Optional[str] = None):
+    tid = _resolve_tenant_id(wa_id, tenant_id)
     with get_db_context() as conn:
         conn.execute(
-            """INSERT INTO user_sessions (wa_id, last_inbound_at, session_open)
-               VALUES (?, CURRENT_TIMESTAMP, 1)
-               ON CONFLICT(wa_id) DO UPDATE SET
+            """INSERT INTO user_sessions (tenant_id, wa_id, last_inbound_at, session_open)
+               VALUES (?, ?, CURRENT_TIMESTAMP, 1)
+               ON CONFLICT(tenant_id, wa_id) DO UPDATE SET
                  last_inbound_at = CURRENT_TIMESTAMP,
                  session_open = 1""",
-            (wa_id,),
+            (tid, wa_id),
         )
 
 
-def update_session_outbound(wa_id: str):
+def update_session_outbound(wa_id: str, tenant_id: Optional[str] = None):
+    tid = _resolve_tenant_id(wa_id, tenant_id)
     with get_db_context() as conn:
         conn.execute(
-            """INSERT INTO user_sessions (wa_id, last_outbound_at)
-               VALUES (?, CURRENT_TIMESTAMP)
-               ON CONFLICT(wa_id) DO UPDATE SET
+            """INSERT INTO user_sessions (tenant_id, wa_id, last_outbound_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(tenant_id, wa_id) DO UPDATE SET
                  last_outbound_at = CURRENT_TIMESTAMP""",
-            (wa_id,),
+            (tid, wa_id),
         )
 
 
-def is_session_open(wa_id: str, window_hours: int = 24) -> bool:
+def is_session_open(wa_id: str, window_hours: int = 24, tenant_id: Optional[str] = None) -> bool:
+    tid = _resolve_tenant_id(wa_id, tenant_id)
     with get_db_context() as conn:
         row = conn.execute(
-            "SELECT last_inbound_at FROM user_sessions WHERE wa_id = ?",
-            (wa_id,),
+            "SELECT last_inbound_at FROM user_sessions WHERE tenant_id = ? AND wa_id = ?",
+            (tid, wa_id),
         ).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT last_inbound_at FROM user_sessions WHERE wa_id = ? LIMIT 1",
+                (wa_id,),
+            ).fetchone()
     if not row or not row["last_inbound_at"]:
         return False
     try:
@@ -55,10 +79,16 @@ def is_session_open(wa_id: str, window_hours: int = 24) -> bool:
         return False
 
 
-def get_session_info(wa_id: str) -> dict:
+def get_session_info(wa_id: str, tenant_id: Optional[str] = None) -> dict:
+    tid = _resolve_tenant_id(wa_id, tenant_id)
     with get_db_context() as conn:
         row = conn.execute(
-            "SELECT * FROM user_sessions WHERE wa_id = ?",
-            (wa_id,),
+            "SELECT * FROM user_sessions WHERE tenant_id = ? AND wa_id = ?",
+            (tid, wa_id),
         ).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT * FROM user_sessions WHERE wa_id = ? LIMIT 1",
+                (wa_id,),
+            ).fetchone()
     return dict(row) if row else {}

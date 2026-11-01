@@ -54,13 +54,14 @@ def tenant_id_from_scope(scope: str) -> Optional[str]:
 # ── tenants ───────────────────────────────────────────────────────────────
 
 def ensure_tenant(tenant_id: str, *, slug: str = "", vertical: str = "generic",
-                  waba_phone_id: str = "", display_name: str = "",
+                  waba_phone_id: str = "", mobile_number: str = "",
+                  display_name: str = "",
                   status: str = "active", conn=None) -> bool:
     """Idempotent upsert. Never clobbers an existing waba_phone_id with blank.
 
     An unbound tenant stores NULL rather than '' so the partial unique index on
-    waba_phone_id excludes it and any number of clients can be registered before
-    their numbers are bound.
+    waba_phone_id excludes it. ``mobile_number`` is the required business mobile
+    (digits); blanks are not written on update.
     """
     def _write(connection):
         # Look for existing tenant by ID, slug, or normalized slug
@@ -74,6 +75,7 @@ def ensure_tenant(tenant_id: str, *, slug: str = "", vertical: str = "generic",
                 """UPDATE tenants SET
                        slug = CASE WHEN ? != '' THEN ? ELSE slug END,
                        waba_phone_id = CASE WHEN ? != '' THEN ? ELSE waba_phone_id END,
+                       mobile_number = CASE WHEN ? != '' THEN ? ELSE mobile_number END,
                        vertical = ?,
                        status = ?,
                        display_name = CASE WHEN ? != '' THEN ? ELSE display_name END,
@@ -82,6 +84,7 @@ def ensure_tenant(tenant_id: str, *, slug: str = "", vertical: str = "generic",
                 (
                     slug or tenant_id, slug or tenant_id,
                     waba_phone_id or '', waba_phone_id or None,
+                    mobile_number or '', mobile_number or None,
                     vertical, status,
                     display_name, display_name,
                     row["id"] if isinstance(row, dict) or hasattr(row, "keys") else row[0],
@@ -99,15 +102,17 @@ def ensure_tenant(tenant_id: str, *, slug: str = "", vertical: str = "generic",
 
             if "INT" in col_type and not str(tenant_id).isdigit():
                 connection.execute(
-                    """INSERT INTO tenants (company_name, slug, waba_phone_id, vertical, status, display_name)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (display_name or slug or tenant_id, slug or tenant_id, waba_phone_id or None, vertical, status, display_name),
+                    """INSERT INTO tenants (company_name, slug, waba_phone_id, mobile_number, vertical, status, display_name)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (display_name or slug or tenant_id, slug or tenant_id, waba_phone_id or None,
+                     mobile_number or None, vertical, status, display_name),
                 )
             else:
                 connection.execute(
-                    """INSERT INTO tenants (id, slug, waba_phone_id, vertical, status, display_name)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (tenant_id, slug or tenant_id, waba_phone_id or None, vertical, status, display_name),
+                    """INSERT INTO tenants (id, slug, waba_phone_id, mobile_number, vertical, status, display_name)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (tenant_id, slug or tenant_id, waba_phone_id or None,
+                     mobile_number or None, vertical, status, display_name),
                 )
 
     if conn is None:
@@ -234,6 +239,67 @@ def normalize_waba_phone_id(value: str) -> str:
             "number itself in international format (10-16 digits)"
         )
     return digits
+
+
+def normalize_mobile_number(value: str) -> str:
+    """Normalize a tenant business mobile to digits (country code + number)."""
+    raw = str(value or "").strip()
+    if raw.upper().startswith("UNSET-"):
+        raise ValueError("mobile_number placeholder is not a real number")
+    digits = re.sub(r"\D", "", raw)
+    if not 10 <= len(digits) <= 15:
+        raise ValueError(
+            "mobile_number must be an international mobile number (10-15 digits)"
+        )
+    return digits
+
+
+def find_tenant_by_mobile(mobile_number: str) -> Optional[str]:
+    try:
+        digits = normalize_mobile_number(mobile_number)
+    except ValueError:
+        digits = re.sub(r"\D", "", str(mobile_number or ""))
+    if not digits:
+        return None
+    with _db().get_db_context() as conn:
+        try:
+            row = conn.execute(
+                "SELECT id FROM tenants WHERE mobile_number = ?", (digits,)
+            ).fetchone()
+        except Exception:
+            return None
+    return row["id"] if row else None
+
+
+def set_mobile_number(tenant_id: str, mobile_number: str, conn=None) -> bool:
+    """Set the tenant's required business mobile. Refuses duplicates."""
+    digits = normalize_mobile_number(mobile_number)
+
+    def _bind(connection):
+        clash = connection.execute(
+            "SELECT id FROM tenants WHERE mobile_number = ? AND id != ?",
+            (digits, tenant_id),
+        ).fetchone()
+        if clash:
+            logger.warning(
+                "mobile_number %s already bound to tenant %s; refusing %s",
+                digits, clash["id"], tenant_id,
+            )
+            return False
+        connection.execute(
+            "UPDATE tenants SET mobile_number = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (digits, str(tenant_id)),
+        )
+        return True
+
+    if conn is None:
+        with _db().get_db_context() as own_conn:
+            ok = _bind(own_conn)
+    else:
+        ok = _bind(conn)
+    if ok:
+        invalidate(tenant_id)
+    return ok
 
 
 def set_waba_phone_id(tenant_id: str, phone_id: str, conn=None) -> bool:

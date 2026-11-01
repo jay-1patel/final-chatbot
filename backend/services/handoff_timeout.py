@@ -5,10 +5,14 @@ Periodically checks for conversations stuck in human_handover mode
 where no human agent has responded within the configured timeout.
 When detected, automatically clears human_handover so the chatbot
 resumes handling the conversation.
+
+WhatsApp notify is OFF by default (HANDOFF_TIMEOUT_NOTIFY). Set to 1/true
+to text the customer on auto-revert; state is always cleared either way.
 """
 
 import asyncio
 import logging
+import os
 import sqlite3
 
 from routing.config import DB_PATH as ROUTING_DB_PATH
@@ -27,6 +31,15 @@ TIMEOUT_MESSAGE = (
 )
 
 
+def _notify_enabled() -> bool:
+    return os.environ.get("HANDOFF_TIMEOUT_NOTIFY", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _get_stale_handoffs() -> list[str]:
     """Return wa_ids where human_handover=1 and no human reply has arrived
     within the timeout window.
@@ -42,12 +55,13 @@ def _get_stale_handoffs() -> list[str]:
     try:
         conn = sqlite3.connect(ROUTING_DB_PATH)
         rows = conn.execute(
-            "SELECT wa_id FROM user_states "
+            "SELECT wa_id, tenant_id FROM user_states "
             "WHERE human_handover = 1 "
             "AND updated_at < datetime('now', ?)",
             (f"-{HANDOFF_TIMEOUT_SECONDS} seconds",),
         ).fetchall()
         conn.close()
+        # Return wa_id strings (callers clear by wa_id); tenant kept for send_log.
         return [r[0] for r in rows]
     except Exception as e:
         logger.error(f"Failed to check stale handoffs: {e}")
@@ -73,21 +87,31 @@ def _clear_handover(wa_id: str) -> None:
 
 
 def _send_timeout_message(wa_id: str) -> None:
-    """Send the auto-revert notification to the user."""
+    """Send the auto-revert notification to the user (only when notify is on)."""
     try:
         from routing.config import SEND2_USERNAME, SEND2_PASSWORD
         if SEND2_USERNAME and SEND2_PASSWORD:
             from routing.whatsapp import send_whatsapp_message
             send_whatsapp_message(wa_id, TIMEOUT_MESSAGE)
+            try:
+                from services.send_log import log_whatsapp_send
+                log_whatsapp_send(
+                    wa_id=wa_id,
+                    reason="handoff_timeout",
+                    snippet=TIMEOUT_MESSAGE[:120],
+                )
+            except Exception:
+                pass
     except Exception as e:
         logger.error(f"Failed to send timeout message to {wa_id}: {e}")
 
 
 async def handoff_timeout_monitor(stop_event: asyncio.Event = None) -> None:
     """Background loop that reverts stale handoffs."""
+    notify = _notify_enabled()
     logger.info(
-        "Handoff timeout monitor started (interval=%ds, timeout=%ds)",
-        CHECK_INTERVAL, HANDOFF_TIMEOUT_SECONDS,
+        "Handoff timeout monitor started (interval=%ds, timeout=%ds, notify=%s)",
+        CHECK_INTERVAL, HANDOFF_TIMEOUT_SECONDS, int(notify),
     )
 
     while True:
@@ -98,12 +122,19 @@ async def handoff_timeout_monitor(stop_event: asyncio.Event = None) -> None:
         try:
             stale = _get_stale_handoffs()
             if stale:
-                logger.info(f"HANDOFF_TIMEOUT | Found {len(stale)} stale handoff(s): {stale}")
+                notify = _notify_enabled()
+                logger.info(
+                    "HANDOFF_TIMEOUT | Found %s stale handoff(s) notify=%s: %s",
+                    len(stale), int(notify), stale,
+                )
                 for wa_id in stale:
                     _clear_handover(wa_id)
-                    _send_timeout_message(wa_id)
-                    # Small delay between messages to avoid rate limits
-                    await asyncio.sleep(1)
+                    if notify:
+                        logger.info("HANDOFF_TIMEOUT | notify=1 | wa_id=%s", wa_id)
+                        _send_timeout_message(wa_id)
+                        await asyncio.sleep(1)
+                    else:
+                        logger.info("HANDOFF_TIMEOUT | notify=0 | wa_id=%s", wa_id)
         except Exception as e:
             logger.error(f"Handoff timeout check failed: {e}")
 

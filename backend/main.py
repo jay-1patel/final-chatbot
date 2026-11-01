@@ -90,6 +90,20 @@ async def lifespan(app: FastAPI):
     logger.info("[STARTUP] lifespan entered")
     init_db()
     logger.info("[STARTUP] init_db done")
+    try:
+        from routing.config import DB_PATH as _routing_db
+        from database import DB_PATH as _app_db
+        logger.info(
+            "[STARTUP] DB paths app=%s routing=%s same=%s "
+            "(run ONE server process against this file — dual processes double WhatsApp replies)",
+            _app_db, _routing_db, os.path.abspath(str(_app_db or "")) == os.path.abspath(str(_routing_db or "")),
+        )
+    except Exception as _db_path_exc:
+        logger.warning("[STARTUP] could not compare DB paths: %s", _db_path_exc)
+    logger.info(
+        "[STARTUP] HANDOFF_TIMEOUT_NOTIFY=%s (customer WhatsApp on handoff auto-revert)",
+        os.environ.get("HANDOFF_TIMEOUT_NOTIFY", "0"),
+    )
 
     from faq.service import faq_index
     logger.info(f"[STARTUP] faq_index id={id(faq_index)}, is_built={faq_index.is_built}")

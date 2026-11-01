@@ -658,19 +658,26 @@ async def _process_captured_message(wa_id: str, message: str, tenant_id: str = N
             new_state = f"{new_state_prefix}{new_state}" if new_state else current_state
 
         # UPSERT — webhook + poller can both create the row; plain INSERT races
-        # with UNIQUE(wa_id) and drops the reply after WhatsApp already got it.
+        # and drops the reply after WhatsApp already got it.
         ctx_json = json.dumps(updated_context)
+        tid = (tenant_id or "").strip()
+        if not tid:
+            try:
+                from shared.tenancy.resolver import resolve_tenant_for_user
+                tid = resolve_tenant_for_user(wa_id) or "default"
+            except Exception:
+                tid = "default"
         with get_db_context() as conn:
             conn.execute(
                 """
-                INSERT INTO user_states (wa_id, state, context_json, lang, updated_at)
-                VALUES (?, ?, ?, 'en', CURRENT_TIMESTAMP)
-                ON CONFLICT(wa_id) DO UPDATE SET
+                INSERT INTO user_states (tenant_id, wa_id, state, context_json, lang, updated_at)
+                VALUES (?, ?, ?, ?, 'en', CURRENT_TIMESTAMP)
+                ON CONFLICT(tenant_id, wa_id) DO UPDATE SET
                     state = excluded.state,
                     context_json = excluded.context_json,
                     updated_at = CURRENT_TIMESTAMP
                 """,
-                (wa_id, new_state, ctx_json),
+                (tid, wa_id, new_state, ctx_json),
             )
 
     messages = drain_captured()

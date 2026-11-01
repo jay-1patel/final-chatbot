@@ -274,11 +274,11 @@ def assign_conversation(
 ):
     with get_db_context() as conn:
         conn.execute(
-            """INSERT INTO conversation_assignments (wa_id, agent_id, assigned_at)
-               VALUES (?, ?, ?)
-               ON CONFLICT(wa_id) DO UPDATE SET
+            """INSERT INTO conversation_assignments (tenant_id, wa_id, agent_id, assigned_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(tenant_id, wa_id) DO UPDATE SET
                  agent_id = excluded.agent_id, assigned_at = excluded.assigned_at""",
-            (body.wa_id, body.agent_id, datetime.utcnow().isoformat()),
+            (tenant_id, body.wa_id, body.agent_id, datetime.utcnow().isoformat()),
         )
     return {"status": "ok", "wa_id": body.wa_id, "agent_id": body.agent_id}
 
@@ -304,6 +304,17 @@ def resolve_handoff(
             if SEND2_USERNAME and SEND2_PASSWORD:
                 from routing.whatsapp import send_whatsapp_message
                 sent = bool(send_whatsapp_message(wa_id, RESOLVED_MESSAGE))
+                if sent:
+                    try:
+                        from services.send_log import log_whatsapp_send, REASON_INBOX
+                        log_whatsapp_send(
+                            wa_id=wa_id,
+                            tenant_id=tenant_id,
+                            reason=REASON_INBOX,
+                            snippet=RESOLVED_MESSAGE[:120],
+                        )
+                    except Exception:
+                        pass
         except Exception as exc:  # pragma: no cover - depends on live credentials
             logger.warning(f"Could not send resolve message to {wa_id}: {exc}")
     logger.info(f"INBOX_RESOLVED | tenant={tenant_id} | wa={wa_id} | notified={sent}")
@@ -382,6 +393,17 @@ def reply_to_customer(
         sent = False
     if not sent:
         raise HTTPException(status_code=502, detail="WhatsApp message could not be sent")
+
+    try:
+        from services.send_log import log_whatsapp_send, REASON_INBOX
+        log_whatsapp_send(
+            wa_id=wa_id,
+            tenant_id=tenant_id,
+            reason=REASON_INBOX,
+            snippet=(message or attach_name or "inbox_reply")[:120],
+        )
+    except Exception:
+        pass
 
     history_text = message
     if send_as_media:
@@ -612,3 +634,153 @@ def delete_complaint(
             raise HTTPException(status_code=404, detail="Complaint not found for this tenant")
         conn.execute("DELETE FROM complaints WHERE ticket_id = ? AND tenant_id = ?", (ticket_id, tenant_id))
     return {"status": "ok", "ticket_id": ticket_id}
+
+
+def _normalize_lookup_phone(value: str) -> str:
+    import re
+    return re.sub(r"\D", "", str(value or "").strip())
+
+
+@router.get("/customer-360/{wa_id}")
+def customer_360(
+    tenant_id: str,
+    wa_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    principal: dict = Depends(_require("view_inbox")),
+):
+    """One-number story: profile, session/state, chat, orders, CRM, send log.
+
+    ``wa_id`` may be digits with or without ``+`` / spaces; we normalize to digits
+    and also match ``customers.phone`` when it differs from the WhatsApp id.
+    """
+    digits = _normalize_lookup_phone(wa_id)
+    if not digits:
+        raise HTTPException(status_code=400, detail="wa_id / mobile number required")
+
+    with get_db_context() as conn:
+        customer = conn.execute(
+            """SELECT * FROM customers
+               WHERE tenant_id = ?
+                 AND (wa_id = ? OR phone = ? OR replace(replace(coalesce(phone,''),'+',''),' ','') = ?)
+               LIMIT 1""",
+            (tenant_id, digits, digits, digits),
+        ).fetchone()
+        resolved_wa = digits
+        if customer:
+            resolved_wa = str(customer["wa_id"] or digits)
+
+        session = conn.execute(
+            "SELECT * FROM user_sessions WHERE tenant_id = ? AND wa_id = ?",
+            (tenant_id, resolved_wa),
+        ).fetchone()
+        if session is None:
+            session = conn.execute(
+                "SELECT * FROM user_sessions WHERE wa_id = ? LIMIT 1",
+                (resolved_wa,),
+            ).fetchone()
+
+        state = conn.execute(
+            "SELECT * FROM user_states WHERE tenant_id = ? AND wa_id = ?",
+            (tenant_id, resolved_wa),
+        ).fetchone()
+        if state is None:
+            state = conn.execute(
+                "SELECT * FROM user_states WHERE wa_id = ? LIMIT 1",
+                (resolved_wa,),
+            ).fetchone()
+
+        chat = conn.execute(
+            """SELECT id, message, response, route, created_at FROM chat_history
+               WHERE tenant_id = ? AND wa_id = ?
+               ORDER BY created_at DESC LIMIT ?""",
+            (tenant_id, resolved_wa, limit),
+        ).fetchall()
+
+        try:
+            orders = conn.execute(
+                """SELECT * FROM orders
+                   WHERE (tenant_id = ? OR tenant_id IS NULL) AND wa_id = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (tenant_id, resolved_wa, limit),
+            ).fetchall()
+        except Exception:
+            orders = []
+
+        try:
+            leads = conn.execute(
+                """SELECT * FROM leads WHERE tenant_id = ? AND wa_id = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (tenant_id, resolved_wa, limit),
+            ).fetchall()
+        except Exception:
+            leads = []
+
+        try:
+            complaints = conn.execute(
+                """SELECT * FROM complaints
+                   WHERE (tenant_id = ? OR tenant_id IS NULL) AND wa_id = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (tenant_id, resolved_wa, limit),
+            ).fetchall()
+        except Exception:
+            complaints = []
+
+        try:
+            handoffs = conn.execute(
+                """SELECT * FROM handoffs WHERE tenant_id = ? AND wa_id = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (tenant_id, resolved_wa, limit),
+            ).fetchall()
+        except Exception:
+            handoffs = []
+
+        try:
+            send_log = conn.execute(
+                """SELECT id, reason, trigger_message_id, snippet, created_at
+                   FROM whatsapp_send_log
+                   WHERE wa_id = ? AND (tenant_id = ? OR tenant_id IS NULL OR tenant_id = '')
+                   ORDER BY created_at DESC LIMIT ?""",
+                (resolved_wa, tenant_id, limit),
+            ).fetchall()
+        except Exception:
+            send_log = []
+
+        try:
+            dedup = conn.execute(
+                """SELECT message_id, channel, processed_at FROM processed_inbound_messages
+                   WHERE wa_id = ? ORDER BY processed_at DESC LIMIT ?""",
+                (resolved_wa, min(limit, 50)),
+            ).fetchall()
+        except Exception:
+            dedup = []
+
+        try:
+            webhook_hits = conn.execute(
+                """SELECT id, direction, endpoint, status_code, message_id, created_at
+                   FROM webhook_logs
+                   WHERE wa_id = ? AND (tenant_id = ? OR tenant_id IS NULL OR tenant_id = '')
+                   ORDER BY created_at DESC LIMIT ?""",
+                (resolved_wa, tenant_id, min(limit, 50)),
+            ).fetchall()
+        except Exception:
+            webhook_hits = []
+
+    def _rows(rows):
+        return [dict(r) for r in (rows or [])]
+
+    return {
+        "tenant_id": tenant_id,
+        "wa_id": resolved_wa,
+        "lookup": digits,
+        "customer": dict(customer) if customer else None,
+        "session": dict(session) if session else None,
+        "state": dict(state) if state else None,
+        "chat_history": list(reversed(_rows(chat))),
+        "orders": _rows(orders),
+        "leads": _rows(leads),
+        "complaints": _rows(complaints),
+        "handoffs": _rows(handoffs),
+        "whatsapp_send_log": _rows(send_log),
+        "processed_inbound": _rows(dedup),
+        "webhook_logs": _rows(webhook_hits),
+    }

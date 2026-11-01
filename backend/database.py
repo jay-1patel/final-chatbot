@@ -315,11 +315,13 @@ def init_db():
         )
         conn.execute(
             """CREATE TABLE IF NOT EXISTS user_sessions (
-                wa_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT 'default',
+                wa_id TEXT NOT NULL,
                 last_inbound_at TIMESTAMP,
                 last_outbound_at TIMESTAMP,
                 session_open INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tenant_id, wa_id)
             )"""
         )
         conn.execute(
@@ -351,13 +353,14 @@ def init_db():
         ])
         conn.execute(
             """CREATE TABLE IF NOT EXISTS user_states (
-                wa_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT 'default',
+                wa_id TEXT NOT NULL,
                 state TEXT DEFAULT 'MAIN_MENU',
                 context_json TEXT DEFAULT '{}',
                 lang TEXT DEFAULT 'en',
                 version INTEGER DEFAULT 0,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (wa_id) REFERENCES user_sessions(wa_id) ON DELETE CASCADE
+                PRIMARY KEY (tenant_id, wa_id)
             )"""
         )
         _ensure_columns(conn, "user_states", [("version", "INTEGER DEFAULT 0")])
@@ -371,6 +374,26 @@ def init_db():
                 channel TEXT DEFAULT 'send2',
                 processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )"""
+        )
+        # Outbound send-reason ledger — answers "why did this number get a WhatsApp?"
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS whatsapp_send_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wa_id TEXT NOT NULL,
+                tenant_id TEXT,
+                reason TEXT NOT NULL,
+                trigger_message_id TEXT,
+                snippet TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_whatsapp_send_log_wa "
+            "ON whatsapp_send_log(wa_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_whatsapp_send_log_tenant_wa "
+            "ON whatsapp_send_log(tenant_id, wa_id, created_at)"
         )
         conn.execute(
             """CREATE TABLE IF NOT EXISTS complaints (
@@ -504,9 +527,11 @@ def init_db():
         # Inbox: conversation-to-agent assignments
         conn.execute(
             """CREATE TABLE IF NOT EXISTS conversation_assignments (
-                wa_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT 'default',
+                wa_id TEXT NOT NULL,
                 agent_id TEXT NOT NULL,
-                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tenant_id, wa_id)
             )"""
         )
         conn.execute(
@@ -695,7 +720,18 @@ def init_db():
             ("response_time_ms", "INTEGER"),
             ("payload_hash", "TEXT"),
             ("payload_size", "INTEGER"),
+            ("wa_id", "TEXT"),
+            ("tenant_id", "TEXT"),
+            ("message_id", "TEXT"),
         ])
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_webhook_logs_wa "
+            "ON webhook_logs(wa_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_webhook_logs_tenant_msg "
+            "ON webhook_logs(tenant_id, message_id)"
+        )
 
         # B2C support: auto-escalation flag on the user state
         _ensure_columns(conn, "user_states", [
@@ -946,10 +982,12 @@ def init_db():
         conn.execute(
             """CREATE TABLE IF NOT EXISTS carts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                wa_id TEXT NOT NULL UNIQUE,
+                tenant_id TEXT NOT NULL DEFAULT 'default',
+                wa_id TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('utc')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('utc')),
-                expires_at TEXT NOT NULL
+                expires_at TEXT NOT NULL,
+                UNIQUE (tenant_id, wa_id)
             )"""
         )
         conn.execute("CREATE INDEX IF NOT EXISTS ix_carts_expires ON carts(expires_at)")
@@ -1119,7 +1157,12 @@ def init_db():
         _migrate_products_per_tenant_slug(conn)
         _init_record_columns_table(conn)
         _init_conversation_state_columns(conn)
+        _migrate_composite_tenant_wa_keys(conn)
         _ensure_callback_tables(conn)
+        try:
+            conn.execute("PRAGMA user_version = 2")
+        except Exception:
+            pass
 
 
 # ── Tenancy: tenants + versioned tenant profiles ─────────────────────────
@@ -1224,6 +1267,9 @@ def _init_tenancy_tables(conn):
         # First website seen for the tenant, backfilled by save_profile_draft
         # (routes/tenants.py). Without this column a fresh DB 500s on draft save.
         ("domain", "TEXT"),
+        # Business mobile for the tenant (required on create). Separate from
+        # waba_phone_id which may be a Meta phone-number id.
+        ("mobile_number", "TEXT"),
     ])
     # Partial unique index, NOT an inline UNIQUE: a tenant is registered before
     # it is bound to a phone number, and an inline UNIQUE over the default ''
@@ -1236,6 +1282,27 @@ def _init_tenancy_tables(conn):
         """CREATE UNIQUE INDEX IF NOT EXISTS ux_tenants_waba_phone_id
            ON tenants(waba_phone_id)
            WHERE waba_phone_id IS NOT NULL AND waba_phone_id <> ''"""
+    )
+    # Backfill mobile_number from waba_phone_id when it looks like a phone;
+    # otherwise leave a placeholder so existing rows stay queryable until set.
+    try:
+        conn.execute(
+            """UPDATE tenants SET mobile_number = waba_phone_id
+               WHERE (mobile_number IS NULL OR TRIM(mobile_number) = '')
+                 AND waba_phone_id IS NOT NULL AND length(waba_phone_id) BETWEEN 10 AND 16
+                 AND waba_phone_id GLOB '[0-9]*'"""
+        )
+        conn.execute(
+            """UPDATE tenants SET mobile_number = 'UNSET-' || id
+               WHERE mobile_number IS NULL OR TRIM(mobile_number) = ''"""
+        )
+    except Exception as exc:
+        logger.warning("tenants mobile_number backfill skipped: %s", exc)
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS ux_tenants_mobile_number
+           ON tenants(mobile_number)
+           WHERE mobile_number IS NOT NULL AND mobile_number <> ''
+             AND mobile_number NOT LIKE 'UNSET-%'"""
     )
     conn.execute(
         """CREATE TABLE IF NOT EXISTS tenant_profile_versions (
@@ -2089,6 +2156,242 @@ def _init_record_columns_table(conn):
 
 # ── Phase 0.3: conversation state on user_states (decision D3) ───────────
 
+def _default_tenant_id() -> str:
+    try:
+        from shared.tenancy.resolver import resolve_default_tenant
+        return resolve_default_tenant()
+    except Exception:
+        return os.environ.get("DEFAULT_TENANT_ID", "default")
+
+
+def _table_pk_columns(conn, table: str) -> list:
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except Exception:
+        return []
+    pk = []
+    for r in rows:
+        # (cid, name, type, notnull, dflt, pk)
+        name = r[1] if not hasattr(r, "keys") else r["name"]
+        pk_ord = r[5] if not hasattr(r, "keys") else r["pk"]
+        if pk_ord and int(pk_ord) > 0:
+            pk.append((int(pk_ord), name))
+    pk.sort()
+    return [n for _, n in pk]
+
+
+def _migrate_composite_tenant_wa_keys(conn):
+    """Rebuild session/state/assignment/cart identity as (tenant_id, wa_id).
+
+    Idempotent: skips tables that already have a composite primary key.
+    """
+    default_tenant = _default_tenant_id()
+
+    # chat_history: per-number lookups must be indexed
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_chat_history_tenant_wa "
+        "ON chat_history(tenant_id, wa_id, created_at)"
+    )
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_customers_phone ON customers(phone)"
+        )
+    except Exception:
+        pass
+
+    # complaints / orders tenant stamp (orders already have tenant_id in newer DBs)
+    _ensure_columns(conn, "complaints", [("tenant_id", "TEXT")])
+    _ensure_columns(conn, "orders", [("tenant_id", "TEXT")])
+    for table in ("complaints", "orders"):
+        try:
+            conn.execute(
+                f"""UPDATE {table} SET tenant_id = COALESCE((
+                       SELECT c.tenant_id FROM customers c
+                       WHERE c.wa_id = {table}.wa_id AND c.tenant_id IS NOT NULL
+                       ORDER BY c.last_seen DESC LIMIT 1), ?)
+                   WHERE tenant_id IS NULL OR TRIM(tenant_id) = ''""",
+                (default_tenant,),
+            )
+        except Exception as exc:
+            logger.warning("%s tenant_id backfill skipped: %s", table, exc)
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS ix_{table}_tenant_wa ON {table}(tenant_id, wa_id)"
+        )
+
+    # user_sessions
+    if _table_pk_columns(conn, "user_sessions") == ["wa_id"]:
+        logger.info("Migrating user_sessions to composite PK (tenant_id, wa_id)")
+        _ensure_columns(conn, "user_sessions", [("tenant_id", "TEXT")])
+        conn.execute(
+            "UPDATE user_sessions SET tenant_id = ? WHERE tenant_id IS NULL OR TRIM(tenant_id) = ''",
+            (default_tenant,),
+        )
+        conn.execute("ALTER TABLE user_sessions RENAME TO user_sessions_legacy_wa")
+        conn.execute(
+            """CREATE TABLE user_sessions (
+                tenant_id TEXT NOT NULL,
+                wa_id TEXT NOT NULL,
+                last_inbound_at TIMESTAMP,
+                last_outbound_at TIMESTAMP,
+                session_open INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tenant_id, wa_id)
+            )"""
+        )
+        conn.execute(
+            """INSERT OR IGNORE INTO user_sessions
+               (tenant_id, wa_id, last_inbound_at, last_outbound_at, session_open, created_at)
+               SELECT COALESCE(NULLIF(TRIM(tenant_id), ''), ?), wa_id,
+                      last_inbound_at, last_outbound_at, session_open, created_at
+               FROM user_sessions_legacy_wa""",
+            (default_tenant,),
+        )
+        conn.execute("DROP TABLE user_sessions_legacy_wa")
+
+    # user_states
+    if _table_pk_columns(conn, "user_states") == ["wa_id"]:
+        logger.info("Migrating user_states to composite PK (tenant_id, wa_id)")
+        _ensure_columns(conn, "user_states", [("tenant_id", "TEXT")])
+        conn.execute(
+            "UPDATE user_states SET tenant_id = ? WHERE tenant_id IS NULL OR TRIM(tenant_id) = ''",
+            (default_tenant,),
+        )
+        # Collect column names that exist so we can copy forward.
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(user_states)").fetchall()]
+        conn.execute("ALTER TABLE user_states RENAME TO user_states_legacy_wa")
+        conn.execute(
+            """CREATE TABLE user_states (
+                tenant_id TEXT NOT NULL,
+                wa_id TEXT NOT NULL,
+                state TEXT DEFAULT 'MAIN_MENU',
+                context_json TEXT DEFAULT '{}',
+                lang TEXT DEFAULT 'en',
+                version INTEGER DEFAULT 0,
+                human_handover INTEGER DEFAULT 0,
+                handover_resolved_at TIMESTAMP,
+                active_flow TEXT,
+                current_step TEXT,
+                collected TEXT DEFAULT '{}',
+                status TEXT DEFAULT 'bot',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tenant_id, wa_id)
+            )"""
+        )
+        copy_cols = [
+            c for c in (
+                "tenant_id", "wa_id", "state", "context_json", "lang", "version",
+                "human_handover", "handover_resolved_at", "active_flow",
+                "current_step", "collected", "status", "updated_at",
+            )
+            if c in cols or c in ("tenant_id", "wa_id")
+        ]
+        select_bits = []
+        for c in copy_cols:
+            if c == "tenant_id":
+                select_bits.append("COALESCE(NULLIF(TRIM(tenant_id), ''), ?)")
+            elif c in cols:
+                select_bits.append(c)
+            else:
+                select_bits.append("NULL")
+        conn.execute(
+            f"""INSERT OR IGNORE INTO user_states ({', '.join(copy_cols)})
+                SELECT {', '.join(select_bits)} FROM user_states_legacy_wa""",
+            (default_tenant,),
+        )
+        conn.execute("DROP TABLE user_states_legacy_wa")
+
+    # conversation_assignments
+    if _table_pk_columns(conn, "conversation_assignments") == ["wa_id"]:
+        logger.info("Migrating conversation_assignments to composite PK (tenant_id, wa_id)")
+        _ensure_columns(conn, "conversation_assignments", [("tenant_id", "TEXT")])
+        conn.execute(
+            "UPDATE conversation_assignments SET tenant_id = ? "
+            "WHERE tenant_id IS NULL OR TRIM(tenant_id) = ''",
+            (default_tenant,),
+        )
+        conn.execute(
+            "ALTER TABLE conversation_assignments RENAME TO conversation_assignments_legacy_wa"
+        )
+        conn.execute(
+            """CREATE TABLE conversation_assignments (
+                tenant_id TEXT NOT NULL,
+                wa_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tenant_id, wa_id)
+            )"""
+        )
+        conn.execute(
+            """INSERT OR IGNORE INTO conversation_assignments
+               (tenant_id, wa_id, agent_id, assigned_at)
+               SELECT COALESCE(NULLIF(TRIM(tenant_id), ''), ?), wa_id, agent_id, assigned_at
+               FROM conversation_assignments_legacy_wa""",
+            (default_tenant,),
+        )
+        conn.execute("DROP TABLE conversation_assignments_legacy_wa")
+
+    # carts: drop wa_id-only UNIQUE, enforce (tenant_id, wa_id)
+    try:
+        idx_rows = conn.execute("PRAGMA index_list(carts)").fetchall()
+        has_wa_unique = False
+        for idx in idx_rows:
+            name = idx[1] if not hasattr(idx, "keys") else idx["name"]
+            unique = idx[2] if not hasattr(idx, "keys") else idx["unique"]
+            if not unique:
+                continue
+            info = conn.execute(f"PRAGMA index_info({name})").fetchall()
+            cols = [r[2] if not hasattr(r, "keys") else r["name"] for r in info]
+            if cols == ["wa_id"]:
+                has_wa_unique = True
+                break
+        # Also detect inline UNIQUE on wa_id via table rebuild marker
+        create_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='carts'"
+        ).fetchone()
+        sql_text = ""
+        if create_sql:
+            sql_text = create_sql[0] if not hasattr(create_sql, "keys") else (create_sql["sql"] or "")
+        if "wa_id TEXT NOT NULL UNIQUE" in (sql_text or "") or has_wa_unique:
+            logger.info("Migrating carts to UNIQUE(tenant_id, wa_id)")
+            _ensure_columns(conn, "carts", [("tenant_id", "TEXT")])
+            conn.execute(
+                "UPDATE carts SET tenant_id = ? WHERE tenant_id IS NULL OR TRIM(tenant_id) = ''",
+                (default_tenant,),
+            )
+            conn.execute("ALTER TABLE carts RENAME TO carts_legacy_wa")
+            conn.execute(
+                """CREATE TABLE carts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tenant_id TEXT NOT NULL,
+                    wa_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('utc')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('utc')),
+                    expires_at TEXT NOT NULL,
+                    UNIQUE (tenant_id, wa_id)
+                )"""
+            )
+            conn.execute(
+                """INSERT OR IGNORE INTO carts
+                   (id, tenant_id, wa_id, created_at, updated_at, expires_at)
+                   SELECT id, COALESCE(NULLIF(TRIM(tenant_id), ''), ?), wa_id,
+                          created_at, updated_at, expires_at
+                   FROM carts_legacy_wa""",
+                (default_tenant,),
+            )
+            # Remap cart_items.cart_id stays same (same id values preserved)
+            conn.execute("DROP TABLE carts_legacy_wa")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_carts_expires ON carts(expires_at)")
+    except Exception as exc:
+        logger.warning("carts composite unique migration skipped: %s", exc)
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_user_states_tenant ON user_states(tenant_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_user_states_wa ON user_states(wa_id)"
+    )
+
+
 def _init_conversation_state_columns(conn):
     """Extend user_states instead of creating a parallel state table (D3).
 
@@ -2107,11 +2410,7 @@ def _init_conversation_state_columns(conn):
     # Conversations that predate the tenant_id column belong to the default
     # tenant. The tenant console scopes chat history by this column, so leaving
     # them NULL would make old customers invisible to the console that owns them.
-    try:
-        from shared.tenancy.resolver import resolve_default_tenant
-        default_tenant = resolve_default_tenant()
-    except Exception:
-        default_tenant = os.environ.get("DEFAULT_TENANT_ID", "default")
+    default_tenant = _default_tenant_id()
     conn.execute(
         "UPDATE user_states SET tenant_id = ? WHERE tenant_id IS NULL OR TRIM(tenant_id) = ''",
         (default_tenant,),

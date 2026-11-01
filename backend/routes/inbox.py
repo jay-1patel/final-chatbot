@@ -139,13 +139,15 @@ def set_agent_status(body: AgentStatusRequest, current_admin: dict = Depends(get
 def assign_conversation(body: AssignRequest, current_admin: dict = Depends(get_current_admin)):
     conn = get_db()
     try:
+        tid = (current_admin.get("tenant_id") or "").strip() or "default"
         conn.execute(
             """
-            INSERT INTO conversation_assignments (wa_id, agent_id, assigned_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(wa_id) DO UPDATE SET agent_id=excluded.agent_id, assigned_at=excluded.assigned_at
+            INSERT INTO conversation_assignments (tenant_id, wa_id, agent_id, assigned_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(tenant_id, wa_id) DO UPDATE SET
+              agent_id=excluded.agent_id, assigned_at=excluded.assigned_at
             """,
-            (body.wa_id, body.agent_id, datetime.utcnow().isoformat()),
+            (tid, body.wa_id, body.agent_id, datetime.utcnow().isoformat()),
         )
         conn.commit()
         return {"status": "ok", "wa_id": body.wa_id, "agent_id": body.agent_id}

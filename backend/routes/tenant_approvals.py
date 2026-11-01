@@ -198,11 +198,29 @@ def _create_change_request(body: TenantChangeCreate, current_admin: dict):
         except Exception as exc:
             raise HTTPException(status_code=422, detail=f"Invalid vertical: {exc}")
 
+        from shared.tenancy import store as tenancy_store
+        mobile_number = str(tenant_fields.get("mobile_number") or "").strip()
+        if not mobile_number:
+            raise HTTPException(
+                status_code=422,
+                detail="mobile_number is required (tenant WhatsApp / business mobile with country code)",
+            )
+        try:
+            mobile_number = tenancy_store.normalize_mobile_number(mobile_number)
+            tenant_fields["mobile_number"] = mobile_number
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        clash = tenancy_store.find_tenant_by_mobile(mobile_number)
+        if clash and clash != tenant_id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"mobile_number already registered to tenant '{clash}'",
+            )
         waba_phone_id = str(tenant_fields.get("waba_phone_id") or "").strip()
         if waba_phone_id:
-            from shared.tenancy import store as tenancy_store
             try:
                 tenant_fields["waba_phone_id"] = tenancy_store.normalize_waba_phone_id(waba_phone_id)
+                waba_phone_id = tenant_fields["waba_phone_id"]
             except ValueError:
                 raise HTTPException(
                     status_code=422,
@@ -213,6 +231,7 @@ def _create_change_request(body: TenantChangeCreate, current_admin: dict):
                 "slug": tenant_fields.get("slug") or tenant_id,
                 "vertical": tenant_fields.get("vertical") or "generic",
                 "display_name": tenant_fields.get("display_name") or "",
+                "mobile_number": mobile_number,
                 "waba_phone_id": waba_phone_id,
                 "status": tenant_fields.get("status") or "active",
             },
@@ -485,6 +504,7 @@ def _apply_request(row: dict) -> int:
             slug=tenant_fields.get("slug") or tenant_id,
             vertical=tenant_fields.get("vertical") or "generic",
             waba_phone_id=tenant_fields.get("waba_phone_id") or "",
+            mobile_number=tenant_fields.get("mobile_number") or "",
             display_name=tenant_fields.get("display_name") or "",
             status=tenant_fields.get("status") or "active",
         )
