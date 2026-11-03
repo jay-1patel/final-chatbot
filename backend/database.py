@@ -1176,6 +1176,7 @@ def init_db():
         _init_conversation_state_columns(conn)
         _migrate_composite_tenant_wa_keys(conn)
         _ensure_callback_tables(conn)
+        _init_api_error_logs_table(conn)
         try:
             conn.execute("PRAGMA user_version = 2")
         except Exception:
@@ -1487,6 +1488,32 @@ def _init_tenant_change_tables(conn):
 
 # ── Callback and Meeting Scheduling Tables ─────────────────────────────────
 # These tables support the complete callback booking pipeline with Google Meet integration
+def _init_api_error_logs_table(conn):
+    """Durable log of external API / runtime failures for admin review."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS api_error_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            severity TEXT NOT NULL DEFAULT 'error',
+            message TEXT NOT NULL DEFAULT '',
+            detail TEXT NOT NULL DEFAULT '',
+            http_status INTEGER,
+            tenant_id TEXT,
+            wa_id TEXT
+        )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_api_error_logs_created "
+        "ON api_error_logs(created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_api_error_logs_provider "
+        "ON api_error_logs(provider, created_at DESC)"
+    )
+
+
 def _ensure_callback_tables(conn):
     """Ensure callback-related tables exist."""
     # Main callbacks table - stores all callback requests

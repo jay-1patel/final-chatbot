@@ -107,7 +107,8 @@ def _handle_campaign_opt_out(user_text: str, wa_id: str, sender_name: str, tenan
 
     save_chat(wa_id, sender_name, user_text, reply, "campaign_opt_out")
     send_whatsapp_message(wa_id, reply)
-    logger.info(f"CAMPAIGN_CONSENT | {event} | tenant={tid} | wa_id={wa_id}")
+    # WARNING so opt-out/in is visible even when INFO is noisy / filtered.
+    logger.warning("CAMPAIGN_CONSENT | %s | tenant=%s | wa_id=%s | text=%r", event, tid, wa_id, text)
     return True
 
 

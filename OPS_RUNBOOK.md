@@ -25,6 +25,10 @@ Incident/DB review: [`final-chatbot-full-review-2026-11-01.md`](final-chatbot-fu
 | `ROUTING_DB_PATH` | Must be the same `faq.db` as the app |
 | `DEFAULT_TENANT_ID` | Fallback tenant slug |
 | `HANDOFF_TIMEOUT_NOTIFY` | **`0` default** — handoff timer clears state silently; set `1` to text “I’m back to help you” |
+| `ALERT_WEBHOOK_URL` | Optional Slack/Discord webhook — every `API_ERROR` is posted here (rate-limited) |
+| `ADMIN_NOTIFICATION_MODE` | `log` (default) or `send` — when `send`, errors also WhatsApp `ADMIN_WHATSAPP_ID` |
+| `ADMIN_WHATSAPP_ID` | Your number for error alerts when mode=`send` |
+| `ERROR_ALERT_COOLDOWN_SECONDS` | Default `60` — prevents identical error spam |
 | Active Test Tenant | Admin console override — wins over phone binding on the shared number |
 
 Tenant create now **requires** `mobile_number` (digits, unique). Meta bind stays on `POST …/phone-id`. Set/fix mobile via `POST …/mobile-number`.
@@ -51,6 +55,10 @@ Tenant create now **requires** `mobile_number` (digits, unique). Meta bind stays
 | Bot answered twice / re-answered old Hi | `DEDUP_FAIL_CLOSED`, `IncomingListener` | `processed_inbound_messages`, `webhook_dedup`, `chat_history` duplicates; count server processes |
 | Empty inbound menu blast | `Skipping empty inbound` / `interactive null-text` | send_log `null_menu` only when interactive hint present |
 | Wrong tenant answered | `tenancy.resolver`, `POLL_UNROUTED` | `tenants.mobile_number` / `waba_phone_id`, Active Test Tenant |
+| Send2 says number opted out | `SEND2_OPT_OUT`, `API_ERROR` | Recipient blocked WhatsApp business msgs; re-opt-in on phone or use another number |
+| Any external API / 500 error | `API_ERROR` | `GET /api/admin/api-errors` + optional `ALERT_WEBHOOK_URL` / admin WhatsApp |
+| Customer texted STOP/START | `CAMPAIGN_CONSENT` | `campaign_opt_outs` table |
+| Background job died after start | `[BACKGROUND_TASK]` | restart server; check traceback on that line |
 | Track one mobile end-to-end | — | `GET /api/admin/tenants/{tenant_id}/customer-360/{wa_id}` |
 | Who sent what outbound | — | `whatsapp_send_log` (`reason`, `snippet`, `trigger_message_id`) |
 | Webhook traffic for a number | — | `webhook_logs` (`wa_id`, `tenant_id`, `message_id` + payload hash) |

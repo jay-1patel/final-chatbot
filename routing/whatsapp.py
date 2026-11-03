@@ -15,6 +15,95 @@ logger = logging.getLogger("chiki_webhook")
 VALID_MSG_TYPES = ("text", "image", "video", "audio", "document")
 
 
+def classify_send2_response(status_code, body: str) -> str:
+    """Classify a Send2 HTTP response for logging and caller decisions.
+
+    Returns one of: ``ok``, ``opt_out``, ``error``.
+    Send2 often returns HTTP 200 with a plain-text / JSON body that means the
+    recipient opted out of WhatsApp business messages — that must never look
+    like a silent success or a mysterious ``failed: None``.
+    """
+    text = (body or "").strip()
+    low = text.lower()
+    if "opt out" in low or "opted out" in low or "opt-out" in low:
+        return "opt_out"
+    if status_code != 200:
+        return "error"
+    if (
+        '"success":true' in low
+        or '"success": true' in low
+        or '"success":1' in low
+        or '"success": 1' in low
+        or "message sent successfully" in low
+    ):
+        return "ok"
+    if any(
+        token in low
+        for token in (
+            "invalid",
+            "unable to send",
+            "failed",
+            '"success":false',
+            '"success": false',
+            "error",
+        )
+    ):
+        return "error"
+    # Ambiguous 200 with no success marker — treat as error so callers retry/log.
+    return "error"
+
+
+def log_send2_outcome(kind: str, to: str, status_code, body: str, *, tenant_id=None) -> str:
+    """Emit a loud, greppable log line for every Send2 send outcome."""
+    outcome = classify_send2_response(status_code, body)
+    snippet = ((body or "").replace("\n", " "))[:300]
+    tid = tenant_id or "-"
+    if outcome == "opt_out":
+        logger.warning(
+            "SEND2_OPT_OUT | kind=%s | to=%s | tenant=%s | http=%s | body=%s",
+            kind, to, tid, status_code, snippet,
+        )
+        try:
+            from services.error_reporter import report_error
+            report_error(
+                "send2",
+                kind,
+                "recipient opted out of WhatsApp business messages",
+                detail=snippet,
+                severity="warning",
+                http_status=status_code,
+                tenant_id=tenant_id,
+                wa_id=str(to or ""),
+            )
+        except Exception:
+            pass
+    elif outcome == "ok":
+        logger.info(
+            "SEND2_OK | kind=%s | to=%s | tenant=%s | http=%s | body=%s",
+            kind, to, tid, status_code, snippet,
+        )
+    else:
+        logger.error(
+            "SEND2_FAIL | kind=%s | to=%s | tenant=%s | http=%s | body=%s",
+            kind, to, tid, status_code, snippet or "(empty)",
+        )
+        try:
+            from services.error_reporter import report_error
+            report_error(
+                "send2",
+                kind,
+                f"Send2 send failed ({kind})",
+                detail=snippet or "(empty body)",
+                severity="error",
+                http_status=status_code,
+                tenant_id=tenant_id,
+                wa_id=str(to or ""),
+            )
+        except Exception:
+            pass
+    return outcome
+
+
 def _resolve_media_url(media_url: str) -> str:
     """Make a media URL absolute. send2.digital needs a public http(s) URL.
 
@@ -226,6 +315,8 @@ def send_whatsapp_message(to, text, msg_type="text", timeout=15, retries=2, tena
                 "messaging_product": "whatsapp",
             }
             last_err = None
+            last_outcome = None
+            last_body = ""
             sent_chunk = False
             for attempt in range(1, retries + 1):
                 try:
@@ -234,25 +325,34 @@ def send_whatsapp_message(to, text, msg_type="text", timeout=15, retries=2, tena
                         json=payload,
                         timeout=timeout,
                     )
-                    logger.info(f"Reply sent to {to} [{norm_type}], status={resp.status_code}, body={resp.text[:300]}")
                     from routing.hookdeck import tee_outbound
                     tee_outbound(SEND2_SESSION_SEND_URL, payload, resp.status_code, resp.text, to=clean_to)
-                    body = (resp.text or "").lower()
-                    if resp.status_code == 200 and (
-                        '"success":true' in body
-                        or '"success": 1' in body
-                        or '"success":1' in body
-                        or "message sent successfully" in body
-                    ):
+                    last_body = resp.text or ""
+                    last_outcome = log_send2_outcome(
+                        norm_type, clean_to, resp.status_code, last_body, tenant_id=tenant_id,
+                    )
+                    if last_outcome == "ok":
                         sent_chunk = True
                         break
+                    if last_outcome == "opt_out":
+                        # Provider rejected delivery permanently for this number —
+                        # do not burn retries; caller already has a loud log line.
+                        break
+                    last_err = f"http={resp.status_code} body={(last_body or '')[:200]}"
                 except Exception as e:
                     last_err = e
-                    logger.warning(f"send2.digital send failed for {norm_type} (attempt {attempt}/{retries}): {e}")
+                    logger.warning(
+                        "SEND2_FAIL | kind=%s | to=%s | attempt=%s/%s | error=%s",
+                        norm_type, clean_to, attempt, retries, e,
+                    )
             if not sent_chunk:
                 from routing.hookdeck import tee_outbound
                 tee_outbound(SEND2_SESSION_SEND_URL, payload, None, f"exception: {last_err}", to=clean_to)
-                logger.error(f"send2.digital send failed for {norm_type} after {retries} attempts: {last_err}")
+                if last_outcome != "opt_out":
+                    logger.error(
+                        "SEND2_FAIL | kind=%s | to=%s | after=%s attempts | last=%s | body=%s",
+                        norm_type, clean_to, retries, last_err, (last_body or "")[:200],
+                    )
                 all_ok = False
         return all_ok
     else:
@@ -276,22 +376,24 @@ def send_whatsapp_message(to, text, msg_type="text", timeout=15, retries=2, tena
                     json=payload,
                     timeout=timeout,
                 )
-                logger.info(f"Reply sent to {to} [{norm_type}], status={resp.status_code}, body={resp.text[:300]}")
                 from routing.hookdeck import tee_outbound
                 tee_outbound(SEND2_SESSION_SEND_URL, payload, resp.status_code, resp.text, to=clean_to)
-                body = (resp.text or "").lower()
-                return resp.status_code == 200 and (
-                    '"success":true' in body
-                    or '"success": 1' in body
-                    or '"success":1' in body
-                    or "message sent successfully" in body
+                outcome = log_send2_outcome(
+                    norm_type, clean_to, resp.status_code, resp.text, tenant_id=tenant_id,
                 )
+                return outcome == "ok"
             except Exception as e:
                 last_err = e
-                logger.warning(f"send2.digital send failed for {norm_type} (attempt {attempt}/{retries}): {e}")
+                logger.warning(
+                    "SEND2_FAIL | kind=%s | to=%s | attempt=%s/%s | error=%s",
+                    norm_type, clean_to, attempt, retries, e,
+                )
         from routing.hookdeck import tee_outbound
         tee_outbound(SEND2_SESSION_SEND_URL, payload, None, f"exception: {last_err}", to=clean_to)
-        logger.error(f"send2.digital send failed for {norm_type} after {retries} attempts: {last_err}")
+        logger.error(
+            "SEND2_FAIL | kind=%s | to=%s | after=%s attempts | last=%s",
+            norm_type, clean_to, retries, last_err,
+        )
         return False
 
 
@@ -354,19 +456,13 @@ def send_whatsapp_list_menu(to, header_text, body_text, button_text, sections, f
         logger.info(f"LIST_MENU_REQUEST | to={to} | sections={len(api_sections)} | rows={sum(len(s.get('rows', [])) for s in api_sections)}")
         with httpx.Client(timeout=30) as client:
             resp = client.post(SEND2_LIST_MENU_URL, json=payload)
-        logger.info(f"LIST_MENU_RESPONSE | to={to} | status={resp.status_code} | body={resp.text[:300]}")
         from routing.hookdeck import tee_outbound
         tee_outbound(SEND2_LIST_MENU_URL, payload, resp.status_code, resp.text, to=to)
-        body = (resp.text or "").lower()
-        return resp.status_code == 200 and (
-            "message sent successfully" in body
-            or '"success":true' in body
-            or '"success": true' in body
-            or '"success": 1' in body
-            or '"success":1' in body
-        )
+        return log_send2_outcome(
+            "list_menu", to, resp.status_code, resp.text, tenant_id=tenant_id,
+        ) == "ok"
     except Exception as e:
-        logger.error(f"send2.digital list menu send failed: {e}")
+        logger.error("SEND2_FAIL | kind=list_menu | to=%s | error=%s", to, e)
         return False
 
 
@@ -450,26 +546,16 @@ def send_whatsapp_cta_url(
         )
         with httpx.Client(timeout=timeout) as client:
             resp = client.post(SEND2_SESSION_SEND_URL, json=payload)
-        logger.info(
-            "CTA_URL_RESPONSE | to=%s | status=%s | body=%s",
-            to, resp.status_code, (resp.text or "")[:300],
-        )
         try:
             from routing.hookdeck import tee_outbound
             tee_outbound(SEND2_SESSION_SEND_URL, payload, resp.status_code, resp.text, to=clean_to)
         except Exception:
             pass
-        low = (resp.text or "").lower()
-        ok = resp.status_code == 200 and (
-            "message sent successfully" in low
-            or '"success":true' in low
-            or '"success": true' in low
-            or '"success":1' in low
-            or '"success": 1' in low
-        )
-        return bool(ok)
+        return log_send2_outcome(
+            "cta_url", clean_to, resp.status_code, resp.text, tenant_id=tenant_id,
+        ) == "ok"
     except Exception as e:
-        logger.error("CTA_URL_FAILED | to=%s | error=%s", to, e)
+        logger.error("SEND2_FAIL | kind=cta_url | to=%s | error=%s", to, e)
         return False
 
 
@@ -556,17 +642,11 @@ def send_whatsapp_interactive(to, text, buttons, footer=None, tenant_id=None):
             json=payload,
             timeout=30,
         )
-        logger.info(f"Interactive reply sent to {to}, status={resp.status_code}, body={resp.text[:300]}")
         from routing.hookdeck import tee_outbound
         tee_outbound(SEND2_QUICK_BUTTON_URL, payload, resp.status_code, resp.text, to=to)
-        body = (resp.text or "").lower()
-        return resp.status_code == 200 and (
-            '"success":true' in body
-            or '"success": true' in body
-            or '"success": 1' in body
-            or '"success":1' in body
-            or "message sent successfully" in body
-        )
+        return log_send2_outcome(
+            "interactive", to, resp.status_code, resp.text, tenant_id=tenant_id,
+        ) == "ok"
     except Exception as e:
-        logger.error(f"send2.digital interactive send failed: {e}")
+        logger.error("SEND2_FAIL | kind=interactive | to=%s | error=%s", to, e)
         return False

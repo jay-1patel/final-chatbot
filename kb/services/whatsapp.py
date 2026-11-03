@@ -264,7 +264,27 @@ async def send_text_message(contact_no: str, text: str) -> bool:
                 except Exception:
                     pass
 
-                if response.status_code == 200:
+                body_low = (response.text or "").lower()
+                if response.status_code == 200 and ("opt out" in body_low or "opted out" in body_low):
+                    logger.warning(
+                        "SEND2_OPT_OUT | kind=text | to=%s | http=%s | body=%s",
+                        contact_no, response.status_code, (response.text or "")[:300],
+                    )
+                    try:
+                        from services.error_reporter import report_error
+                        report_error(
+                            "send2",
+                            "text",
+                            "recipient opted out of WhatsApp business messages",
+                            detail=(response.text or "")[:300],
+                            severity="warning",
+                            http_status=response.status_code,
+                            wa_id=str(contact_no or ""),
+                        )
+                    except Exception:
+                        pass
+                    all_ok = False
+                elif response.status_code == 200:
                     try:
                         update_session_outbound(contact_no)
                     except Exception:
@@ -452,21 +472,38 @@ async def send_button_message(
             and "unexpected server error" not in low
             and "interactive payload is required" not in low
         )
-        # Note: "user has OPT OUT" means the payload was ACCEPTED and the
-        # pipeline reached the delivery stage — format is proven correct.
-        opted_out = "opt out" in low
-        if accepted:
-            if not opted_out:
-                try:
-                    update_session_outbound(contact_no)
-                except Exception:
-                    pass
+        # Note: "user has OPT OUT" means the payload format was accepted but
+        # WhatsApp will not deliver — that is NOT a successful send to the user.
+        opted_out = "opt out" in low or "opted out" in low
+        if accepted and not opted_out:
+            try:
+                update_session_outbound(contact_no)
+            except Exception:
+                pass
             logger.info(
                 f"BUTTON_MESSAGE_SENT | to={contact_no} | buttons={len(cloud_buttons)} | "
-                f"media_header={'yes' if 'header' in interactive_body else 'no'} | "
-                f"delivered={'no (recipient opted out)' if opted_out else 'yes'}"
+                f"media_header={'yes' if 'header' in interactive_body else 'no'} | delivered=yes"
             )
             return True
+        if opted_out:
+            logger.warning(
+                "SEND2_OPT_OUT | kind=interactive | to=%s | http=%s | body=%s",
+                contact_no, response.status_code, (response.text or "")[:300],
+            )
+            try:
+                from services.error_reporter import report_error
+                report_error(
+                    "send2",
+                    "interactive",
+                    "recipient opted out of WhatsApp business messages",
+                    detail=(response.text or "")[:300],
+                    severity="warning",
+                    http_status=response.status_code,
+                    wa_id=str(contact_no or ""),
+                )
+            except Exception:
+                pass
+            return False
         logger.warning(f"Cloud interactive send failed ({response.status_code}), falling back to quick-button endpoint")
     except Exception as e:
         logger.warning(f"Cloud interactive send error: {e}, falling back to quick-button endpoint")

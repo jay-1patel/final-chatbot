@@ -174,6 +174,11 @@ def _call_ollama(prompt: str, max_tokens: int, temperature: float, timeout: floa
         return resp.json().get("message", {}).get("content", "").strip()
     except Exception as e:
         logger.error(f"Ollama API call failed: {e}")
+        try:
+            from services.error_reporter import report_exception
+            report_exception("ollama", "chat_completion", e)
+        except Exception:
+            pass
         return ""
     
 # ─────────────────────────────────────────────────────────────

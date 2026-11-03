@@ -75,10 +75,16 @@ from routes.callbacks import router as callbacks_router
 from routes.google_connect import router as google_connect_router
 from routes.test_simulator import router as test_simulator_router
 from services.handoff_timeout import handoff_timeout_monitor
+from routes.api_errors import router as api_errors_router
+from services.error_reporter import report_error, report_exception
 
+# force=True so a prior basicConfig (uvicorn / imported libs) cannot leave us
+# with no console handler — that is why startup/opt-out errors looked "silent".
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stderr)],
+    force=True,
 )
 logger = logging.getLogger("router")
 
@@ -89,11 +95,37 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
+def _log_background_task_done(task: asyncio.Task) -> None:
+    """Surface crashes in long-running startup tasks (poller, handoff, …)."""
+    try:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    except Exception as err:
+        logger.error("[BACKGROUND_TASK] could not read task exception: %s", err, exc_info=True)
+        return
+    if exc is not None:
+        logger.error(
+            "[BACKGROUND_TASK] %s crashed: %s",
+            task.get_name(), exc, exc_info=exc,
+        )
+
+
+def _spawn_background(name: str, coro) -> asyncio.Task:
+    task = asyncio.create_task(coro, name=name)
+    task.add_done_callback(_log_background_task_done)
+    return task
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("[STARTUP] lifespan entered")
-    init_db()
-    logger.info("[STARTUP] init_db done")
+    try:
+        init_db()
+        logger.info("[STARTUP] init_db done")
+    except Exception as exc:
+        logger.error("[STARTUP] init_db FAILED — server will not handle traffic correctly: %s", exc, exc_info=True)
+        raise
     try:
         from routing.config import DB_PATH as _routing_db
         from database import DB_PATH as _app_db
@@ -141,27 +173,27 @@ async def lifespan(app: FastAPI):
 
     # Start the handoff timeout monitor
     handoff_stop_event = asyncio.Event()
-    handoff_task = asyncio.create_task(handoff_timeout_monitor(handoff_stop_event))
+    handoff_task = _spawn_background("handoff_timeout_monitor", handoff_timeout_monitor(handoff_stop_event))
     logger.info("[STARTUP] Handoff timeout monitor started (1h auto-revert)")
 
     # Start the WhatsApp outbox drain (retries failed sends every 30s)
     outbox_stop_event = asyncio.Event()
-    outbox_task = asyncio.create_task(outbox_drain_monitor(outbox_stop_event))
+    outbox_task = _spawn_background("outbox_drain_monitor", outbox_drain_monitor(outbox_stop_event))
     logger.info("[STARTUP] WhatsApp outbox drain started (30s retry interval)")
 
     # Start the scheduled campaign auto-fire monitor (checks every 60s)
     campaign_stop_event = asyncio.Event()
-    campaign_task = asyncio.create_task(campaign_scheduler_monitor(campaign_stop_event))
+    campaign_task = _spawn_background("campaign_scheduler_monitor", campaign_scheduler_monitor(campaign_stop_event))
     logger.info("[STARTUP] Scheduled campaign auto-fire monitor started (60s poll)")
 
     # Start the cart/checkout TTL cleanup loop (7-day carts, 15-min checkouts)
     cart_cleanup_stop_event = asyncio.Event()
-    cart_cleanup_task = asyncio.create_task(cart_cleanup_monitor(cart_cleanup_stop_event))
+    cart_cleanup_task = _spawn_background("cart_cleanup_monitor", cart_cleanup_monitor(cart_cleanup_stop_event))
     logger.info("[STARTUP] Cart/checkout TTL cleanup monitor started")
 
     # Start the scheduled website re-crawl loop (checks tenant_crawl_schedules every 30 min)
     crawl_stop_event = asyncio.Event()
-    crawl_task = asyncio.create_task(crawl_scheduler_monitor(crawl_stop_event))
+    crawl_task = _spawn_background("crawl_scheduler_monitor", crawl_scheduler_monitor(crawl_stop_event))
     logger.info("[STARTUP] Website re-crawl scheduler started (30-minute poll)")
 
     # Start the send2.digital inbound polling listener. This is what delivers
@@ -173,8 +205,9 @@ async def lifespan(app: FastAPI):
         # Honor routing/.env even if this module was imported before dotenv ran.
         _incoming_listener.SEND2_POLLER_ENABLED = _incoming_listener.read_poller_enabled()
         incoming_stop_event = asyncio.Event()
-        incoming_task = asyncio.create_task(
-            _incoming_listener.poll_incoming_messages(incoming_stop_event)
+        incoming_task = _spawn_background(
+            "send2_inbound_poller",
+            _incoming_listener.poll_incoming_messages(incoming_stop_event),
         )
         if _incoming_listener.SEND2_POLLER_ENABLED:
             logger.info("[STARTUP] send2 inbound message poller started")
@@ -472,6 +505,26 @@ async def audit_request_context(request: Request, call_next):
 
 
 @app.middleware("http")
+async def capture_server_errors(request: Request, call_next):
+    """Persist + notify on unhandled 5xx / exception paths for every API."""
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        report_exception("fastapi", f"{request.method} {request.url.path}", exc)
+        raise
+    if response.status_code >= 500:
+        report_error(
+            "fastapi",
+            f"{request.method} {request.url.path}",
+            f"HTTP {response.status_code}",
+            detail=f"path={request.url.path}",
+            severity="error",
+            http_status=response.status_code,
+        )
+    return response
+
+
+@app.middleware("http")
 async def audit_mutations_middleware(request: Request, call_next):
     if request.method not in ("POST", "PUT", "PATCH", "DELETE") or not request.url.path.startswith("/api/admin"):
         return await call_next(request)
@@ -557,6 +610,7 @@ if FORCE_HTTPS:
 app.include_router(chat_router, tags=["chat"])
 app.include_router(faqs_router, tags=["faqs"])
 app.include_router(status_router, tags=["status"])
+app.include_router(api_errors_router)
 app.include_router(admin_router, tags=["admin"])
 app.include_router(auth_router, tags=["auth"])
 app.include_router(chat_admin_router, tags=["chat-admin"])
@@ -676,6 +730,14 @@ if os.path.isdir(ADMIN_BUILD_DIR):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=ROUTER_PORT, reload=False)
+    # log_config=None keeps our force=True basicConfig handlers (uvicorn's
+    # default config otherwise replaces them and can hide startup errors).
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=ROUTER_PORT,
+        reload=False,
+        log_config=None,
+    )
 
 
