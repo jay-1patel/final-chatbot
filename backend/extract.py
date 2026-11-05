@@ -20,12 +20,11 @@ from PIL import Image
 from database import init_db, save_chunks
 
 # ----------------------------------------------------------------------
-# Logging Setup
+# Logging Setup (single shared setup — see core/logging.py)
 # ----------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+from core.logging import setup_logging
+
+setup_logging()
 logger = logging.getLogger("extract")
 
 # ----------------------------------------------------------------------

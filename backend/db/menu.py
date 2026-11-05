@@ -22,7 +22,7 @@ def invalidate_menu_cache():
         from services.menu_catalog import invalidate_menu_cache as _inv
         _inv()
     except Exception:
-        pass
+        logger.exception("MENU_CACHE_INVALIDATE_FAILED")
 
 
 def get_menu_items(menu_key: str, active_only: bool = True) -> list:

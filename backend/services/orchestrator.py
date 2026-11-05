@@ -59,7 +59,7 @@ async def _send_b2c_menu(wa_id: str, tenant_id: str = None):
             from backend.services.offerings_flow import clear_offerings_context
         clear_offerings_context(wa_id)
     except Exception:
-        pass
+        logger.exception("OFFERINGS_CONTEXT_CLEAR_FAILED | wa=%s", wa_id)
 
     menu_payload = menus.get_main_menu(wa_id, tenant_id=tenant_id)
     if menu_payload.get("type") == "buttons":
@@ -182,7 +182,7 @@ async def _process_captured_message(wa_id: str, message: str, tenant_id: str = N
                 from services import state_manager as sm
                 sm.set_tenant(wa_id, effective_tenant)
             except Exception:
-                pass
+                logger.exception("SET_TENANT_FALLBACK_FAILED | wa=%s tenant=%s", wa_id, effective_tenant)
     except Exception as exc:
         logger.debug(f"Could not touch customer {wa_id}: {exc}")
 

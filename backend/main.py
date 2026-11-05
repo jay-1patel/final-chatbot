@@ -79,10 +79,9 @@ from routes.test_simulator import router as test_simulator_router
 from routes.api_errors import router as api_errors_router
 from services.handoff_timeout import handoff_timeout_monitor
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+from core.logging import setup_logging
+
+setup_logging()
 logger = logging.getLogger("router")
 
 # httpx logs one INFO line per outgoing request (e.g. the send2.digital inbound
@@ -186,26 +185,30 @@ async def lifespan(app: FastAPI):
         try:
             await handoff_task
         except asyncio.CancelledError:
-            pass
+            # deliberate: expected — the task was just cancelled above.
+            logger.debug("SHUTDOWN_TASK_CANCELLED | task=handoff_monitor")
         cart_cleanup_stop_event.set()
         cart_cleanup_task.cancel()
         try:
             await cart_cleanup_task
         except asyncio.CancelledError:
-            pass
+            # deliberate: expected — the task was just cancelled above.
+            logger.debug("SHUTDOWN_TASK_CANCELLED | task=cart_cleanup")
         crawl_stop_event.set()
         crawl_task.cancel()
         try:
             await crawl_task
         except asyncio.CancelledError:
-            pass
+            # deliberate: expected — the task was just cancelled above.
+            logger.debug("SHUTDOWN_TASK_CANCELLED | task=crawl")
         if incoming_task is not None:
             incoming_stop_event.set()
             incoming_task.cancel()
             try:
                 await incoming_task
             except asyncio.CancelledError:
-                pass
+                # deliberate: expected — the task was just cancelled above.
+                logger.debug("SHUTDOWN_TASK_CANCELLED | task=incoming_listener")
         logger.info("[SHUTDOWN] Server stopped")
 
 
@@ -338,7 +341,9 @@ async def audit_mutations_middleware(request: Request, call_next):
                 payload = jwt.decode(auth_header.split(" ")[1], ADMIN_SECRET_KEY, algorithms=["HS256"], options={"verify_exp": False})
                 actor_username = payload.get("sub", "unknown")
             except Exception:
-                pass
+                # deliberate: a token that does not decode just means the
+                # audit actor stays "unknown".
+                logger.debug("AUDIT_ACTOR_DECODE_SKIPPED | actor stays unknown", exc_info=True)
         
         try:
             with get_db_context() as conn:
@@ -351,7 +356,7 @@ async def audit_mutations_middleware(request: Request, call_next):
                     details={"request_body": body_content, "query_params": dict(request.query_params)}
                 )
         except Exception as e:
-            pass
+            logger.exception("AUDIT_MUTATION_RECORD_FAILED | %s %s", request.method, request.url.path)
 
     return response
 
@@ -365,7 +370,7 @@ async def audit_mutations_middleware(request: Request, call_next):
 # on request.state, returned as the X-Request-Id header, included in every error
 # response body, and printed in the app's own REQ log line — so any failure can be
 # traced from the browser console line to exactly one backend log line / error row.
-_request_id_var: ContextVar = ContextVar("request_id", default="")
+from core.context import request_id_var as _request_id_var
 
 
 def get_request_id() -> str:
@@ -455,7 +460,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             detail="".join(_traceback.format_exception(type(exc), exc, exc.__traceback__))[-3500:],
         )
     except Exception:
-        pass
+        logger.error(f"ERROR_REPORT_FAILED | req={rid} | api={api}", exc_info=True)
     body = {
         "detail": "Internal Server Error",
         "error": f"{type(exc).__name__}: {str(exc)[:300]}" if str(exc) else "Internal Server Error",

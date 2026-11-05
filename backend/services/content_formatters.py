@@ -10,9 +10,12 @@ This module provides specialized formatting for different types of content:
 Each formatter knows how to best structure the content for WhatsApp.
 """
 
+import logging
 import re
 from typing import List, Dict, Optional
 from services.response_formatters import WhatsAppFormatter, MessageType
+
+logger = logging.getLogger(__name__)
 
 
 def format_careers_content(career_text: str, company_name: str = "") -> str:
@@ -451,7 +454,9 @@ def format_product_listing(products: List[Dict], title: str = "Our Products") ->
         formatter = WhatsAppFormatter()
         result = formatter.format(result, MessageType.PRODUCT_INFO)
     except:
-        pass
+        # deliberate: enhanced formatting is cosmetic — the unformatted
+        # listing is used when the formatter fails.
+        logger.debug("FORMAT_ENHANCE_SKIPPED | format_product_listing", exc_info=True)
     
     return result
 

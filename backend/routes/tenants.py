@@ -258,7 +258,7 @@ def _push_active_test_menu(tenant_id: str) -> Optional[str]:
             snippet=f"active_test_menu:{brand}",
         )
     except Exception:
-        pass
+        logger.exception("SEND_LOG_RECORD_FAILED | wa=%s tenant=%s reason=active_test_menu", wa_id, tenant_id)
     logger.info(
         "ACTIVE_TEST_TENANT_MENU_PUSHED | tenant=%s | wa_id=%s",
         tenant_id, wa_id,

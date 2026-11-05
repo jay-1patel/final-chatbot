@@ -482,7 +482,8 @@ def _product_text_for_filter(products: list) -> str:
             if isinstance(ingredients, list):
                 chunks.append(" ".join(str(t) for t in ingredients))
         except Exception:
-            pass
+            # deliberate: unparseable ingredients contribute no filter text.
+            logger.debug("INGREDIENTS_PARSE_SKIPPED | _product_text_for_filter", exc_info=True)
     return " ".join(chunks).lower()
 
 
@@ -604,7 +605,7 @@ async def handle_kb_query(
             from backend.services import state_manager as sm
             sm.set_tenant(wa_id, tenant_id)
         except Exception:
-            pass
+            logger.exception("SET_TENANT_FAILED | wa=%s tenant=%s", wa_id, tenant_id)
     can_send_whatsapp = _is_valid_phone_number(wa_id)
     
     # Parse the incoming message (handles text, button_reply, list_reply)
@@ -1024,7 +1025,9 @@ async def handle_kb_query(
                     from ..database import get_product
                     product = get_product(product_id)
                 except (ValueError, IndexError):
-                    pass
+                    # deliberate: the id does not parse for this prefix — the loop
+                    # tries the next prefix.
+                    logger.debug("PRODUCT_ID_PARSE_SKIPPED | prefix=%s id=%s", _prefix, msg_id, exc_info=True)
                 if product:
                     break
         
@@ -1768,7 +1771,8 @@ def _find_product_for_menu(text: str) -> dict | None:
             if product:
                 return product
         except (ValueError, IndexError):
-            pass
+            # deliberate: the id is not a product_ id — other prefixes are tried.
+            logger.debug("PRODUCT_ID_PARSE_SKIPPED | prefix=product_ id=%s", lower, exc_info=True)
 
     if lower.startswith("prod_"):
         try:
@@ -1778,7 +1782,8 @@ def _find_product_for_menu(text: str) -> dict | None:
             if product:
                 return product
         except (ValueError, IndexError):
-            pass
+            # deliberate: the id is not a prod_ id — other prefixes are tried.
+            logger.debug("PRODUCT_ID_PARSE_SKIPPED | prefix=prod_ id=%s", lower, exc_info=True)
 
     if lower.isdigit():
         from ..database import get_db_context
@@ -1798,7 +1803,8 @@ def _find_product_for_menu(text: str) -> dict | None:
                         pid = int(item["id"].replace("product_", "").replace("prod_", ""))
                         return get_product(pid)
                     except (ValueError, KeyError):
-                        pass
+                        # deliberate: a malformed item id is skipped — the menu scan continues.
+                        logger.debug("PRODUCT_ID_PARSE_SKIPPED | _find_product_for_menu item id", exc_info=True)
                 counter += 1
                 if counter >= 50:
                     break

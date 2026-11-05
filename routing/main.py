@@ -12,7 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from webhook import router as webhook_router
 import routing.config as config
 
-logging.basicConfig(level=logging.INFO)
+from backend.core.logging import setup_logging
+
+setup_logging()
 
 app = FastAPI(title="Chiki Routing Module", version="1.0.0")
 

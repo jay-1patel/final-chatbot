@@ -35,7 +35,8 @@ def _resolve_tenant(tenant_id: str = None) -> str:
         if active and not str(tenant_id or "").strip():
             return str(active).strip()
     except Exception:
-        pass
+        # deliberate: resolver chain — use the requested tenant id.
+        logger.debug("ACTIVE_TEST_TENANT_LOOKUP_SKIPPED | _resolve_tenant", exc_info=True)
     if str(tenant_id or "").strip():
         return str(tenant_id).strip()
     try:
@@ -97,7 +98,9 @@ def _resolve_tenant_ids(tenant_id: str = None) -> list:
                         candidates.add(row["slug"])
                         candidates.add(row["slug"].lower())
         except Exception:
-            pass
+            # deliberate: one candidate source failed — the other sources
+            # still contribute candidates.
+            logger.debug("TENANT_ID_CANDIDATE_QUERY_SKIPPED", exc_info=True)
 
     return list(candidates)
 
@@ -507,7 +510,9 @@ def search_products(query: str, limit: int = 20, tenant_id: str = None) -> list:
                            (_deserialize_product(dict(x)) for x in rows)}
                 return [row_map[pid] for pid in ids if pid in row_map]
     except Exception:
-        pass
+        # deliberate: the id-ordered fetch is an optimisation — the
+        # regular search below still runs.
+        logger.debug("PRODUCT_ID_ORDER_FETCH_SKIPPED | tenant=%s", tid, exc_info=True)
 
     # Fallback: keyword search
     with get_db_context() as conn:

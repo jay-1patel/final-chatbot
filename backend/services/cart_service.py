@@ -547,7 +547,9 @@ def confirm_order(
                 session_draft = json.loads(session_draft)
             order_draft = {**session_draft, **order_draft}
         except Exception:
-            pass
+            # deliberate: a corrupt session draft must not block the order —
+            # the request's own draft is used.
+            logger.debug("SESSION_DRAFT_MERGE_SKIPPED | wa=%s", wa_id, exc_info=True)
     
     # Generate idempotency key if not provided
     if not idempotency_key:

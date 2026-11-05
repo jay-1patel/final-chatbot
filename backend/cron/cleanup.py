@@ -73,7 +73,8 @@ def cleanup_expired_carts():
                 from services.metrics import cart_expired_total
                 cart_expired_total.labels(user_type="b2c").inc(len(rows))
             except Exception:
-                pass
+                # deliberate: metrics are observability only — cleanup continues.
+                logger.debug("METRICS_UPDATE_SKIPPED | cart_expired_total", exc_info=True)
             logger.info(f"Expired {len(rows)} idle carts")
             return len(rows)
     except Exception as e:

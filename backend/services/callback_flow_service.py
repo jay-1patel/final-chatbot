@@ -608,7 +608,9 @@ class CallbackFlowService:
             
             return parsed.strftime('%Y-%m-%d')
         except (ParserError, ValueError):
-            pass
+            # deliberate: not a parseable date message — the caller treats
+            # None as 'ask again'.
+            logger.debug("DATE_MESSAGE_PARSE_SKIPPED", exc_info=True)
         
         # Try to match relative dates
         today_str = today.strftime('%Y-%m-%d')

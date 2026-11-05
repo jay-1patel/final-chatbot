@@ -204,7 +204,9 @@ def _resolve_public(url: str) -> str:
         if resolved:
             return resolved
     except Exception:
-        pass
+        # deliberate: the KB resolver is an optional enhancement — any
+        # failure falls back to the standard media resolver below.
+        logger.debug("PUBLIC_MEDIA_RESOLVE_FALLBACK | kb resolver failed for %r — using standard resolver", url, exc_info=True)
     return _resolve_media_url(url)
 
 
@@ -346,7 +348,9 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
     try:
         send_whatsapp_typing(wa_id, tenant_id=tenant_id)
     except Exception:
-        pass
+        # deliberate: the typing indicator is cosmetic — it must never
+        # affect message processing.
+        logger.debug("TYPING_INDICATOR_SKIPPED | wa=%s tenant=%s", wa_id, tenant_id, exc_info=True)
     
     # ── CHECK SESSION TIMEOUT ──────────────────────────────────────────
     # If a user has been idle in a flow for >30 minutes, auto-reset to main menu

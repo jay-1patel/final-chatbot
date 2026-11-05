@@ -40,7 +40,8 @@ def _resolve_tenant_id(tenant_id=None) -> str:
             if active:
                 tid = str(active).strip()
         except Exception:
-            pass
+            # deliberate: resolver chain — fall through to the next source.
+            logger.debug("RAG_TENANT_RESOLVE_STEP_SKIPPED | source=active_test_tenant", exc_info=True)
     if not tid:
         try:
             from shared.tenancy.resolver import resolve_default_tenant
@@ -54,7 +55,8 @@ def _resolve_tenant_id(tenant_id=None) -> str:
         if rec:
             return str(rec.get("slug") or rec.get("id"))
     except Exception:
-        pass
+        # deliberate: resolver chain — return the unresolved tenant id.
+        logger.debug("RAG_TENANT_RESOLVE_STEP_SKIPPED | source=store tid=%s", tid, exc_info=True)
     return tid
 
 
@@ -420,7 +422,9 @@ def search_kb_faiss(query: str, limit: int = 5, tenant_id: str = None) -> List[D
                             t_index, t_ids = _kb_tenant_indexes[alt_key]
                             break
             except Exception:
-                pass
+                # deliberate: alt-key index lookup is best-effort — the default
+                # index is used.
+                logger.debug("TENANT_INDEX_LOOKUP_SKIPPED | tid=%s", tid, exc_info=True)
 
     if t_index is not None and t_index.ntotal > 0:
         fetch_k = min(limit, t_index.ntotal)
@@ -453,7 +457,9 @@ def search_kb_faiss(query: str, limit: int = 5, tenant_id: str = None) -> List[D
             allowed_tids.add(str(rec.get("id")))
             allowed_tids.add(rec.get("slug"))
     except Exception:
-        pass
+        # deliberate: variant enrichment is best-effort — the search runs
+        # with the ids already collected.
+        logger.debug("TENANT_ID_VARIANTS_SKIPPED | tid=%s", tid, exc_info=True)
 
     for score, idx in zip(scores[0], indices[0]):
         if idx < 0 or idx >= len(_kb_faiss_ids):
@@ -491,7 +497,9 @@ def _product_searchable_text(row) -> str:
         try:
             ingredients = json.loads(ingredients)
         except (json.JSONDecodeError, TypeError):
-            pass
+            # deliberate: unparseable ingredients stay a raw string — the
+            # searchable text is built either way.
+            logger.debug("INGREDIENTS_PARSE_SKIPPED | _product_searchable_text", exc_info=True)
     if isinstance(ingredients, list):
         parts.extend(ingredients)
     elif ingredients:

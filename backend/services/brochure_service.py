@@ -694,7 +694,9 @@ def is_brochure_ask(text: str = None, button_id: str = None, tenant_id: str = No
         if _wants_catalogue_pdf(raw_text):
             return True
     except Exception:
-        pass
+        # deliberate: the catalogue-PDF cross-check is best-effort — the
+        # local checks above already ran.
+        logger.debug("CATALOGUE_PDF_CHECK_SKIPPED", exc_info=True)
 
     # Narrow typed fallback (avoid stealing "products" / "offerings" browse).
     needle = _normalize_ask(raw_text)

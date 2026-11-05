@@ -378,7 +378,9 @@ def get_profile_menu(
                         enabled=True,
                     ))
             except Exception:
-                pass
+                # deliberate: injecting the vertical offerings button is
+                # best-effort — the menu is returned without it.
+                logger.debug("OFFERINGS_BUTTON_INJECT_SKIPPED | tenant=%s", profile.tenant_id, exc_info=True)
 
     return [
         MenuItem(

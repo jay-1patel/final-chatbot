@@ -644,7 +644,9 @@ def delete_admin_file_api(
     try:
         os.remove(filepath)
     except OSError:
-        pass
+        # deliberate: the DB records are already deleted; a file that
+        # cannot be removed (already gone/locked) is only logged.
+        logger.debug("FILE_DELETE_CLEANUP_SKIPPED | path=%s", filepath, exc_info=True)
     logger.info(f"Deleted: {filename} (faq={deleted_faq}, kb={deleted_kb})")
     return {"status": "ok", "filename": filename, "deleted_faq": deleted_faq, "deleted_kb": deleted_kb}
 
@@ -813,7 +815,7 @@ def _process_document_background(
                 from kb.services.brain import clear_response_cache
                 clear_response_cache()
             except Exception:
-                pass
+                logger.exception("RESPONSE_CACHE_CLEAR_FAILED | file=%s", filename)
 
             # Auto-split onboarding/main PDFs into FAQ + KB derivative files.
             if ext.lower() == ".pdf" and os.path.exists(filepath):
@@ -869,7 +871,9 @@ async def run_upload(
         from backend.services.audit_context import set_audit_actor
         set_audit_actor(current_admin)
     except Exception:
-        pass
+        # deliberate: audit attribution is best-effort — the request
+        # itself must not fail because the actor could not be stamped.
+        logger.debug("AUDIT_ACTOR_SET_SKIPPED | route continues without actor", exc_info=True)
     content_type = request.headers.get("content-type", "")
     filename = ""
     content = b""
@@ -1366,7 +1370,9 @@ def set_menu_settings_api(
         from backend.services.audit_context import set_audit_actor
         set_audit_actor(current_admin)
     except Exception:
-        pass
+        # deliberate: audit attribution is best-effort — the request
+        # itself must not fail because the actor could not be stamped.
+        logger.debug("AUDIT_ACTOR_SET_SKIPPED | route continues without actor", exc_info=True)
     if menu_key not in KNOWN_MENU_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown menu_key: {menu_key}")
     before = get_menu_settings(menu_key)
@@ -1400,7 +1406,9 @@ def update_menu_item_api(
         from backend.services.audit_context import set_audit_actor
         set_audit_actor(current_admin)
     except Exception:
-        pass
+        # deliberate: audit attribution is best-effort — the request
+        # itself must not fail because the actor could not be stamped.
+        logger.debug("AUDIT_ACTOR_SET_SKIPPED | route continues without actor", exc_info=True)
     if menu_key not in KNOWN_MENU_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown menu_key: {menu_key}")
 
@@ -1482,7 +1490,9 @@ def create_menu_item_api(
         from backend.services.audit_context import set_audit_actor
         set_audit_actor(current_admin)
     except Exception:
-        pass
+        # deliberate: audit attribution is best-effort — the request
+        # itself must not fail because the actor could not be stamped.
+        logger.debug("AUDIT_ACTOR_SET_SKIPPED | route continues without actor", exc_info=True)
     if menu_key not in KNOWN_MENU_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown menu_key: {menu_key}")
 
@@ -1531,7 +1541,9 @@ def reorder_menu_items_api(
         from backend.services.audit_context import set_audit_actor
         set_audit_actor(current_admin)
     except Exception:
-        pass
+        # deliberate: audit attribution is best-effort — the request
+        # itself must not fail because the actor could not be stamped.
+        logger.debug("AUDIT_ACTOR_SET_SKIPPED | route continues without actor", exc_info=True)
     item_ids = data.get("item_ids")
     if not isinstance(item_ids, list) or not item_ids:
         raise HTTPException(status_code=400, detail="item_ids (non-empty list) is required")
@@ -1563,7 +1575,9 @@ def delete_menu_item_api(
         from backend.services.audit_context import set_audit_actor
         set_audit_actor(current_admin)
     except Exception:
-        pass
+        # deliberate: audit attribution is best-effort — the request
+        # itself must not fail because the actor could not be stamped.
+        logger.debug("AUDIT_ACTOR_SET_SKIPPED | route continues without actor", exc_info=True)
     if menu_key not in KNOWN_MENU_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown menu_key: {menu_key}")
 
@@ -1604,7 +1618,9 @@ def reset_menu_api(menu_key: str, request: Request, current_admin: dict = Depend
         from backend.services.audit_context import set_audit_actor
         set_audit_actor(current_admin)
     except Exception:
-        pass
+        # deliberate: audit attribution is best-effort — the request
+        # itself must not fail because the actor could not be stamped.
+        logger.debug("AUDIT_ACTOR_SET_SKIPPED | route continues without actor", exc_info=True)
     if menu_key not in KNOWN_MENU_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown menu_key: {menu_key}")
     removed = reset_menu(menu_key)
@@ -1760,7 +1776,9 @@ async def upload_brochure(
     try:
         set_audit_actor(current_admin)
     except Exception:
-        pass
+        # deliberate: audit attribution is best-effort — the request
+        # itself must not fail because the actor could not be stamped.
+        logger.debug("AUDIT_ACTOR_SET_SKIPPED | route continues without actor", exc_info=True)
     
     # Read file content
     content = await file.read()

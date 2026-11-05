@@ -150,14 +150,16 @@ def _get_tenant_vertical(tenant_id: str) -> str:
         if prof and prof.vertical:
             return prof.vertical
     except Exception:
-        pass
+        # deliberate: resolver chain — fall through to the next source.
+        logger.debug("TENANT_VERTICAL_RESOLVE_STEP_SKIPPED | source=profile tenant=%s", tenant_id, exc_info=True)
     try:
         from shared.tenancy import store
         rec = store.get_tenant(tenant_id)
         if rec and rec.get("vertical"):
             return rec["vertical"]
     except Exception:
-        pass
+        # deliberate: resolver chain — fall back to "generic".
+        logger.debug("TENANT_VERTICAL_RESOLVE_STEP_SKIPPED | source=store tenant=%s", tenant_id, exc_info=True)
     return "generic"
 
 

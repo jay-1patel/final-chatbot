@@ -217,14 +217,16 @@ def _resolve_state_tenant(wa_id: str, tenant_id: str | None = None) -> str | Non
         if request_tenant:
             return str(request_tenant)
     except Exception:
-        pass
+        # deliberate: resolver chain — fall through to the next source.
+        logger.debug("STATE_TENANT_RESOLVE_STEP_SKIPPED | source=request_context", exc_info=True)
     try:
         from shared.tenancy.resolver import resolve_tenant_for_user
         owner = resolve_tenant_for_user(wa_id)
         if owner:
             return str(owner)
     except Exception:
-        pass
+        # deliberate: resolver chain — fall through to the next source.
+        logger.debug("STATE_TENANT_RESOLVE_STEP_SKIPPED | source=user_owner wa=%s", wa_id, exc_info=True)
     try:
         from shared.tenancy.resolver import resolve_default_tenant
         return resolve_default_tenant()

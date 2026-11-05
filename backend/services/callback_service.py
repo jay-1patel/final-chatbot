@@ -543,7 +543,9 @@ def parse_preferred_time_to_range(
             from dateutil.parser import parse
             target_date = parse(raw_date, fuzzy=True).date()
         except Exception:
-            pass
+            # deliberate: unparseable free-text date — the keyword parsing
+            # below still runs.
+            logger.debug("DATE_PARSE_ATTEMPT_SKIPPED | raw_date=%s", raw_date, exc_info=True)
 
     if "tomorrow" in raw:
         target_date = (now + timedelta(days=1)).date()
@@ -586,7 +588,8 @@ def parse_preferred_time_to_range(
                 target_hour = parsed_dt.hour
                 target_minute = parsed_dt.minute
         except Exception:
-            pass
+            # deliberate: unparseable free-text date — defaults are used.
+            logger.debug("DATE_PARSE_ATTEMPT_SKIPPED | preferred_time parse", exc_info=True)
 
     if not target_date:
         target_date = (now + timedelta(days=1)).date()

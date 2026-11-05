@@ -67,7 +67,9 @@ def set_active_test_tenant(tenant_id: Optional[str]) -> None:
         except ValueError:
             raise
         except Exception:
-            pass
+            # deliberate: an unreadable tenant record must not block the
+            # test-tenant override — the raw value is used as-is.
+            logger.debug("TEST_TENANT_VALIDATE_SKIPPED | val=%s", val, exc_info=True)
     set_app_setting("active_test_tenant", val)
     # Clear conversation user states and carts so tester starts completely fresh with greeting/menu
     try:
@@ -81,7 +83,8 @@ def set_active_test_tenant(tenant_id: Optional[str]) -> None:
         from shared.tenancy import cache as tenancy_cache
         tenancy_cache.clear()
     except Exception:
-        pass
+        # deliberate: cache clear is best-effort session hygiene.
+        logger.debug("TENANCY_CACHE_CLEAR_SKIPPED", exc_info=True)
     # Fresh routing session: drop in-memory dedup + poller unrouted warnings so
     # the next WhatsApp "hi" is answered by the newly selected tenant.
     try:
@@ -92,7 +95,8 @@ def set_active_test_tenant(tenant_id: Optional[str]) -> None:
             from backend.services.dedup import clear_ephemeral_caches
             clear_ephemeral_caches()
         except Exception:
-            pass
+            # deliberate: cache clear is best-effort session hygiene.
+            logger.debug("DEDUP_CACHE_CLEAR_SKIPPED", exc_info=True)
     try:
         from services import incoming_listener as _il
         _il._unrouted_warned_ids.clear()
@@ -101,7 +105,8 @@ def set_active_test_tenant(tenant_id: Optional[str]) -> None:
             from backend.services import incoming_listener as _il
             _il._unrouted_warned_ids.clear()
         except Exception:
-            pass
+            # deliberate: warned-id reset is best-effort session hygiene.
+            logger.debug("POLLER_WARNED_IDS_CLEAR_SKIPPED", exc_info=True)
     # Content-fingerprint rows (c:…) block a repeated "hi" for ~25s across
     # webhook+poller. Clear them on switch so the new tenant can greet.
     try:

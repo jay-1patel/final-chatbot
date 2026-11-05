@@ -1,5 +1,7 @@
-import json, re, threading, time
+import json, logging, re, threading, time
 import requests
+
+logger = logging.getLogger(__name__)
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "qwen3:8b"
@@ -20,7 +22,9 @@ def _extract_json(text):
                 try:
                     return json.loads(cand)
                 except Exception:
-                    pass
+                    # deliberate: candidate extraction — the next candidate shape
+                    # is tried.
+                    logger.debug("JSON_CANDIDATE_PARSE_SKIPPED | opener=%s", opener, exc_info=True)
     try:
         return json.loads(text)
     except Exception:

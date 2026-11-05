@@ -583,7 +583,7 @@ async def process_message(user_text: str, wa_id: str = None, raw_message: dict =
                     from database import set_request_tenant
                     set_request_tenant(tenant_id)
                 except Exception:
-                    pass
+                    logger.exception("SET_REQUEST_TENANT_FAILED | tenant=%s", tenant_id)
         greeting_menu = _get_greeting_menu(wa_id, tenant_id=tenant_id)
         if greeting_menu.get("type") == "text":
             result["answer"] = greeting_menu.get("body", "")
@@ -866,7 +866,7 @@ async def process_message(user_text: str, wa_id: str = None, raw_message: dict =
                 confidence_score=0.0,
             )
         except Exception:
-            pass
+            logger.exception("UNANSWERED_QUERY_RECORD_FAILED | wa=%s tenant=%s", wa_id, tenant_id)
         # Mirror B2C unrelated-query policy: IT → meeting invite text;
         # other verticals → support phone/email/website.
         try:

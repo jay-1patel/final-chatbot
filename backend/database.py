@@ -148,7 +148,9 @@ def touch_customer(tenant_id, wa_id, name: str = "") -> None:
                     ).fetchone()
                     lang = (state_row["lang"] if state_row else "") or ""
                 except Exception:
-                    pass
+                    # deliberate: language is a nice-to-have — the customer
+                    # row is still touched without it.
+                    logger.debug("CUSTOMER_LANG_LOOKUP_SKIPPED | wa=%s", wa_id, exc_info=True)
                 # The WhatsApp id is the phone number in this system, so it
                 # seeds the phone column; a volunteered number replaces it.
                 conn.execute(
@@ -446,7 +448,7 @@ def init_db():
         except Exception:
             # Pre-existing data may violate the constraint; the API layer
             # still enforces it for every new write.
-            pass
+            logger.debug("ADMIN_UNIQUE_INDEX_SKIPPED | pre-existing data may violate the constraint", exc_info=True)
         conn.execute(
             """CREATE TABLE IF NOT EXISTS admin_otps (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -472,7 +474,8 @@ def init_db():
         try:
             conn.execute("ALTER TABLE admin_files ADD COLUMN url TEXT")
         except Exception:
-            pass
+            # deliberate: column already exists on migrated DBs.
+            logger.debug("SCHEMA_COLUMN_ADD_SKIPPED | table=admin_files column=url", exc_info=True)
         conn.execute(
             """CREATE TABLE IF NOT EXISTS admin_chat_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -505,7 +508,8 @@ def init_db():
         try:
             conn.execute("ALTER TABLE deleted_chat_messages ADD COLUMN message TEXT")
         except Exception:
-            pass
+            # deliberate: column already exists on migrated DBs.
+            logger.debug("SCHEMA_COLUMN_ADD_SKIPPED | table=deleted_chat_messages column=message", exc_info=True)
         conn.execute(
             """CREATE INDEX IF NOT EXISTS idx_deleted_msg_id ON deleted_chat_messages(message_id)"""
         )
@@ -523,7 +527,9 @@ def init_db():
             if "agent_id" not in cols and "username" in cols:
                 conn.execute("ALTER TABLE agent_status RENAME COLUMN username TO agent_id")
         except Exception:
-            pass
+            # deliberate: rename only applies to the legacy layout checked
+            # just above; anything else keeps the current schema.
+            logger.debug("SCHEMA_COLUMN_RENAME_SKIPPED | table=agent_status", exc_info=True)
         # Inbox: conversation-to-agent assignments
         conn.execute(
             """CREATE TABLE IF NOT EXISTS conversation_assignments (
@@ -1162,7 +1168,9 @@ def init_db():
         try:
             conn.execute("PRAGMA user_version = 2")
         except Exception:
-            pass
+            # deliberate: version stamp is informational — schema setup
+            # continues regardless.
+            logger.debug("PRAGMA_USER_VERSION_SKIPPED", exc_info=True)
 
 
 # ── Tenancy: tenants + versioned tenant profiles ─────────────────────────
@@ -1701,7 +1709,7 @@ def _ensure_callback_tables(conn):
             if col_name not in existing_cols:
                 conn.execute(f"ALTER TABLE leads ADD COLUMN {col_name} {col_type}")
     except Exception:
-        pass
+        logger.exception("CALLBACK_TABLES_ENSURE_FAILED")
 
 
 def _init_integration_tables(conn):
@@ -1882,7 +1890,9 @@ def _default_tenant_id_for_conn(conn) -> str:
                 )
                 return active_tid
         except Exception:
-            pass
+            # deliberate: resolver chain — the warning below covers the
+            # overall fallback outcome.
+            logger.debug("DEFAULT_TENANT_RESOLVE_STEP_SKIPPED | source=active_test_tenant", exc_info=True)
         logger.warning(
             "DEFAULT_TENANT_ID is not set and %d tenants are registered; "
             "leaving untagged content alone (no auto-claim). Set "
@@ -1956,7 +1966,9 @@ def _init_embedding_tenancy(conn):
                 moved += 1
                 continue
             except sqlite3.IntegrityError:
-                pass
+                # deliberate: slug collision for this row — the dedup path
+                # below renames and retries it.
+                logger.debug("EMBEDDING_TENANCY_ROW_SKIPPED | product_id=%s slug=%s", row["id"], row["slug"], exc_info=True)
             base = (row["slug"] or "product").strip() or "product"
             for k in range(1, 100):
                 candidate = (f"{base}-retagged-{row['id']}" if k == 1
@@ -2008,7 +2020,7 @@ def _init_offerings_migration(conn):
         conn.execute("UPDATE products SET image_url = media_url WHERE (image_url IS NULL OR image_url = '') AND media_url IS NOT NULL")
         conn.execute("UPDATE products SET media_url = image_url WHERE (media_url IS NULL OR media_url = '') AND image_url IS NOT NULL")
     except Exception:
-        pass
+        logger.exception("OFFERINGS_MIGRATION_BACKFILL_FAILED")
     # Price is already a nullable TEXT column, but older rows may hold ''.
     conn.execute("UPDATE products SET price = NULL WHERE TRIM(COALESCE(price, '')) = ''")
     conn.execute("UPDATE products SET attrs_json = '{}' WHERE attrs_json IS NULL")
@@ -2197,7 +2209,7 @@ def _migrate_composite_tenant_wa_keys(conn):
             "CREATE INDEX IF NOT EXISTS ix_customers_phone ON customers(phone)"
         )
     except Exception:
-        pass
+        logger.exception("CUSTOMER_PHONE_INDEX_FAILED")
 
     # complaints / orders tenant stamp (orders already have tenant_id in newer DBs)
     _ensure_columns(conn, "complaints", [("tenant_id", "TEXT")])

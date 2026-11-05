@@ -70,7 +70,9 @@ def get_recent_history(
         if (now - last_time).total_seconds() > ttl_minutes * 60:
             return []
     except Exception:
-        pass
+        # deliberate: an unparseable timestamp must not hide history —
+        # the rows are returned without the TTL cut.
+        logger.debug("HISTORY_TTL_CHECK_SKIPPED", exc_info=True)
     out = []
     for row in rows:
         raw_user = row["message"] or ""

@@ -412,7 +412,8 @@ def _format_kb_candidates(kb_results, faiss_results, query: str, k: int):
                             best_chunk = chunk
                     content = best_chunk if best_chunk else chunks[0]
             except (json.JSONDecodeError, TypeError):
-                pass
+                # deliberate: unparseable chunks_json — the document content is used as-is.
+                logger.debug("KB_CHUNKS_PARSE_SKIPPED | _format_kb_candidates", exc_info=True)
 
         if not content or not content.strip():
             continue
@@ -468,7 +469,8 @@ def _format_kb_candidates(kb_results, faiss_results, query: str, k: int):
                         chunk_idx = faiss_hit.get("chunk_index", 0)
                         content = chunks[min(chunk_idx, max(len(chunks) - 1, 0))]
                 except (json.JSONDecodeError, TypeError):
-                    pass
+                    # deliberate: unparseable chunks_json — the document content is used as-is.
+                    logger.debug("KB_CHUNKS_PARSE_SKIPPED | _format_kb_candidates chunk pick", exc_info=True)
 
             if not content or not content.strip():
                 continue
@@ -710,7 +712,9 @@ def _call_groq_with_tools(messages: List[Dict], tools_schemas: List[Dict], user_
                                 time.sleep(1)
                                 continue
                     except Exception:
-                        pass
+                        # deliberate: a non-JSON error body just means the tool_choice retry
+                        # heuristic does not trigger for this attempt.
+                        logger.debug("LLM_ERROR_BODY_PARSE_SKIPPED | status=400 body not JSON", exc_info=True)
 
                 response.raise_for_status()
 
@@ -967,7 +971,9 @@ def process_with_brain(
                                         tool_media_url = prod["media_url"]
                                         break
                     except (json.JSONDecodeError, TypeError, AttributeError):
-                        pass
+                        # deliberate: tool-result media extraction is best-effort — the
+                        # answer text is unaffected.
+                        logger.debug("TOOL_MEDIA_EXTRACT_SKIPPED | process_with_brain", exc_info=True)
 
                 messages.append({
                     "role": "tool",
@@ -1006,7 +1012,9 @@ def process_with_brain(
                                                 tool_media_url = prod["media_url"]
                                                 break
                             except (json.JSONDecodeError, TypeError, AttributeError):
-                                pass
+                                # deliberate: tool-result media extraction is best-effort — the
+                                # answer text is unaffected.
+                                logger.debug("TOOL_MEDIA_EXTRACT_SKIPPED | process_with_brain (2)", exc_info=True)
                     except (json.JSONDecodeError, TypeError) as e:
                         logger.warning(f"Failed to parse XML tool call {func_name}: {e}")
 
@@ -1291,7 +1299,8 @@ def _parse_dynamic_json(raw_response: str, user_query: str) -> Dict | None:
         if isinstance(parsed, dict) and "answer" in parsed:
             return _validate_dynamic_result(parsed, user_query)
     except json.JSONDecodeError:
-        pass
+        # deliberate: not valid JSON — the fallback extraction below runs.
+        logger.debug("DYNAMIC_JSON_PARSE_SKIPPED | strategy=direct", exc_info=True)
 
     patterns = [
         r"```(?:json)?\s*\n?(\{.*?\})\s*```?",

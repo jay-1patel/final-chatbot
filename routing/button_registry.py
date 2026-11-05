@@ -17,9 +17,12 @@ Usage:
     button = button_registry.get_button('contact_support')
 """
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 
 class ButtonRegistry:
@@ -79,8 +82,8 @@ class ButtonRegistry:
                 if 'industry' in data:
                     self.industry = data['industry']
         except (FileNotFoundError, json.JSONDecodeError, TypeError):
-            # File doesn't exist or is invalid - will use defaults
-            pass
+            # deliberate: file doesn't exist or is invalid — use defaults.
+            logger.debug("BUTTON_REGISTRY_DEFAULTS | config file missing/invalid — using defaults", exc_info=True)
     
     def _load_defaults(self) -> None:
         """Load default generic buttons."""

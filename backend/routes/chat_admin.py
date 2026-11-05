@@ -54,7 +54,8 @@ class ChatManager:
                     try:
                         await ws.send_json(message)
                     except Exception:
-                        pass
+                        # deliberate: one dead websocket must not stop the broadcast.
+                        logger.debug("WS_BROADCAST_SEND_SKIPPED | broadcast", exc_info=True)
 
     async def broadcast_online(self):
         online = list(self.active_connections.keys())
@@ -65,7 +66,8 @@ class ChatManager:
             try:
                 await ws.send_json({"type": "online_users", "users": online})
             except Exception:
-                pass
+                # deliberate: one dead websocket must not stop the broadcast.
+                logger.debug("WS_BROADCAST_SEND_SKIPPED | broadcast_online", exc_info=True)
 
     async def send_message(self, chat_id: str, raw_username: str, text: str, attachment: dict = None):
         real = _strip_conn_id(raw_username)
@@ -86,7 +88,8 @@ class ChatManager:
             try:
                 await ws.send_json(msg)
             except Exception:
-                pass
+                # deliberate: one dead websocket must not stop the broadcast.
+                logger.debug("WS_BROADCAST_SEND_SKIPPED | send_message", exc_info=True)
 
 
 chat_manager = ChatManager()

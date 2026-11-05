@@ -23,9 +23,12 @@ then this runs as a report.
 """
 import argparse
 import json
+import logging
 import os
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -103,7 +106,7 @@ def run(tenant_id: str, dataset_path: Path, use_embeddings: bool = True):
         try:
             flow_runner._state().clear_flow(wa_id)
         except Exception:
-            pass
+            logger.exception("EVAL_PROBE_CLEANUP_FAILED | wa=%s", wa_id)
         flow_results.append({
             "utterance": item["utterance"],
             "flow": resolved,

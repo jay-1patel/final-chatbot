@@ -10,8 +10,11 @@ in orchestrator.py and fuzzy_matcher.py. Keywords are derived from the live
 A short TTL cache avoids a DB hit on every incoming message.
 """
 
+import logging
 import re
 import time
+
+logger = logging.getLogger(__name__)
 
 _CACHE_TTL_SECONDS = 300  # refresh every 5 minutes
 _cache = {"keywords": set(), "loaded_at": 0.0}
@@ -46,7 +49,7 @@ def _load_from_db() -> set:
                 if token not in _STOPWORDS:
                     words.add(token)
     except Exception:
-        pass
+        logger.exception("PRODUCT_KEYWORDS_LOAD_FAILED | returning %d words", len(words))
     return words
 
 

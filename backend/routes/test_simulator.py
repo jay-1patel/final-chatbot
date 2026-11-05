@@ -110,7 +110,8 @@ async def simulate_message(request: SimulatorRequest):
                 try:
                     conn.execute("UPDATE user_states SET tenant_id=? WHERE wa_id=?", (request.tenant_id, wa_id))
                 except Exception:
-                    pass
+                    # deliberate: tenant stamp is best-effort; the outer handler logs failures
+                    logger.debug("SIMULATOR_TENANT_STAMP_FAILED | wa_id=%s", wa_id, exc_info=True)
         except Exception as exc:
             logger.debug(f"Could not stamp simulator tenant: {exc}")
 
@@ -142,7 +143,8 @@ async def reset_conversation(request: SimulatorRequest):
             from backend.services import flow_runner
         flow_runner.clear_flow(wa_id)
     except Exception:
-        pass
+        # deliberate: reset continues even if no live flow state exists to clear
+        logger.debug("SIMULATOR_FLOW_CLEAR_FAILED | wa_id=%s", wa_id, exc_info=True)
 
     with get_db_context() as conn:
         conn.execute("DELETE FROM user_states WHERE wa_id=?", (wa_id,))

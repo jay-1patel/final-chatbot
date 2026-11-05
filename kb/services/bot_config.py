@@ -408,7 +408,9 @@ def list_active_clients() -> List[str]:
                 if config and config.get("client_id") == client_dir.name:
                     active_clients.append(client_dir.name)
             except Exception:
-                pass
+                # deliberate: a client whose config fails validation is simply
+                # not listed as active.
+                logger.debug("CLIENT_CONFIG_VALIDATE_SKIPPED | client=%s", client_dir.name, exc_info=True)
 
     return active_clients
 

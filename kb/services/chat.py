@@ -64,7 +64,9 @@ async def broadcast_online_users():
             try:
                 await ws.send_text(payload)
             except Exception:
-                pass
+                # deliberate: one dead websocket must not stop the broadcast to
+                # the remaining connections.
+                logger.debug("WS_BROADCAST_SEND_SKIPPED | one connection failed", exc_info=True)
 
 
 async def send_to_user(username: str, payload: dict):
@@ -72,7 +74,9 @@ async def send_to_user(username: str, payload: dict):
         try:
             await ws.send_json(payload)
         except Exception:
-            pass
+            # deliberate: one dead websocket must not stop delivery to the
+            # user's other connections.
+            logger.debug("WS_SEND_FAILED | user=%s", username, exc_info=True)
 
 
 async def send_to_chat(chat_id: str, payload: dict):

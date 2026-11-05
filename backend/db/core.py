@@ -36,7 +36,7 @@ try:
     from dotenv import load_dotenv
     load_dotenv(os.path.join(PROJECT_ROOT, "routing", ".env"))
 except Exception:  # pragma: no cover - dotenv missing is not fatal
-    pass
+    logger.debug("DOTENV_LOAD_SKIPPED | continuing without routing/.env", exc_info=True)
 
 
 def _resolve_db_path() -> str:
@@ -173,7 +173,9 @@ def get_db():
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=30000")
     except Exception:
-        pass
+        # deliberate: pragmas are tuning — the connection is still usable
+        # with sqlite defaults.
+        logger.debug("DB_PRAGMA_SKIPPED", exc_info=True)
     return conn
 
 

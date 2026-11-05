@@ -162,8 +162,9 @@ class UnifiedBotService:
                     'requires_attention': row.get('open', 0) > 0
                 }
         except Exception:
-            # Table doesn't exist yet, return default context
-            pass
+            # deliberate: table doesn't exist yet (or is unreadable) —
+            # return the default context.
+            logger.debug("SUPPORT_CONTEXT_DEFAULTED | wa=%s", wa_id, exc_info=True)
 
         return {
             'has_active_tickets': False,
@@ -191,8 +192,9 @@ class UnifiedBotService:
                     'estimated_value': row.get('estimated_value', 0)
                 }
         except Exception:
-            # Table doesn't exist yet, return default context
-            pass
+            # deliberate: table doesn't exist yet (or is unreadable) —
+            # return the default context.
+            logger.debug("SALES_CONTEXT_DEFAULTED | wa=%s", wa_id, exc_info=True)
 
         return {
             'is_lead': False,

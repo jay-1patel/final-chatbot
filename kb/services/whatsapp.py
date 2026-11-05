@@ -262,13 +262,15 @@ async def send_text_message(contact_no: str, text: str) -> bool:
                     from routing.hookdeck import tee_outbound
                     tee_outbound(SESSION_MSG_URL, payload, response.status_code, response.text, to=contact_no)
                 except Exception:
-                    pass
+                    # deliberate: the outbound tee is an observability side-channel —
+                    # it must never affect the actual send.
+                    logger.debug("TEE_OUTBOUND_FAILED | to=%s", contact_no, exc_info=True)
 
                 if response.status_code == 200:
                     try:
                         update_session_outbound(contact_no)
                     except Exception:
-                        pass
+                        logger.exception("SESSION_OUTBOUND_UPDATE_FAILED | to=%s", contact_no)
 
                     logger.info(f"TEXT_SENT | to={contact_no} | chars={len(chunk)}")
                 else:
@@ -291,7 +293,9 @@ def _brochure_pdf_allowed(contact_no: str) -> bool:
         if profile and profile.features:
             return bool(getattr(profile.features, "brochure_pdf", True))
     except Exception:
-        pass
+        # deliberate: feature check is best-effort — default is "allowed"
+        # (the return True below).
+        logger.debug("BROCHURE_PDF_CHECK_DEFAULTED | contact=%s", contact_no, exc_info=True)
     return True
 
 
@@ -460,7 +464,7 @@ async def send_button_message(
                 try:
                     update_session_outbound(contact_no)
                 except Exception:
-                    pass
+                    logger.exception("SESSION_OUTBOUND_UPDATE_FAILED | to=%s", contact_no)
             logger.info(
                 f"BUTTON_MESSAGE_SENT | to={contact_no} | buttons={len(cloud_buttons)} | "
                 f"media_header={'yes' if 'header' in interactive_body else 'no'} | "
@@ -495,7 +499,7 @@ async def send_button_message(
                 try:
                     update_session_outbound(contact_no)
                 except Exception:
-                    pass
+                    logger.exception("SESSION_OUTBOUND_UPDATE_FAILED | to=%s", contact_no)
 
                 logger.info(f"BUTTON_MESSAGE_SENT | to={contact_no} | buttons={len(buttons)}")
                 return True
@@ -606,7 +610,7 @@ async def send_list_menu(
                 try:
                     update_session_outbound(contact_no)
                 except Exception:
-                    pass
+                    logger.exception("SESSION_OUTBOUND_UPDATE_FAILED | to=%s", contact_no)
 
                 logger.info(f"LIST_MENU_SENT | to={contact_no} | sections={len(api_sections)} | rows={sum(len(section.get('rows', [])) for section in api_sections)}")
                 return True
@@ -697,7 +701,7 @@ async def send_quick_button_message(
                 try:
                     update_session_outbound(number)
                 except Exception:
-                    pass
+                    logger.exception("SESSION_OUTBOUND_UPDATE_FAILED | to=%s", number)
 
                 logger.info(f"QUICK_BUTTON_SENT | to={number} | buttons={len(buttons)}")
                 return True
@@ -836,7 +840,8 @@ def _send2_response_ok(resp) -> bool:
             # If we got valid JSON but unclear status, assume success for 200
             return True
     except (ValueError, TypeError):
-        pass
+        # deliberate: a non-JSON body is judged by the phrase checks below.
+        logger.debug("SEND2_RESPONSE_PARSE_SKIPPED | non-JSON response body", exc_info=True)
 
     # plain error phrases (non-JSON) - be more specific
     if lower.startswith("we sorry") or lower.startswith("invalid ") or lower == "failed":
@@ -1070,7 +1075,7 @@ def _send_whatsapp_sync(to, payload, message_type):
             try:
                 update_session_outbound(to)
             except Exception:
-                pass
+                logger.exception("SESSION_OUTBOUND_UPDATE_FAILED | to=%s", to)
         return ok
     except Exception as e:
         logger.error(f"OUTGOING_FAILED | to={to} | error={e}")
@@ -1434,7 +1439,8 @@ def download_media(media_id: str, mime_type: str = None) -> str:
                 try:
                     os.unlink(tmp_path)
                 except:
-                    pass
+                    # deliberate: temp-file cleanup in a finally block.
+                    logger.debug("TEMP_FILE_REMOVE_SKIPPED | path=%s", tmp_path, exc_info=True)
 
         elif "pdf" in content_type:
             # Save to temp and extract text
@@ -1460,7 +1466,8 @@ def download_media(media_id: str, mime_type: str = None) -> str:
                 try:
                     os.unlink(tmp_path)
                 except:
-                    pass
+                    # deliberate: temp-file cleanup in a finally block.
+                    logger.debug("TEMP_FILE_REMOVE_SKIPPED | path=%s", tmp_path, exc_info=True)
 
         return f"[Media received: {content_type}]"
 
@@ -1611,7 +1618,9 @@ def _handle_menu_selection(wa_id: str, selected_id: str, selected_title: str) ->
                 send_product_with_image(wa_id, product)
                 return True
         except ValueError:
-            pass
+            # deliberate: the selection id is not a product id — the caller
+            # tries the next selection kind.
+            logger.debug("MENU_SELECTION_ID_PARSE_SKIPPED | kind=product id=%s", selected_id, exc_info=True)
 
     elif selected_id.startswith("faq_"):
         try:
@@ -1626,7 +1635,9 @@ def _handle_menu_selection(wa_id: str, selected_id: str, selected_title: str) ->
                     send_whatsapp_message(wa_id, f"*{row['source_file'] or 'FAQ'}*\n\n{row['content'][:3500]}")
                     return True
         except ValueError:
-            pass
+            # deliberate: the selection id is not a FAQ id — the caller tries
+            # the next selection kind.
+            logger.debug("MENU_SELECTION_ID_PARSE_SKIPPED | kind=faq id=%s", selected_id, exc_info=True)
 
     elif selected_id.startswith("kb_"):
         try:
@@ -1641,7 +1652,9 @@ def _handle_menu_selection(wa_id: str, selected_id: str, selected_title: str) ->
                     send_whatsapp_message(wa_id, f"*{row['title']}*\n\n{row['content'][:3500]}")
                     return True
         except ValueError:
-            pass
+            # deliberate: the selection id is not a KB id — the caller tries
+            # the next selection kind.
+            logger.debug("MENU_SELECTION_ID_PARSE_SKIPPED | kind=kb id=%s", selected_id, exc_info=True)
 
     # Keyword search fallback
     keyword = selected_title.lower().strip()
@@ -1951,7 +1964,8 @@ def transcribe_voice(media_id: str, mime_type: str = "audio/ogg") -> str:
             try:
                 os.unlink(tmp_path)
             except Exception:
-                pass
+                # deliberate: temp-file cleanup in a finally block.
+                logger.debug("TEMP_FILE_REMOVE_SKIPPED | path=%s", tmp_path, exc_info=True)
     except Exception as e:
         logger.error(f"transcribe_voice failed: {e}")
         return "[Voice message - error]"
@@ -2047,6 +2061,6 @@ def send_document_with_caption(to: str, document_url: str, filename: str,
                 else:
                     loop.run_until_complete(send_text_message(to, caption))
             except Exception:
-                pass
+                logger.exception("CAPTION_SEND_FAILED | to=%s", to)
         return sent_doc
     return ok

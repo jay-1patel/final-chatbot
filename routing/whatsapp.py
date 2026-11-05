@@ -158,7 +158,9 @@ def get_tenant_send2_credentials(tenant_id: str = None) -> tuple:
             from routing.database import get_request_tenant
             tid = get_request_tenant()
         except Exception:
-            pass
+            # deliberate: fall back to the default (env) credentials when
+            # no request tenant can be determined.
+            logger.debug("SEND2_TENANT_LOOKUP_FALLBACK | no request tenant — using env credentials", exc_info=True)
 
     if tid:
         try:
@@ -458,7 +460,9 @@ def send_whatsapp_cta_url(
             from routing.hookdeck import tee_outbound
             tee_outbound(SEND2_SESSION_SEND_URL, payload, resp.status_code, resp.text, to=clean_to)
         except Exception:
-            pass
+            # deliberate: the outbound tee is an observability side-channel;
+            # its failure must never affect the actual send.
+            logger.debug("TEE_OUTBOUND_FAILED | to=%s", clean_to, exc_info=True)
         low = (resp.text or "").lower()
         ok = resp.status_code == 200 and (
             "message sent successfully" in low

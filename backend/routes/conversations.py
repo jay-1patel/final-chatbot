@@ -327,7 +327,7 @@ def resolve_handoff(
                             snippet=RESOLVED_MESSAGE[:120],
                         )
                     except Exception:
-                        pass
+                        logger.exception("SEND_LOG_RECORD_FAILED | wa=%s tenant=%s reason=inbox_resolved", wa_id, tenant_id)
         except Exception as exc:  # pragma: no cover - depends on live credentials
             logger.warning(f"Could not send resolve message to {wa_id}: {exc}")
     logger.info(f"INBOX_RESOLVED | tenant={tenant_id} | wa={wa_id} | notified={sent}")
@@ -416,7 +416,7 @@ def reply_to_customer(
             snippet=(message or attach_name or "inbox_reply")[:120],
         )
     except Exception:
-        pass
+        logger.exception("SEND_LOG_RECORD_FAILED | wa=%s tenant=%s reason=inbox_reply", wa_id, tenant_id)
 
     history_text = message
     if send_as_media:

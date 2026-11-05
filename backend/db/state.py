@@ -23,7 +23,8 @@ def _resolve_tenant_id(wa_id: str, tenant_id: Optional[str] = None) -> str:
             if row and row["tenant_id"]:
                 return str(row["tenant_id"])
     except Exception:
-        pass
+        # deliberate: resolver chain — fall through to the next source.
+        logger.debug("STATE_TENANT_RESOLVE_STEP_SKIPPED | source=user_states wa=%s", wa_id, exc_info=True)
     try:
         from shared.tenancy.resolver import resolve_default_tenant
         return resolve_default_tenant()

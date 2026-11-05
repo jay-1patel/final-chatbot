@@ -387,7 +387,7 @@ async def _send_reply(wa_id: str, messages: list, tenant_id: str = None) -> None
             snippet=snippet or f"{len(messages)} message(s)",
         )
     except Exception:
-        pass
+        logger.exception("SEND_LOG_RECORD_FAILED | wa=%s tenant=%s", wa_id, tenant_id)
 
 
 async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
@@ -607,7 +607,7 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                                         snippet="main_menu_resend",
                                     )
                                 except Exception:
-                                    pass
+                                    logger.exception("SEND_LOG_RECORD_FAILED | wa=%s tenant=%s reason=null_menu", wa_id, tenant_id)
                                 logger.info(
                                     "Re-sent tenant menu to %s after interactive null-text",
                                     wa_id,
