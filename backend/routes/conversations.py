@@ -60,13 +60,21 @@ def _require(perm: str):
     return dependency
 
 
-#: A conversation belongs to a tenant when the row is stamped with it, or - for
-#: rows written before `chat_history` carried a tenant - when its state row does.
-#: Two placeholders: the tenant id, twice.
-_TENANT_SCOPE = (
-    "(ch.tenant_id = ? OR (ch.tenant_id IS NULL AND ch.wa_id IN "
-    "(SELECT wa_id FROM user_states WHERE tenant_id = ?)))"
-)
+def _tenant_scope(alias: str) -> str:
+    """Tenant-scope predicate for a chat_history table aliased `alias`.
+
+    A row belongs to the tenant when it is stamped with the tenant id, or -
+    for rows written before `chat_history` carried a tenant - when its
+    state row does. Two placeholders: the tenant id, twice.
+    """
+    return (
+        f"({alias}.tenant_id = ? OR ({alias}.tenant_id IS NULL AND {alias}.wa_id IN "
+        "(SELECT wa_id FROM user_states WHERE tenant_id = ?)))"
+    )
+
+
+#: Tenant scope for the main chat_history queries (alias `ch`).
+_TENANT_SCOPE = _tenant_scope("ch")
 
 
 # ── conversation threads ──────────────────────────────────────────────────
@@ -102,13 +110,14 @@ def list_conversations(
         for row in rows:
             wa_id = row["wa_id"]
             last = conn.execute(
-                "SELECT message, response, sender_name FROM chat_history "
-                "WHERE wa_id = ? ORDER BY id DESC LIMIT 1",
-                (wa_id,),
+                "SELECT message, response, sender_name FROM chat_history ch "
+                f"WHERE {_TENANT_SCOPE} AND ch.wa_id = ? ORDER BY ch.id DESC LIMIT 1",
+                (tenant_id, tenant_id, wa_id),
             ).fetchone()
             state = conn.execute(
-                "SELECT human_handover, state, handover_resolved_at FROM user_states WHERE wa_id = ?",
-                (wa_id,),
+                "SELECT human_handover, state, handover_resolved_at FROM user_states "
+                "WHERE wa_id = ? AND tenant_id = ?",
+                (wa_id, tenant_id),
             ).fetchone()
             handover = bool(state["human_handover"]) if state else False
             threads.append({
@@ -143,8 +152,9 @@ def get_conversation(
             raise HTTPException(status_code=404, detail="This conversation does not belong to this tenant")
 
         rows = conn.execute(
-            "SELECT * FROM chat_history WHERE wa_id = ? ORDER BY id ASC LIMIT ?",
-            (wa_id, limit),
+            f"SELECT ch.* FROM chat_history ch WHERE {_TENANT_SCOPE} "
+            "AND ch.wa_id = ? ORDER BY ch.id ASC LIMIT ?",
+            (tenant_id, tenant_id, wa_id, limit),
         ).fetchall()
         messages = []
         for r in rows:
@@ -171,12 +181,13 @@ def chat_history(
     try:
         sql = f"""
             SELECT ch.*, (SELECT sender_name FROM chat_history n WHERE n.wa_id = ch.wa_id
+                          AND {_tenant_scope("n")}
                           ORDER BY n.id DESC LIMIT 1) AS sender_name
             FROM chat_history ch
             WHERE {_TENANT_SCOPE}
               AND ch.created_at >= DATE('now', ?)
         """
-        params: list = [tenant_id, tenant_id, f"-{days} days"]
+        params: list = [tenant_id, tenant_id, tenant_id, tenant_id, f"-{days} days"]
         if wa_id:
             sql += " AND ch.wa_id = ?"
             params.append(wa_id)
@@ -208,24 +219,26 @@ def inbox_queue(
                 ch.wa_id,
                 MAX(ch.created_at) AS last_message_at,
                 (SELECT message FROM chat_history c2 WHERE c2.wa_id = ch.wa_id
+                 AND {_tenant_scope("c2")}
                  ORDER BY c2.id DESC LIMIT 1) AS last_message,
-                (SELECT COUNT(*) FROM chat_history c3 WHERE c3.wa_id = ch.wa_id) AS turn_count,
+                (SELECT COUNT(*) FROM chat_history c3 WHERE c3.wa_id = ch.wa_id
+                 AND {_tenant_scope("c3")}) AS turn_count,
                 us.state AS bot_state,
                 COALESCE(us.human_handover, 0) AS human_handover
             FROM chat_history ch
-            LEFT JOIN user_states us ON us.wa_id = ch.wa_id
+            LEFT JOIN user_states us ON us.wa_id = ch.wa_id AND us.tenant_id = ?
             WHERE {_TENANT_SCOPE} {where}
             GROUP BY ch.wa_id
             ORDER BY human_handover DESC, last_message_at DESC
             """,
-            (tenant_id, tenant_id),
+            (tenant_id, tenant_id, tenant_id, tenant_id, tenant_id, tenant_id, tenant_id),
         ).fetchall()
 
         queue = []
         for row in rows:
             assignment = conn.execute(
-                "SELECT agent_id FROM conversation_assignments WHERE wa_id = ?",
-                (row["wa_id"],),
+                "SELECT agent_id FROM conversation_assignments WHERE wa_id = ? AND tenant_id = ?",
+                (row["wa_id"], tenant_id),
             ).fetchone()
             queue.append({
                 "wa_id": row["wa_id"],

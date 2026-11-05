@@ -194,17 +194,57 @@ def _loads_collected(raw) -> dict:
         return {}
 
 
-def ensure_conversation_row(wa_id: str) -> None:
+def _resolve_state_tenant(wa_id: str, tenant_id: str | None = None) -> str | None:
+    """Which tenant a conversation row for ``wa_id`` belongs to.
+
+    Resolution order:
+      1. the tenant passed in by the caller — the tenant this message is
+         actually being handled for (flow runner / orchestrator context),
+      2. the current request tenant, set by the orchestrator/webhook at the
+         start of message handling,
+      3. the tenant that already owns this user,
+      4. the bot's default tenant resolution (active test tenant /
+         DEFAULT_TENANT_ID / the single active tenant).
+
+    Returns None when no tenant can be determined. Callers must log and
+    skip the write — never invent a tenant.
+    """
+    if tenant_id:
+        return str(tenant_id)
+    try:
+        from database import get_request_tenant
+        request_tenant = get_request_tenant()
+        if request_tenant:
+            return str(request_tenant)
+    except Exception:
+        pass
+    try:
+        from shared.tenancy.resolver import resolve_tenant_for_user
+        owner = resolve_tenant_for_user(wa_id)
+        if owner:
+            return str(owner)
+    except Exception:
+        pass
+    try:
+        from shared.tenancy.resolver import resolve_default_tenant
+        return resolve_default_tenant()
+    except Exception:
+        return None
+
+
+def ensure_conversation_row(wa_id: str, tenant_id: str | None = None) -> None:
     """Create the user_states row if missing, so flow state always has a home.
 
     Idempotent and cheap. Without this a brand-new number would silently fail
     every flow write.
     """
-    try:
-        from shared.tenancy.resolver import resolve_tenant_for_user
-        t_id = resolve_tenant_for_user(wa_id)
-    except Exception:
-        t_id = "troogood"
+    t_id = _resolve_state_tenant(wa_id, tenant_id)
+    if not t_id:
+        logger.error(
+            f"ensure_conversation_row skipped for {wa_id}: no tenant could be "
+            "resolved (none passed in, no request tenant, user unowned, no default)"
+        )
+        return
     try:
         with get_db_context() as conn:
             conn.execute(
@@ -298,11 +338,12 @@ def update_conversation_with_retry(wa_id: str, mutate, max_retries: int = 3) -> 
         mutate(convo)
         tid = convo.get("tenant_id")
         if not tid:
-            try:
-                from shared.tenancy.resolver import resolve_tenant_for_user
-                tid = resolve_tenant_for_user(wa_id)
-            except Exception:
-                tid = "troogood"
+            tid = _resolve_state_tenant(wa_id)
+        if not tid:
+            logger.error(
+                f"conversation write skipped for {wa_id}: no tenant could be resolved"
+            )
+            return {}
         try:
             with get_db_context() as conn:
                 cur = conn.execute(

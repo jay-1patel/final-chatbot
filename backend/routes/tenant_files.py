@@ -376,7 +376,10 @@ async def upload_tenant_image(
     (imghippo) and the returned URL is what the record stores, so the bot can
     send it to customers without the console having to serve files.
     """
-    from routes.chat import _upload_to_imghippo
+    try:
+        from services.image_upload import _upload_to_imghippo
+    except ImportError:
+        from backend.services.image_upload import _upload_to_imghippo
 
     content = await file.read()
     if not content:

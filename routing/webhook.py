@@ -373,54 +373,6 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
     except Exception as e:
         logger.debug(f"Session timeout check failed for {wa_id}: {e}")
     try:
-        # ── TESTING COMMANDS: #tenant, #tenants, #switch ──────────────
-        clean_cmd = (user_text or "").strip().lower()
-        if clean_cmd in ("#tenant", "#tenants", "#switch", "#whoami", "#status"):
-            from shared.tenancy import store
-            from database import get_active_test_tenant
-            current_active = get_active_test_tenant() or tenant_id
-            all_tenants = store.list_tenants()
-            lines = [
-                "🧪 *WhatsApp Tenant Switcher (Single-Number Testing)*",
-                f"Current Active: *{current_active}*",
-                "",
-                "Available tenants to test:",
-            ]
-            for idx, t in enumerate(all_tenants, 1):
-                t_name = t.get("display_name") or t.get("company_name") or t.get("slug")
-                t_slug = t.get("slug") or str(t.get("id"))
-                t_vert = t.get("vertical", "generic")
-                active_marker = " 🟢 (ACTIVE)" if (t_slug == current_active or str(t.get("id")) == str(current_active)) else ""
-                lines.append(f"{idx}️⃣ *{t_name}* (`{t_slug}`){active_marker}\n   Vertical: _{t_vert}_\n   Switch: `#tenant {t_slug}` or `#tenant {idx}`")
-            lines.append("\n👉 Reply with `#tenant <name/number>` to switch instantly!")
-            reply_msg = "\n".join(lines)
-            if config.SEND2_USERNAME and config.SEND2_PASSWORD:
-                send_whatsapp_message(wa_id, reply_msg)
-            save_chat(wa_id, sender_name, user_text, reply_msg, "test_command")
-            return
-
-        if clean_cmd.startswith(("#tenant ", "#switch ")):
-            from database import set_active_test_tenant
-            from shared.tenancy import store
-            parts = (user_text or "").strip().split(None, 1)
-            target = parts[1].strip() if len(parts) > 1 else ""
-            rec = store.get_tenant(target)
-            if not rec and target.isdigit():
-                all_ts = store.list_tenants()
-                num = int(target)
-                if 1 <= num <= len(all_ts):
-                    rec = all_ts[num - 1]
-            if rec:
-                chosen_id = rec.get("slug") or str(rec.get("id"))
-                set_active_test_tenant(chosen_id)
-                disp = rec.get("display_name") or rec.get("company_name") or chosen_id
-                vert = rec.get("vertical", "generic")
-                msg = f"✅ *Active Tenant Switched!*\nNow testing: *{disp}* ({vert})\nAll incoming messages are now routed to this tenant."
-                if config.SEND2_USERNAME and config.SEND2_PASSWORD:
-                    send_whatsapp_message(wa_id, msg)
-                save_chat(wa_id, sender_name, user_text, msg, "test_command")
-                return
-
         # ── CHECK HUMAN HANDOVER ────────────────────────────────────────
         # While a human agent is handling the conversation, save the message
         # for the agent inbox but do NOT let the bot answer. The user asked for

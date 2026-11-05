@@ -59,7 +59,7 @@ class MenuButtonDedupeTests(unittest.TestCase):
 
         offering = {"name": "Platinum Credit Card"}
         with patch(
-            "routes.chat._upload_to_imghippo",
+            "services.image_upload._upload_to_imghippo",
             return_value="https://imghipo.com/platinum-card.png",
         ) as upload:
             _attach_pdf_images_to_offerings(
@@ -96,7 +96,7 @@ class MenuButtonDedupeTests(unittest.TestCase):
                 },
             ),
             patch(
-                "routes.chat._upload_to_imghippo",
+                "services.image_upload._upload_to_imghippo",
                 return_value="https://imghipo.com/platinum-card.png",
             ),
         ):
@@ -131,7 +131,7 @@ class MenuButtonDedupeTests(unittest.TestCase):
         pdf.close()
 
         offering = {"name": "Platinum Credit Card"}
-        with patch("routes.chat._upload_to_imghippo") as upload:
+        with patch("services.image_upload._upload_to_imghippo") as upload:
             _attach_pdf_images_to_offerings(
                 [offering],
                 [{"filename": "catalog.pdf", "ext": ".pdf", "_content": content}],
@@ -153,7 +153,7 @@ class MenuButtonDedupeTests(unittest.TestCase):
         content = pdf.tobytes()
         pdf.close()
 
-        with patch("routes.chat._upload_to_imghippo", return_value=None):
+        with patch("services.image_upload._upload_to_imghippo", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "public URL.*ImageHipo"):
                 _attach_pdf_images_to_offerings(
                     [{"name": "Platinum Credit Card"}],
