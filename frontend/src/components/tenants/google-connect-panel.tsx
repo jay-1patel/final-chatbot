@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Alert } from '@/components/ui/feedback'
 import { Video, RefreshCw, ExternalLink } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { apiCallStart, logApiCall, logApiError } from '@/lib/api'
 import { useToast } from '@/components/ui/toast'
 
 export interface GoogleConnectPanelProps {
@@ -31,16 +32,21 @@ export function GoogleConnectPanel({ tenantId = '', className }: GoogleConnectPa
 
   const fetchStatus = async () => {
     if (!tenantId) return
+    const path = `/api/tenants/${tenantId}/google-connect/status`
+    const startedAt = apiCallStart()
     try {
       setIsLoading(true)
-      const resp = await fetch(`/api/tenants/${tenantId}/google-connect/status`)
+      const resp = await fetch(path)
       if (resp.ok) {
+        logApiCall('GET', path, resp.status, startedAt)
         const data = await resp.json()
         setStatus(data)
       } else {
+        logApiError('GET', path, resp.status, resp.statusText || 'Request failed', startedAt)
         setStatus({ connected: false })
       }
-    } catch {
+    } catch (err) {
+      logApiError('GET', path, 0, (err as Error)?.message || 'Network error', startedAt)
       setStatus({ connected: false })
     } finally {
       setIsLoading(false)
@@ -53,18 +59,24 @@ export function GoogleConnectPanel({ tenantId = '', className }: GoogleConnectPa
 
   const handleConnectGoogle = async () => {
     if (!tenantId) return
+    const path = `/api/tenants/${tenantId}/google-connect/oauth-url`
+    const startedAt = apiCallStart()
     try {
       setIsConnecting(true)
-      const resp = await fetch(`/api/tenants/${tenantId}/google-connect/oauth-url`)
+      const resp = await fetch(path)
       if (resp.ok) {
+        logApiCall('GET', path, resp.status, startedAt)
         const data = await resp.json()
         if (data.url) {
           window.location.href = data.url
           return
         }
+      } else {
+        logApiError('GET', path, resp.status, resp.statusText || 'Request failed', startedAt)
       }
       toast.push('Failed to get Google authorization URL. Check server logs.', 'error')
-    } catch {
+    } catch (err) {
+      logApiError('GET', path, 0, (err as Error)?.message || 'Network error', startedAt)
       toast.push('Failed to initiate Google connection.', 'error')
     } finally {
       setIsConnecting(false)

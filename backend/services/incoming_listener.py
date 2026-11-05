@@ -189,11 +189,11 @@ def _record_chat(wa_id: str, sender_name: str, text: str, outgoing: list) -> Non
         logger.warning(f"Could not save chat for {wa_id}: {e}")
 
 
-def _record_poll(wa_id: str, text: str) -> None:
+def _record_poll(wa_id: str, text: str, message_id: str = None, tenant_id: str = None) -> None:
     """Write a webhook_logs row so the admin webhook stats are non-empty."""
     try:
         from database import log_webhook
-        log_webhook("incoming", "send2/poll", {"wa_id": wa_id, "message": (text or "")[:500]})
+        log_webhook("incoming", "send2/poll", {"wa_id": wa_id, "message": (text or "")[:500]}, wa_id=wa_id, tenant_id=tenant_id, message_id=message_id)
     except Exception as e:
         logger.warning(f"Could not log poll webhook for {wa_id}: {e}")
 
@@ -646,7 +646,7 @@ async def poll_incoming_messages(stop_event: asyncio.Event = None) -> None:
                         # chat/poll audit only after a successful process+send path.
                         _record_processed(message_id, wa_id)
                         _record_chat(wa_id, sender_name, text, outgoing)
-                        _record_poll(wa_id, text)
+                        _record_poll(wa_id, text, message_id=message_id, tenant_id=tenant_id)
 
                     except Exception as e:
                         # Claim runs before send to stop double-answers; release so

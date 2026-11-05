@@ -469,7 +469,7 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
             response_time_ms = int((time.time() - start_time) * 1000)
             log_webhook("outgoing", "/webhook/reply", json.dumps({
                 "to": wa_id, "response": note
-            }), 200, f"Reply {send_status} to {sender_name}", response_time_ms=response_time_ms)
+            }), 200, f"Reply {send_status} to {sender_name}", response_time_ms=response_time_ms, wa_id=wa_id, tenant_id=tenant_id, message_id=msg_id)
             return
 
         # ── PROFILE-DEFINED FLOW START (Phase 3) ───────────────────────
@@ -518,7 +518,7 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
                         log_webhook("outgoing", "/webhook/flow", json.dumps({
                             "to": wa_id, "button_id": pressed_id, "flow": outcome.get("flow")
                         }), 200, f"Flow {outcome.get('flow')} started",
-                            response_time_ms=response_time_ms)
+                            response_time_ms=response_time_ms, wa_id=wa_id, tenant_id=tenant_id, message_id=msg_id)
                         return
             except Exception as e:
                 logger.error(f"Profile flow start failed for button {pressed_id}: {e}")
@@ -541,7 +541,7 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
                 response_time_ms = int((time.time() - start_time) * 1000)
                 log_webhook("outgoing", "/webhook/package", json.dumps({
                     "to": wa_id, "action": action
-                }), 200, f"Package {action}", response_time_ms=response_time_ms)
+                }), 200, f"Package {action}", response_time_ms=response_time_ms, wa_id=wa_id, tenant_id=tenant_id, message_id=msg_id)
                 return
         except Exception as e:
             logger.error(f"Package browsing failed for {user_text!r}: {e}")
@@ -575,7 +575,7 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
                     log_webhook("outgoing", "/webhook/panel", json.dumps({
                         "to": wa_id, "button_id": pressed_id
                     }), 200, f"Panel {pressed_id} answered",
-                        response_time_ms=response_time_ms)
+                        response_time_ms=response_time_ms, wa_id=wa_id, tenant_id=tenant_id, message_id=msg_id)
                     return
             except Exception as e:
                 logger.error(f"Panel answer failed for button {pressed_id}: {e}")
@@ -590,7 +590,7 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
                 response_time_ms = int((time.time() - start_time) * 1000)
                 log_webhook("outgoing", "/webhook/button", json.dumps({
                     "to": wa_id, "button_id": button_id
-                }), 200, f"Button {button_id} handled", response_time_ms=response_time_ms)
+                }), 200, f"Button {button_id} handled", response_time_ms=response_time_ms, wa_id=wa_id, tenant_id=tenant_id, message_id=msg_id)
                 return
 
         # Log incoming message to company API
@@ -616,7 +616,7 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
                     response_time_ms = int((time.time() - start_time) * 1000)
                     log_webhook("outgoing", "/webhook/flow", json.dumps({
                         "to": wa_id, "flow": outcome.get("flow")
-                    }), 200, f"Flow {outcome.get('flow')} started", response_time_ms=response_time_ms)
+                    }), 200, f"Flow {outcome.get('flow')} started", response_time_ms=response_time_ms, wa_id=wa_id, tenant_id=tenant_id, message_id=msg_id)
                     return
         except Exception as e:
             logger.error(f"Flow trigger check failed for {user_text!r}: {e}")
@@ -745,11 +745,11 @@ async def _process_and_reply(wa_id, sender_name, user_text, msg_type, message, m
         response_time_ms = int((time.time() - start_time) * 1000)
         log_webhook("outgoing", "/webhook/reply", json.dumps({
             "to": wa_id, "response": response_text
-        }), 200, f"Reply {send_status} to {sender_name}", response_time_ms=response_time_ms)
+        }), 200, f"Reply {send_status} to {sender_name}", response_time_ms=response_time_ms, wa_id=wa_id, tenant_id=tenant_id, message_id=msg_id)
     except Exception as e:
         logger.error(f"Webhook processing error: {e}", exc_info=True)
         response_time_ms = int((time.time() - start_time) * 1000)
-        log_webhook("incoming", "/webhook", json.dumps({"message_id": msg_id, "error": str(e)}), 500, f"Error: {e}", response_time_ms=response_time_ms)
+        log_webhook("incoming", "/webhook", json.dumps({"message_id": msg_id, "error": str(e)}), 500, f"Error: {e}", response_time_ms=response_time_ms, wa_id=wa_id, tenant_id=tenant_id, message_id=msg_id)
 
 
 @router.get("")
@@ -806,7 +806,8 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.info(f"Status callback: id={status.get('id')} status={status.get('status')} "
                     f"timestamp={status.get('timestamp')}")
         log_webhook("incoming", "/webhook/status", json.dumps(status), 200,
-                    f"Status: {status.get('status')} for msg_id: {status.get('id')}")
+                    f"Status: {status.get('status')} for msg_id: {status.get('id')}",
+                    wa_id=status.get("recipient_id"), message_id=status.get("id"))
         return {"status": "ok", "type": "status"}
 
     if "messages" not in value:
@@ -833,7 +834,8 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
             "WEBHOOK_DEFER_TO_POLLER | msg_id=%s | type=%s",
             msg0.get("id", ""), msg0.get("type", ""),
         )
-        log_webhook("incoming", "/webhook", raw_payload[:2000], 200, "Deferred to send2 poller")
+        log_webhook("incoming", "/webhook", raw_payload[:2000], 200, "Deferred to send2 poller",
+                wa_id=msg0.get("from"), message_id=msg0.get("id"))
         return {"status": "ok", "type": "deferred_to_poller"}
 
     message = value["messages"][0]
@@ -863,7 +865,7 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     log_webhook("incoming", "/webhook/message", json.dumps({
         "wa_id": wa_id, "sender_name": sender_name, "type": msg_type,
         "message": user_text, "message_id": msg_id
-    }), 200, f"Message from {sender_name}")
+    }), 200, f"Message from {sender_name}", wa_id=wa_id, message_id=msg_id)
 
     if _is_duplicate(msg_id, wa_id):
         logger.info(f"Skipping duplicate message {msg_id}")
@@ -899,6 +901,7 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
             json.dumps({"wa_id": wa_id, "message_id": msg_id}),
             200,
             "Ignored: no active tenant bound to WABA phone id",
+            wa_id=wa_id, message_id=msg_id,
         )
         return {"status": "ignored", "type": "unbound_tenant"}
 
