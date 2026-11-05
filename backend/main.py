@@ -7,8 +7,14 @@ sys.path.insert(0, os.path.join(_project_root, "routing"))
 
 import logging
 import asyncio
+import secrets
+import time
+import traceback as _traceback
+from contextvars import ContextVar
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 import json
 import jwt
 from routing.config import ADMIN_SECRET_KEY
@@ -70,6 +76,7 @@ from routes.integrations import router as integrations_router
 from routes.callbacks import router as callbacks_router
 from routes.google_connect import router as google_connect_router
 from routes.test_simulator import router as test_simulator_router
+from routes.api_errors import router as api_errors_router
 from services.handoff_timeout import handoff_timeout_monitor
 
 logging.basicConfig(
@@ -351,6 +358,113 @@ async def audit_mutations_middleware(request: Request, call_next):
 
 
 
+
+
+# ── Phase 1: request-id, one REQ log line per request, central error handlers ──
+# Every request gets a short id (req_<8 hex>). It is stored in a contextvar and
+# on request.state, returned as the X-Request-Id header, included in every error
+# response body, and printed in the app's own REQ log line — so any failure can be
+# traced from the browser console line to exactly one backend log line / error row.
+_request_id_var: ContextVar = ContextVar("request_id", default="")
+
+
+def get_request_id() -> str:
+    return _request_id_var.get()
+
+
+def _new_request_id() -> str:
+    return "req_" + secrets.token_hex(4)
+
+
+def _tenant_from_path(path: str):
+    parts = [seg for seg in path.split("/") if seg]
+    try:
+        i = parts.index("tenants")
+    except ValueError:
+        return None
+    return parts[i + 1] if i + 1 < len(parts) else None
+
+
+def _request_id_for(request: Request) -> str:
+    return getattr(request.state, "request_id", None) or _request_id_var.get() or _new_request_id()
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    rid = _new_request_id()
+    request.state.request_id = rid
+    token = _request_id_var.set(rid)
+    started = time.perf_counter()
+    api = f"{request.method} {request.url.path}"
+    tenant = _tenant_from_path(request.url.path)
+    tenant_part = f" | tenant={tenant}" if tenant else ""
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        ms = int((time.perf_counter() - started) * 1000)
+        logger.error(f"REQ {rid} | {api} → 500 | {ms}ms{tenant_part} | EXC {type(exc).__name__}")
+        raise
+    finally:
+        _request_id_var.reset(token)
+    ms = int((time.perf_counter() - started) * 1000)
+    line = f"REQ {rid} | {api} → {response.status_code} | {ms}ms{tenant_part}"
+    if response.status_code >= 500:
+        logger.error(line)
+    else:
+        logger.info(line)
+    response.headers["X-Request-Id"] = rid
+    return response
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Keep the existing status/detail semantics; add request_id + api so the
+    caller can quote the exact failing API. Successful responses are untouched."""
+    rid = _request_id_for(request)
+    api = f"{request.method} {request.url.path}"
+    detail = exc.detail
+    body = {
+        "detail": detail,
+        "error": detail if isinstance(detail, str) else f"HTTP {exc.status_code}",
+        "request_id": rid,
+        "api": api,
+    }
+    headers = dict(exc.headers or {})
+    headers["X-Request-Id"] = rid
+    return JSONResponse(status_code=exc.status_code, content=body, headers=headers)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """One central handler for unhandled errors: JSON (never plain text), one
+    clean ERROR line, and a durable row via the error reporter. The reporter is
+    guarded — its failure can never break this response."""
+    rid = _request_id_for(request)
+    api = f"{request.method} {request.url.path}"
+    tenant = _tenant_from_path(request.url.path)
+    logger.error(
+        f"API_FAIL | req={rid} | api={api} | tenant={tenant or '-'} "
+        f"| {type(exc).__name__}: {str(exc)[:300]}"
+    )
+    logger.debug("Unhandled exception traceback for %s", rid, exc_info=exc)
+    try:
+        from services.error_reporter import report_error
+        report_error(
+            "api", api, exc,
+            tenant_id=tenant, request_id=rid, http_status=500,
+            detail="".join(_traceback.format_exception(type(exc), exc, exc.__traceback__))[-3500:],
+        )
+    except Exception:
+        pass
+    body = {
+        "detail": "Internal Server Error",
+        "error": f"{type(exc).__name__}: {str(exc)[:300]}" if str(exc) else "Internal Server Error",
+        "request_id": rid,
+        "api": api,
+    }
+    return JSONResponse(status_code=500, content=body, headers={"X-Request-Id": rid})
+
+
 # slowapi requires the limiter on app.state plus an app-level exception handler
 if RATE_LIMIT_ENABLED:
     app.state.limiter = limiter
@@ -418,6 +532,7 @@ app.include_router(integrations_router, tags=["integrations"])
 app.include_router(callbacks_router, tags=["callbacks"])
 app.include_router(google_connect_router, tags=["google-connect"])
 app.include_router(test_simulator_router, tags=["test-simulator"])
+app.include_router(api_errors_router, tags=["api-errors"])
 
 IMAGES_DIR = os.path.join(os.path.dirname(__file__), "images")
 if os.path.isdir(IMAGES_DIR):

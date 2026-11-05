@@ -7,7 +7,7 @@
  * rather than relying on a bare `<a href>` (which would be unauthenticated).
  */
 
-import { api, getToken, ApiError } from './api'
+import { api, getToken, ApiError, apiCallStart, logApiCall, logApiError } from './api'
 
 const base = (tenantId: string) => `/api/admin/tenants/${encodeURIComponent(tenantId)}`
 
@@ -409,10 +409,21 @@ export const uploadsApi = {
   blob: async (tenantId: string, filename: string, download = false): Promise<Blob> => {
     const token = getToken()
     const path = `${base(tenantId)}/files/${encodeURIComponent(filename)}/${download ? 'download' : 'preview'}`
-    const res = await fetch(path, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    })
-    if (!res.ok) throw new Error(`Could not fetch the file (${res.status})`)
+    const startedAt = apiCallStart()
+    let res: Response
+    try {
+      res = await fetch(path, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      })
+    } catch (err) {
+      logApiError('GET', path, 0, (err as Error)?.message || 'Network error', startedAt)
+      throw err
+    }
+    if (!res.ok) {
+      logApiError('GET', path, res.status, `Could not fetch the file (${res.status})`, startedAt)
+      throw new Error(`Could not fetch the file (${res.status})`)
+    }
+    logApiCall('GET', path, res.status, startedAt)
     return res.blob()
   },
 }
@@ -478,11 +489,15 @@ export async function uploadRecordImage(tenantId: string, file: File): Promise<s
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
+  const path = `${base(tenantId)}/files/image`
+  const startedAt = apiCallStart()
   let res: Response
   try {
-    res = await fetch(`${base(tenantId)}/files/image`, { method: 'POST', headers, body: form })
+    res = await fetch(path, { method: 'POST', headers, body: form })
   } catch {
-    throw new ApiError(0, 'Cannot reach the backend to upload the image.')
+    const detail = 'Cannot reach the backend to upload the image.'
+    logApiError('POST', path, 0, detail, startedAt)
+    throw new ApiError(0, detail)
   }
   if (!res.ok) {
     let message = `Upload failed (${res.status})`
@@ -492,8 +507,10 @@ export async function uploadRecordImage(tenantId: string, file: File): Promise<s
     } catch {
       /* keep the default */
     }
+    logApiError('POST', path, res.status, message, startedAt)
     throw new ApiError(res.status, message)
   }
+  logApiCall('POST', path, res.status, startedAt)
   const body = (await res.json()) as { url?: string }
   if (!body.url) throw new ApiError(502, 'The upload returned no URL.')
   return body.url

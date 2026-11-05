@@ -7,7 +7,7 @@
  * one-file change.
  */
 
-import { api } from './api'
+import { api, apiCallStart, logApiCall, logApiError } from './api'
 
 const tenantBase = (tenantId: string) => `/api/admin/tenants/${encodeURIComponent(tenantId)}`
 
@@ -45,10 +45,15 @@ export interface Customer {
  */
 export async function downloadCustomerExport(tenantId: string, format: 'csv' | 'xlsx') {
   const { getToken } = await import('./api')
-  const res = await fetch(
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/customers/export?format=${format}`,
-    { headers: { Authorization: `Bearer ${getToken() ?? ''}` } },
-  )
+  const path = `/api/admin/tenants/${encodeURIComponent(tenantId)}/customers/export?format=${format}`
+  const startedAt = apiCallStart()
+  let res: Response
+  try {
+    res = await fetch(path, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } })
+  } catch (err) {
+    logApiError('GET', path, 0, (err as Error)?.message || 'Network error', startedAt)
+    throw err
+  }
   if (!res.ok) {
     let detail = `Export failed (${res.status})`
     try {
@@ -57,8 +62,10 @@ export async function downloadCustomerExport(tenantId: string, format: 'csv' | '
     } catch {
       /* keep the status text */
     }
+    logApiError('GET', path, res.status, detail, startedAt)
     throw new Error(detail)
   }
+  logApiCall('GET', path, res.status, startedAt)
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')

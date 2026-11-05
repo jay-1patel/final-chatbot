@@ -12,11 +12,63 @@ const TENANT_KEY = 'tenant-console.tenant'
 
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  requestId?: string
+  constructor(status: number, message: string, requestId?: string) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.requestId = requestId
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Console tracing — one line per API call, so any error can be       */
+/* traced to its exact method + path + status in DevTools. On by      */
+/* default; switch off with localStorage DEBUG_API = '0'.             */
+/* ------------------------------------------------------------------ */
+
+/** True unless the user opted out via localStorage DEBUG_API='0'. Never throws. */
+export function apiLoggingEnabled(): boolean {
+  try {
+    return localStorage.getItem('DEBUG_API') !== '0'
+  } catch {
+    return true
+  }
+}
+
+function timerNow(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now()
+}
+
+/** Start stamp for timing a raw-fetch API call (uploads, exports, …). */
+export function apiCallStart(): number {
+  return timerNow()
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Math.round(timerNow() - startedAt))
+}
+
+/** Log a completed API call: `[api] GET /api/tenants → 200 (84ms)`. */
+export function logApiCall(method: string, path: string, status: number, startedAt: number): void {
+  if (!apiLoggingEnabled()) return
+  console.log(`[api] ${method} ${path} → ${status} (${elapsedMs(startedAt)}ms)`)
+}
+
+/** Log a failed API call with the server's error detail, via console.error.
+ * When the backend sent a request_id, it is appended as `(error id: req_…)`
+ * so the line can be matched to exactly one backend log line / error row. */
+export function logApiError(
+  method: string,
+  path: string,
+  status: number,
+  detail: string,
+  startedAt: number,
+  requestId?: string | null,
+): void {
+  if (!apiLoggingEnabled()) return
+  const idPart = requestId ? ` (error id: ${requestId})` : ''
+  console.error(`[api] ${method} ${path} → ${status} (${elapsedMs(startedAt)}ms) — ${detail}${idPart}`)
 }
 
 export function getToken(): string | null {
@@ -61,24 +113,38 @@ export function setUnauthorizedHandler(fn: Unauthorized) {
   onUnauthorized = fn
 }
 
-async function readDetail(res: Response): Promise<string> {
+/** Detail text plus the backend request_id (body field first, then the
+ * X-Request-Id header the Phase-1 middleware stamps on every response). */
+async function readErrorInfo(
+  res: Response,
+): Promise<{ detail: string; requestId: string | null }> {
+  const headerId = res.headers?.get?.('X-Request-Id') ?? null
   try {
     const body = await res.json()
+    const requestId =
+      typeof body?.request_id === 'string' && body.request_id ? body.request_id : headerId
     const detail = body?.detail
-    if (typeof detail === 'string') return detail
+    if (typeof detail === 'string') return { detail, requestId }
     if (Array.isArray(detail) && detail.length) {
       // pydantic validation errors
-      return detail
-        .map((d: { loc?: (string | number)[]; msg?: string }) =>
-          `${(d.loc ?? []).slice(1).join('.')}: ${d.msg ?? 'invalid'}`,
-        )
-        .join('; ')
+      return {
+        detail: detail
+          .map((d: { loc?: (string | number)[]; msg?: string }) =>
+            `${(d.loc ?? []).slice(1).join('.')}: ${d.msg ?? 'invalid'}`,
+          )
+          .join('; '),
+        requestId,
+      }
     }
-    if (detail) return JSON.stringify(detail)
-    return body?.error || res.statusText || `Request failed (${res.status})`
+    if (detail) return { detail: JSON.stringify(detail), requestId }
+    return { detail: body?.error || res.statusText || `Request failed (${res.status})`, requestId }
   } catch {
-    return res.statusText || `Request failed (${res.status})`
+    return { detail: res.statusText || `Request failed (${res.status})`, requestId: headerId }
   }
+}
+
+function withErrorId(detail: string, requestId: string | null): string {
+  return requestId ? `${detail} (error id: ${requestId})` : detail
 }
 
 export interface RequestOptions {
@@ -91,6 +157,7 @@ export interface RequestOptions {
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, signal, anonymous } = options
+  const startedAt = timerNow()
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
 
@@ -109,16 +176,23 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     })
   } catch (err) {
     if ((err as Error)?.name === 'AbortError') throw err
-    throw new ApiError(0, 'Cannot reach the backend. Is it running on port 9000?')
+    const detail = 'Cannot reach the backend. Is it running on port 9000?'
+    logApiError(method, path, 0, detail, startedAt)
+    throw new ApiError(0, detail)
   }
 
   if (res.status === 401) {
     if (!anonymous) onUnauthorized()
-    throw new ApiError(401, await readDetail(res))
+    const { detail, requestId } = await readErrorInfo(res)
+    logApiError(method, path, 401, detail, startedAt, requestId)
+    throw new ApiError(401, withErrorId(detail, requestId), requestId ?? undefined)
   }
   if (!res.ok) {
-    throw new ApiError(res.status, await readDetail(res))
+    const { detail, requestId } = await readErrorInfo(res)
+    logApiError(method, path, res.status, detail, startedAt, requestId)
+    throw new ApiError(res.status, withErrorId(detail, requestId), requestId ?? undefined)
   }
+  logApiCall(method, path, res.status, startedAt)
   if (res.status === 204) return undefined as T
   const text = await res.text()
   return (text ? JSON.parse(text) : undefined) as T
@@ -126,6 +200,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 
 /** Multipart upload: the browser sets the boundary Content-Type. */
 export async function postForm<T>(path: string, form: FormData, signal?: AbortSignal): Promise<T> {
+  const startedAt = timerNow()
   const headers: Record<string, string> = { Accept: 'application/json' }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
@@ -135,15 +210,22 @@ export async function postForm<T>(path: string, form: FormData, signal?: AbortSi
     res = await fetch(path, { method: 'POST', headers, body: form, signal })
   } catch (err) {
     if ((err as Error)?.name === 'AbortError') throw err
-    throw new ApiError(0, 'Cannot reach the backend. Is it running on port 9000?')
+    const detail = 'Cannot reach the backend. Is it running on port 9000?'
+    logApiError('POST', path, 0, detail, startedAt)
+    throw new ApiError(0, detail)
   }
   if (res.status === 401) {
     onUnauthorized()
-    throw new ApiError(401, await readDetail(res))
+    const { detail, requestId } = await readErrorInfo(res)
+    logApiError('POST', path, 401, detail, startedAt, requestId)
+    throw new ApiError(401, withErrorId(detail, requestId), requestId ?? undefined)
   }
   if (!res.ok) {
-    throw new ApiError(res.status, await readDetail(res))
+    const { detail, requestId } = await readErrorInfo(res)
+    logApiError('POST', path, res.status, detail, startedAt, requestId)
+    throw new ApiError(res.status, withErrorId(detail, requestId), requestId ?? undefined)
   }
+  logApiCall('POST', path, res.status, startedAt)
   const text = await res.text()
   return (text ? JSON.parse(text) : undefined) as T
 }
