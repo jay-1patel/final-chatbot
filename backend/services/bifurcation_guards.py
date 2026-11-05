@@ -7,8 +7,11 @@ overwrites when a PDF is uploaded into an already-configured tenant.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 VALID_VERTICALS = {
     "real_estate",
@@ -154,7 +157,8 @@ def resolve_locked_vertical(
             if cand in VALID_VERTICALS and cand != "generic":
                 locked = cand
         except Exception:
-            pass
+            # deliberate: resolver chain — fall through to the next source.
+            logger.debug("LOCKED_VERTICAL_RESOLVE_STEP_SKIPPED | source=tenant tid=%s", tid, exc_info=True)
         if not locked:
             try:
                 from shared.tenancy import store as tenancy_store
@@ -163,7 +167,8 @@ def resolve_locked_vertical(
                 if cand in VALID_VERTICALS and cand != "generic":
                     locked = cand
             except Exception:
-                pass
+                # deliberate: resolver chain — fall through to the next source.
+                logger.debug("LOCKED_VERTICAL_RESOLVE_STEP_SKIPPED | source=draft tid=%s", tid, exc_info=True)
         if not locked:
             try:
                 from shared.tenancy import loader as tenancy_loader
@@ -172,7 +177,8 @@ def resolve_locked_vertical(
                 if cand in VALID_VERTICALS and cand != "generic":
                     locked = cand
             except Exception:
-                pass
+                # deliberate: resolver chain — no locked vertical found.
+                logger.debug("LOCKED_VERTICAL_RESOLVE_STEP_SKIPPED | source=profile tid=%s", tid, exc_info=True)
 
     return locked or extracted
 

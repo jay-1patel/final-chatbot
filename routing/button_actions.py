@@ -46,7 +46,10 @@ OR A must not use the bare substring. This file does both.
 
 from __future__ import annotations
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 1. Canonical button map — EVERY action id used below MUST exist here.
@@ -509,7 +512,9 @@ def get_tenant_action_registry(tenant_id: str | None = None) -> dict[str, dict]:
             from shared.tenancy.resolver import resolve_default_tenant
             tid = resolve_default_tenant()
         except Exception:
-            pass
+            # deliberate: no default tenant resolvable — caller continues
+            # with tenant_id=None.
+            logger.debug("DEFAULT_TENANT_RESOLVE_SKIPPED | get_tenant_action_registry", exc_info=True)
 
     if not tid:
         return BUTTON_REGISTRY
@@ -599,7 +604,9 @@ def get_contextual_buttons(
         tid = tenant_id or resolve_tenant_for_user(wa_id or "")
         profile = get_tenant_profile(tid)
     except Exception:
-        pass
+        # deliberate: buttons degrade to the generic set when the tenant
+        # profile cannot be loaded.
+        logger.debug("TENANT_PROFILE_LOAD_SKIPPED | tid=%s — continuing without profile", tid, exc_info=True)
 
     vertical = getattr(profile, "vertical", "generic") if profile else "generic"
     q = (topic_or_query or "").lower().strip()
@@ -807,7 +814,9 @@ def suggest_actions(query: str, source_file: str = "", tenant_id: str | None = N
             from shared.tenancy.resolver import resolve_default_tenant
             tid = resolve_default_tenant()
         except Exception:
-            pass
+            # deliberate: no default tenant resolvable — caller continues
+            # with tenant_id=None.
+            logger.debug("DEFAULT_TENANT_RESOLVE_SKIPPED | suggest_actions", exc_info=True)
 
     if tid:
         contextual = get_contextual_buttons(query, tenant_id=tid, limit=3)

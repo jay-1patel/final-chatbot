@@ -198,7 +198,9 @@ def _get_brand_name(wa_id: str = "") -> str:
         ):
             return env_brand
     except Exception:
-        pass
+        # deliberate: env brand is a fallback source — the generic name
+        # is returned when it cannot be read.
+        logger.debug("BRAND_NAME_ENV_LOOKUP_SKIPPED", exc_info=True)
     return "our company"
 
 

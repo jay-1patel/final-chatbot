@@ -1323,7 +1323,7 @@ def _blast_campaign(row, tenant_id: str, wa_ids: list) -> tuple:
                     snippet=(rendered or "")[:120],
                 )
             except Exception:
-                pass
+                logger.exception("SEND_LOG_RECORD_FAILED | wa=%s tenant=%s reason=campaign", wa_id, tenant_id)
         else:
             failed += 1
     return sent, failed, skipped

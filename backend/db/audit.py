@@ -124,14 +124,16 @@ def record_admin_audit_event(
         except Exception:
             # Compatibility with audit tests/older database fixtures without
             # the tenant registry table.
-            pass
+            logger.debug("AUDIT_TENANT_LOOKUP_SKIPPED | tenant=%s", tenant_id, exc_info=True)
     actor_kind = actor_kind or actor.get("type") or ("tenant_token" if actor.get("token_id") else "admin")
     actor_label = actor_label or actor.get("label") or actor.get("username")
     try:
         _init_admin_audit_tables(conn)
         conn.execute("DELETE FROM admin_audit_events WHERE datetime(created_at) < datetime('now', '-365 days')")
     except Exception:
-        pass
+        # deliberate: retention cleanup is housekeeping — it must never
+        # block recording the audit event itself.
+        logger.debug("AUDIT_RETENTION_CLEANUP_SKIPPED", exc_info=True)
 
     cursor = conn.execute(
         """INSERT INTO admin_audit_events

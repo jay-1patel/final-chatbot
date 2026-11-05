@@ -684,7 +684,9 @@ def heuristic_extract_corpus(text: str, tenant_id: str = "") -> Dict[str, Any]:
                         ci = headers.index("category")
                         cat = data[ci] if ci < len(data) else cat
                     except Exception:
-                        pass
+                        # deliberate: keep the default "Services" category
+                        # when the category column cannot be read.
+                        logger.debug("CATEGORY_COLUMN_LOOKUP_SKIPPED | keeping default category", exc_info=True)
                 link = ""
                 for cell in data:
                     um = _URL_RE.search(cell)

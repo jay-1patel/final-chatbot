@@ -70,14 +70,16 @@ def resolve_tenant_industry(tenant_id: Optional[str]) -> str:
             if profile and profile.vertical:
                 return str(profile.vertical)
         except Exception:
-            pass
+            # deliberate: resolver chain — fall through to the next source.
+            logger.debug("TENANT_INDUSTRY_RESOLVE_STEP_SKIPPED | source=profile tenant=%s", tenant_id, exc_info=True)
         try:
             from shared.tenancy import store
             record = store.get_tenant(tenant_id)
             if record and record.get("vertical"):
                 return str(record["vertical"])
         except Exception:
-            pass
+            # deliberate: resolver chain — fall back to "generic".
+            logger.debug("TENANT_INDUSTRY_RESOLVE_STEP_SKIPPED | source=store tenant=%s", tenant_id, exc_info=True)
     return "generic"
 
 
@@ -392,7 +394,8 @@ def fetch_store(tenant_id: str, store: str, category: Optional[str] = None,
 
 if __name__ == "__main__":
     import sys
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    from core.logging import setup_logging
+    setup_logging()
     if len(sys.argv) < 3:
         print("Usage: python bifurcate.py <file> <tenant_id> [industry]")
         sys.exit(1)

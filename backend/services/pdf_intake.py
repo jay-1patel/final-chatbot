@@ -885,7 +885,9 @@ class PdfIntakeService:
             try:
                 os.remove(tmp)
             except OSError:
-                pass
+                # deliberate: temp-file cleanup in a finally block — a file
+                # that cannot be removed must not mask the real result.
+                logger.debug("TEMP_FILE_REMOVE_SKIPPED | path=%s", tmp, exc_info=True)
         doc["filename"] = Path(filename).name
         return doc
 

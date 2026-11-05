@@ -75,7 +75,9 @@ def _get_tenant_complaint_types(wa_id: str) -> list:
             if profile and hasattr(profile, 'complaint_types'):
                 return profile.complaint_types
     except Exception:
-        pass
+        # deliberate: profile-driven complaint types are best-effort --
+        # the defaults below are used.
+        logger.debug("TENANT_COMPLAINT_TYPES_DEFAULTED | wa=%s", wa_id, exc_info=True)
     # Default complaint types for e-commerce
     return ["Damaged Product", "Wrong Item", "Delivery Issue", "Billing & Payment", "Product Quality", "Other"]
 
@@ -142,7 +144,9 @@ def _is_stale_foreign_menu_tap(message: str, tenant_id: str | None) -> bool:
         if needle in _OFFERING_TITLE_PHRASES:
             return True
     except Exception:
-        pass
+        # deliberate: the stale-tap check is a heuristic -- on failure the
+        # tap is treated as not stale.
+        logger.debug("STALE_MENU_CHECK_SKIPPED", exc_info=True)
     return False
 
 
@@ -202,7 +206,7 @@ async def _send_main_menu(
             from backend.services.offerings_flow import clear_offerings_context
         clear_offerings_context(wa_id)
     except Exception:
-        pass
+        logger.exception("OFFERINGS_CONTEXT_CLEAR_FAILED | wa=%s", wa_id)
 
     menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
     if menu_data.get("type") == "buttons":
@@ -240,7 +244,9 @@ def _tenant_profile_for(wa_id: str, tenant_id: str | None = None):
         if tid:
             return get_tenant_profile(tid), tid
     except Exception:
-        pass
+        # deliberate: best-effort profile (see docstring) -- callers
+        # handle the (None, tenant_id) result.
+        logger.debug("TENANT_PROFILE_LOOKUP_SKIPPED | wa=%s", wa_id, exc_info=True)
     return None, tenant_id
 
 
@@ -482,7 +488,7 @@ async def handle_b2c_message(
                     from backend.services.offerings_flow import clear_offerings_context
                 clear_offerings_context(wa_id)
             except Exception:
-                pass
+                logger.exception("OFFERINGS_CONTEXT_CLEAR_FAILED | wa=%s", wa_id)
             menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
             
             # Add welcome message for first-time users
@@ -539,7 +545,7 @@ async def handle_b2c_message(
                     from backend.services.offerings_flow import clear_offerings_context
                 clear_offerings_context(wa_id)
             except Exception:
-                pass
+                logger.exception("OFFERINGS_CONTEXT_CLEAR_FAILED | wa=%s", wa_id)
             menu_data = menus.get_main_menu(wa_id, tenant_id=tenant_id)
             if menu_data.get("type") == "buttons":
                 await send_button_message(
@@ -1049,7 +1055,9 @@ async def _fallback_to_rag(
                     from database import get_recent_history
                     history_turns = get_recent_history(wa_id, limit=3, ttl_minutes=30)
                 except Exception:
-                    pass
+                    # deliberate: history is prompt context only -- the
+                    # answer is generated without it when the lookup fails.
+                    logger.debug("HISTORY_LOOKUP_SKIPPED | wa=%s", wa_id, exc_info=True)
                 try:
                     llm_res = await _generate_ollama_dynamic_response(
                         sys_prompt, message, combined_context, tenant_id=tid, conversation_history=history_turns
@@ -1188,7 +1196,9 @@ async def _kb_answer(wa_id: str, query: str, tenant_id: str | None = None) -> st
                 from database import get_recent_history
                 history_turns = get_recent_history(wa_id, limit=3, ttl_minutes=30)
             except Exception:
-                pass
+                # deliberate: history is prompt context only -- the answer
+                # is generated without it when the lookup fails.
+                logger.debug("HISTORY_LOOKUP_SKIPPED | wa=%s", wa_id, exc_info=True)
             llm_res = await _generate_ollama_dynamic_response(
                 sys_prompt, query, combined_context, tenant_id=tenant_id, conversation_history=history_turns
             )

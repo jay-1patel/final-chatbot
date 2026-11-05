@@ -276,7 +276,9 @@ def _parse_admin_file_row(row) -> dict:
         try:
             item["bifurcation_stats"] = json.loads(raw_stats)
         except Exception:
-            pass
+            # deliberate: unparseable stats stay as the raw string — the
+            # file row itself is still returned.
+            logger.debug("ADMIN_FILE_STATS_PARSE_SKIPPED", exc_info=True)
     return item
 
 

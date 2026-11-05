@@ -261,7 +261,9 @@ class TenantRAGService:
                             if isinstance(chunks, list) and 0 <= chunk_index < len(chunks):
                                 return chunks[chunk_index]
                         except (json.JSONDecodeError, TypeError):
-                            pass
+                            # deliberate: unparseable chunks_json — the full content is
+                            # returned below instead.
+                            logger.debug("TENANT_CHUNKS_PARSE_SKIPPED | entry=%s", entry_id, exc_info=True)
                     # Return the full content if no chunks
                     return entry.get('content', '')
             

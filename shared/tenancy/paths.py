@@ -5,8 +5,11 @@ derives its own ``clients/`` path from ``routing.config.BASE_DIR``; Phase 7
 absorbs that module and points it here.
 """
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # shared/tenancy/paths.py -> shared/tenancy -> shared -> repo root
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -44,7 +47,9 @@ def client_dir(tenant_id: str) -> Path:
                 ).exists():
                     return CLIENTS_DIR / candidate
     except Exception:
-        pass
+        # deliberate: store lookup is one of several ways to find the
+        # client dir — the remaining candidates are still tried.
+        logger.debug("CLIENT_DIR_LOOKUP_SKIPPED | tid=%s", tid, exc_info=True)
 
     # No default/leeway tenant mapping: every tenant must resolve to its own
     # client pack (or none). Never remap onto the leewaysoftech pack.

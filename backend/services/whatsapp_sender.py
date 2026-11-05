@@ -106,7 +106,9 @@ def _live_sender(kind: str, tenant_id: str = None):
                         if p and p.brand and p.brand.name:
                             header_title = p.brand.name
                     except Exception:
-                        pass
+                        # deliberate: brand lookup is cosmetic — fall back
+                        # to the generic "Options" header title.
+                        logger.debug("BRAND_HEADER_LOOKUP_SKIPPED | wa=%s", wa_id, exc_info=True)
                     return send_whatsapp_list_menu(
                         to=wa_id,
                         header_text=header_title,

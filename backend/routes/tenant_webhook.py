@@ -407,7 +407,9 @@ async def get_tenant_from_request(
                         t.get('send2_password') == body['password']):
                         return t
     except Exception:
-        pass
+        # deliberate: an unparseable/unmatched body just means no tenant
+        # is resolved from the body — the caller handles that.
+        logger.debug("TENANT_REQUEST_MATCH_SKIPPED | body-based tenant lookup failed", exc_info=True)
     
     # No tenant identified
     raise HTTPException(status_code=400, detail="Cannot identify tenant from request")

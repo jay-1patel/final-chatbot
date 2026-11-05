@@ -22,7 +22,8 @@ from routing.config import (
 from database import save_embeddings
 from services.response_formatters import WhatsAppFormatter, MessageType, smart_format
 
-logging.basicConfig(level=logging.INFO)
+# Library module: never configure logging here — the entry point's single
+# shared setup (core/logging.py) owns configuration.
 logger = logging.getLogger("faq_bot")
 
 # ─────────────────────────────────────────────
@@ -74,7 +75,8 @@ def _canonical_tenant_id(tenant_id=None) -> str:
         if rec and rec.get("id"):
             return str(rec["id"])
     except Exception:
-        pass
+        # deliberate: resolver chain — fall through to the DB lookup.
+        logger.debug("CANONICAL_TENANT_RESOLVE_STEP_SKIPPED | source=store tid=%s", tid, exc_info=True)
     try:
         from database import get_db_context
         with get_db_context() as conn:
@@ -86,7 +88,8 @@ def _canonical_tenant_id(tenant_id=None) -> str:
             if row:
                 return str(row[0])
     except Exception:
-        pass
+        # deliberate: resolver chain — fall back to the raw tenant id.
+        logger.debug("CANONICAL_TENANT_RESOLVE_STEP_SKIPPED | source=db tid=%s", tid, exc_info=True)
     return tid
 
 
@@ -103,7 +106,8 @@ def _resolve_tenant_id(tenant_id=None) -> str:
         if active:
             tenant_id = active
     except Exception:
-        pass
+        # deliberate: no active test tenant — use the requested tenant.
+        logger.debug("ACTIVE_TEST_TENANT_LOOKUP_SKIPPED | _resolve_tenant_id", exc_info=True)
     tid = str(tenant_id or "").strip()
     if not tid:
         try:
@@ -152,7 +156,8 @@ def _tenant_from_payload(payload: dict) -> str | None:
         if active:
             return active
     except Exception:
-        pass
+        # deliberate: no active test tenant — use the payload tenant.
+        logger.debug("ACTIVE_TEST_TENANT_LOOKUP_SKIPPED | _tenant_from_payload", exc_info=True)
     tid = str(payload.get("tenant_id") or "").strip()
     if tid:
         return tid
@@ -1384,7 +1389,7 @@ async def handle_faq_query(payload: dict) -> dict:
                 confidence_score=0.0,
             )
         except Exception:
-            pass
+            logger.exception("UNANSWERED_QUERY_RECORD_FAILED | wa=%s tenant=%s", wa_id, tenant_id)
         return _unknown_result(tenant_id)
 
     best_ce_score = retrieval_meta.get("faq_best_score", 0.0)

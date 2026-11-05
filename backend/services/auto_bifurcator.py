@@ -643,7 +643,8 @@ class AutoBifurcator:
         try:
             return json.loads(text)
         except Exception:
-            pass
+            # deliberate: parse strategy chain — try the next strategy.
+            logger.debug("JSON_EXTRACT_ATTEMPT_FAILED | strategy=direct", exc_info=True)
 
         # Regex search for ```json ... ```
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
@@ -651,7 +652,8 @@ class AutoBifurcator:
             try:
                 return json.loads(match.group(1))
             except Exception:
-                pass
+                # deliberate: parse strategy chain — try the next strategy.
+                logger.debug("JSON_EXTRACT_ATTEMPT_FAILED | strategy=fenced_block", exc_info=True)
 
         # Search for first { to last }
         first = text.find("{")
@@ -660,7 +662,8 @@ class AutoBifurcator:
             try:
                 return json.loads(text[first : last + 1])
             except Exception:
-                pass
+                # deliberate: last parse strategy — caller handles None.
+                logger.debug("JSON_EXTRACT_ATTEMPT_FAILED | strategy=brace_slice", exc_info=True)
 
         return None
 
@@ -2278,7 +2281,9 @@ class AutoBifurcator:
                     for name in _IT_INFO:
                         existing_intents.pop(name, None)
             except Exception:
-                pass
+                # deliberate: vertical-default intents are best-effort
+                # enrichment — the extracted intents remain as-is.
+                logger.debug("VERTICAL_DEFAULT_INTENTS_SKIPPED | vertical=%s tenant=%s", vertical, tenant_id, exc_info=True)
 
             if clean_intents:
                 for ci in clean_intents:
@@ -2529,7 +2534,7 @@ class AutoBifurcator:
                         from kb.services.brain import clear_response_cache
                         clear_response_cache()
                     except Exception:
-                        pass
+                        logger.exception("RESPONSE_CACHE_CLEAR_FAILED | tenant=%s", tenant_id)
                 except Exception as rag_err:
                     logger.warning("RAG vector rebuild error: %s", rag_err)
 
@@ -2603,7 +2608,7 @@ class AutoBifurcator:
                     },
                 )
         except Exception:
-            pass
+            logger.exception("AUDIT_EVENT_RECORD_FAILED | action=tenant_auto_bifurcated tenant=%s", tenant_id)
 
         return summary
 

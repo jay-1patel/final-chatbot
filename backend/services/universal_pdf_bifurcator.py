@@ -67,14 +67,16 @@ def _get_tenant_vertical(tenant_id: str) -> str:
         if prof and prof.vertical:
             return prof.vertical
     except Exception:
-        pass
+        # deliberate: resolver chain — fall through to the next source.
+        logger.debug("TENANT_VERTICAL_RESOLVE_STEP_SKIPPED | source=profile tenant=%s", tenant_id, exc_info=True)
     try:
         from shared.tenancy import store
         rec = store.get_tenant(tenant_id)
         if rec and rec.get("vertical"):
             return rec["vertical"]
     except Exception:
-        pass
+        # deliberate: resolver chain — fall back to "generic".
+        logger.debug("TENANT_VERTICAL_RESOLVE_STEP_SKIPPED | source=store tenant=%s", tenant_id, exc_info=True)
     return "generic"
 
 
@@ -313,7 +315,9 @@ def _parse_json_payload(raw_text: str) -> Optional[Dict[str, Any]]:
                 parsed = json.loads(match.group(0))
                 return parsed if isinstance(parsed, dict) else None
             except Exception:
-                pass
+                # deliberate: parse attempt failed — the caller logs the
+                # overall payload failure right after this function.
+                logger.debug("JSON_PAYLOAD_PARSE_ATTEMPT_FAILED | strategy=regex", exc_info=True)
     logger.error("Failed to parse bifurcation JSON. Raw text:\n%s", raw_text[:400])
     return None
 
@@ -360,7 +364,8 @@ def _resolve_storage_tenant_id(tenant_id: str):
         if rec and rec.get("id") is not None:
             return rec["id"]
     except Exception:
-        pass
+        # deliberate: fall through to the numeric-id check below.
+        logger.debug("STORAGE_TENANT_RESOLVE_SKIPPED | tid=%s", tid, exc_info=True)
     if tid.isdigit():
         return int(tid)
     return tid

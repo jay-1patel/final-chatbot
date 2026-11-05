@@ -86,7 +86,9 @@ def _resolve_tenant_db_id(tenant_id: str):
         if rec and rec.get("id") is not None:
             return rec["id"]
     except Exception:
-        pass
+        # deliberate: fall back to the original value (numeric strings
+        # still work as DB ids).
+        logger.debug("TENANT_DB_ID_RESOLVE_SKIPPED | tenant=%s — using original value", tenant_id, exc_info=True)
     # Already numeric?
     if str(tenant_id).isdigit():
         return int(tenant_id)
@@ -107,7 +109,9 @@ def _resolve_uploader(
         from backend.services.audit_context import set_audit_actor
         set_audit_actor(principal)
     except Exception:
-        pass
+        # deliberate: audit attribution is best-effort here — the upload
+        # itself must not fail because the actor could not be stamped.
+        logger.debug("AUDIT_ACTOR_SET_SKIPPED | uploader resolution continues", exc_info=True)
     if principal.get("type") == "tenant":
         return {
             "id": None,
@@ -351,7 +355,9 @@ def delete_tenant_file(
         try:
             os.remove(filepath)
         except OSError:
-            pass
+            # deliberate: the DB records are already deleted; a file that
+            # cannot be removed (already gone/locked) is only logged.
+            logger.debug("FILE_DELETE_CLEANUP_SKIPPED | path=%s", filepath, exc_info=True)
     logger.info(
         "TENANT_FILE_DELETED | tenant=%s | %s (faq=%s, kb=%s)",
         tenant_id, filename, deleted_faq, deleted_kb,

@@ -47,7 +47,9 @@ def _active_test_override() -> Optional[str]:
         if val:
             return canonical_tenant_id(val) or val
     except Exception:
-        pass
+        # deliberate: no readable override — resolution continues
+        # without it.
+        logger.debug("ACTIVE_TEST_OVERRIDE_LOOKUP_SKIPPED", exc_info=True)
     return None
 
 
@@ -187,7 +189,8 @@ def resolve_tenant_for_phone(
         if normalized not in candidates:
             candidates.append(normalized)
     except ValueError:
-        pass
+        # deliberate: an unnormalizable phone id is still tried raw.
+        logger.debug("PHONE_ID_NORMALIZE_SKIPPED | phone_id=%s", raw_phone_id, exc_info=True)
     for candidate in candidates:
         tid = store.find_tenant_by_phone_id(candidate)
         if tid:

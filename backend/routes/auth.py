@@ -358,7 +358,9 @@ def require_tenant_access():
                 from backend.services.audit_context import set_audit_actor
                 set_audit_actor(principal)
             except Exception:
-                pass
+                # deliberate: audit attribution is best-effort — the request
+                # itself must not fail because the actor could not be stamped.
+                logger.debug("AUDIT_ACTOR_SET_SKIPPED | route continues without actor", exc_info=True)
             if principal["tenant_id"] != target:
                 logger.warning(
                     "Tenant token scope violation: token for %s tried to touch %s",
@@ -379,7 +381,9 @@ def require_tenant_access():
             from backend.services.audit_context import set_audit_actor
             set_audit_actor(admin)
         except Exception:
-            pass
+            # deliberate: audit attribution is best-effort — the request
+            # itself must not fail because the actor could not be stamped.
+            logger.debug("AUDIT_ACTOR_SET_SKIPPED | route continues without actor", exc_info=True)
         if not has_permission(admin, "manage_operations"):
             raise HTTPException(
                 status_code=403, detail="You do not have permission to manage tenant profiles"

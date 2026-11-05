@@ -101,7 +101,7 @@ def _send_timeout_message(wa_id: str) -> None:
                     snippet=TIMEOUT_MESSAGE[:120],
                 )
             except Exception:
-                pass
+                logger.exception("SEND_LOG_RECORD_FAILED | wa=%s reason=handoff_timeout", wa_id)
     except Exception as e:
         logger.error(f"Failed to send timeout message to {wa_id}: {e}")
 

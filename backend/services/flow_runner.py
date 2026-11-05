@@ -83,7 +83,9 @@ def _is_explicit_topic_switch(text: str, tenant_id=None) -> bool:
         if intent_answers.answer_for_menu_title("", t, tenant_id=tenant_id):
             return True
     except Exception:
-        pass
+        # deliberate: detection is a heuristic — on any failure, fall
+        # through to the keyword checks below.
+        logger.debug("TOPIC_SWITCH_CHECK_SKIPPED | tenant=%s", tenant_id, exc_info=True)
     switch_starters = (
         "what are your", "what is your", "tell me about", "show me",
         "how much", "what services", "what products", "what loans",
@@ -117,7 +119,9 @@ def is_likely_question_or_intent(text: str, tenant_id=None) -> bool:
         if intent_answers.answer_for_menu_title("", t, tenant_id=tenant_id):
             return True
     except Exception:
-        pass
+        # deliberate: detection is a heuristic — on any failure, answer
+        # "not a question/intent" (the pre-existing fall-through).
+        logger.debug("INTENT_CHECK_SKIPPED | tenant=%s", tenant_id, exc_info=True)
     return False
 
 

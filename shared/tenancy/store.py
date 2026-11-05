@@ -98,7 +98,9 @@ def ensure_tenant(tenant_id: str, *, slug: str = "", vertical: str = "generic",
                     if (c["name"] if hasattr(c, "keys") else c[1]) == "id":
                         col_type = (c["type"] if hasattr(c, "keys") else c[2] or "").upper()
             except Exception:
-                pass
+                # deliberate: the id-type probe is best-effort — TEXT is the
+                # safe default.
+                logger.debug("TENANT_ID_TYPE_PROBE_SKIPPED | defaulting to TEXT", exc_info=True)
 
             if "INT" in col_type and not str(tenant_id).isdigit():
                 connection.execute(
@@ -439,7 +441,9 @@ def purge_tenant_data(tenant_id: str, conn=None, *, slug: str = "") -> Dict[str,
                 (tid,),
             )
         except Exception:
-            pass
+            # deliberate: purge is per-table best-effort — a missing child
+            # table must not stop the tenant purge.
+            logger.debug("TENANT_PURGE_TABLE_SKIPPED | table=api_onboarding_request_events tid=%s", tid, exc_info=True)
         try:
             connection.execute(
                 """DELETE FROM tenant_change_request_events WHERE request_id IN (
@@ -448,7 +452,9 @@ def purge_tenant_data(tenant_id: str, conn=None, *, slug: str = "") -> Dict[str,
                 (tid,),
             )
         except Exception:
-            pass
+            # deliberate: purge is per-table best-effort — a missing child
+            # table must not stop the tenant purge.
+            logger.debug("TENANT_PURGE_TABLE_SKIPPED | table=tenant_change_request_events tid=%s", tid, exc_info=True)
 
         scope = profile_scope(tid)
         for table, sql, params in (
@@ -489,7 +495,8 @@ def purge_tenant_data(tenant_id: str, conn=None, *, slug: str = "") -> Dict[str,
                 )
                 summary["tables"]["app_settings.active_test_tenant"] = 1
         except Exception:
-            pass
+            # deliberate: purge is per-table best-effort.
+            logger.debug("TENANT_PURGE_TABLE_SKIPPED | table=app_settings tid=%s", tid, exc_info=True)
 
         cur = connection.execute("DELETE FROM tenants WHERE id = ?", (tid,))
         summary["tables"]["tenants"] = int(cur.rowcount or 0)

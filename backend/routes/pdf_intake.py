@@ -207,6 +207,6 @@ async def publish_pdf_intake(
                 chunks_count=summary.get("kb_chunks_indexed", 0), tenant_id=tenant_id,
             )
         except Exception:
-            pass
+            logger.exception("INTAKE_FILE_STATUS_UPDATE_FAILED | file=%s tenant=%s", name, tenant_id)
 
     return {"status": "published", "summary": summary}

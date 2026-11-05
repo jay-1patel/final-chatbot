@@ -94,7 +94,9 @@ def append_chat(
                     try:
                         os.replace(path, path + ".corrupt")
                     except OSError:
-                        pass
+                        # deliberate: keeping a .corrupt backup is best-effort — the
+                        # fresh file is still written.
+                        logger.debug("CORRUPT_BACKUP_SKIPPED | path=%s", path, exc_info=True)
             data["tenant_id"] = tenant_id
             data["date"] = day
             data["messages"].append(record)

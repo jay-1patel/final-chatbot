@@ -82,7 +82,8 @@ class TenantChatManager:
                 try:
                     await ws.send_json(message)
                 except Exception:
-                    pass
+                    # deliberate: one dead websocket must not stop the broadcast.
+                    logger.debug("WS_BROADCAST_SEND_SKIPPED | broadcast tenant=%s", tenant_id, exc_info=True)
 
     async def broadcast_online(self, tenant_id: str) -> None:
         room = self._room(tenant_id)
@@ -94,7 +95,8 @@ class TenantChatManager:
             try:
                 await ws.send_json({"type": "online_users", "users": online})
             except Exception:
-                pass
+                # deliberate: one dead websocket must not stop the broadcast.
+                logger.debug("WS_BROADCAST_SEND_SKIPPED | broadcast_online tenant=%s", tenant_id, exc_info=True)
 
     async def send_message(
         self,

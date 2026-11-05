@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from .core import (
-    get_db_context,
+    logger, get_db_context,
     _current_tenant, get_request_tenant
 )
 
@@ -23,7 +23,8 @@ def _resolve_tenant_id(wa_id: str, tenant_id: Optional[str] = None) -> str:
             if row and row["tenant_id"]:
                 return str(row["tenant_id"])
     except Exception:
-        pass
+        # deliberate: resolver chain — fall through to the next source.
+        logger.debug("SESSION_TENANT_RESOLVE_STEP_SKIPPED | source=user_sessions wa=%s", wa_id, exc_info=True)
     try:
         from shared.tenancy.resolver import resolve_default_tenant
         return resolve_default_tenant()

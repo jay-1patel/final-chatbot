@@ -180,14 +180,16 @@ def get_tenant_vertical(tenant_id: str = None) -> str:
         if profile and profile.vertical:
             return profile.vertical
     except Exception:
-        pass
+        # deliberate: resolver chain — fall through to the next source.
+        logger.debug("TENANT_VERTICAL_RESOLVE_STEP_SKIPPED | source=profile tenant=%s", tenant_id, exc_info=True)
     try:
         from shared.tenancy import store
         rec = store.get_tenant(tenant_id)
         if rec and rec.get("vertical"):
             return rec["vertical"]
     except Exception:
-        pass
+        # deliberate: resolver chain — fall through to the next source.
+        logger.debug("TENANT_VERTICAL_RESOLVE_STEP_SKIPPED | source=store tenant=%s", tenant_id, exc_info=True)
     return "generic"
 
 
@@ -211,7 +213,9 @@ def _brand_name(tenant_id: str) -> str:
         if profile and profile.brand and profile.brand.name:
             return profile.brand.name
     except Exception:
-        pass
+        # deliberate: brand name is cosmetic — the vertical-based
+        # fallback below is used.
+        logger.debug("BRAND_NAME_LOOKUP_SKIPPED | tenant=%s", tenant_id, exc_info=True)
     vert = get_tenant_vertical(tenant_id)
     if vert == "real_estate":
         return "Properties"
@@ -553,7 +557,8 @@ def _tenant_website(tenant_id: str = None) -> str:
         if site.startswith(("http://", "https://")):
             return site
     except Exception:
-        pass
+        # deliberate: website is cosmetic — empty string is returned.
+        logger.debug("TENANT_WEBSITE_LOOKUP_SKIPPED | tenant=%s", tenant_id, exc_info=True)
     return ""
 
 
@@ -867,7 +872,9 @@ def is_offerings_request(tenant_id: str, text: str, pressed_id: str = "") -> boo
         if is_brochure_ask(raw_text, button_id=raw_id, tenant_id=tenant_id):
             return False
     except Exception:
-        pass
+        # deliberate: the brochure-ask guard is best-effort — if it errors,
+        # the request is treated as a possible offerings request.
+        logger.debug("BROCHURE_ASK_CHECK_SKIPPED | tenant=%s", tenant_id, exc_info=True)
 
     if not raw_id and raw_text.startswith(
         (PROD_ROW_PREFIX, CAT_ROW_PREFIX, BOOK_PROD_PREFIX, "menu_", "browse_")

@@ -30,7 +30,9 @@ from routing.config import (
     BUSINESS_NAME, BOT_NAME, logger
 )
 
-logging.basicConfig(level=logging.INFO)
+from backend.core.logging import setup_logging
+
+setup_logging()
 
 
 @asynccontextmanager
@@ -392,7 +394,9 @@ def _silence_proactor_connection_reset():
                             try:
                                 self._sock.shutdown(_socket.SHUT_RDWR)
                             except OSError:
-                                pass
+                                # deliberate (vendored asyncio transport patch): the socket is
+                                # already going away — shutdown errors are expected.
+                                logger.debug("PROACTOR_SOCKET_SHUTDOWN_SKIPPED", exc_info=True)
                         self._sock.close()
                         self._sock = None
                         server = self._server
@@ -401,7 +405,9 @@ def _silence_proactor_connection_reset():
                             self._server = None
                         self._called_connection_lost = True
             except Exception:
-                pass
+                # deliberate (vendored asyncio transport patch): teardown continues
+                # regardless — this runs inside connection_lost.
+                logger.debug("PROACTOR_CONNECTION_LOST_STEP_SKIPPED", exc_info=True)
 
         proactor_events._ProactorBasePipeTransport._call_connection_lost = patched
         logger.debug("Patched asyncio Proactor transport to ignore connection reset errors")
