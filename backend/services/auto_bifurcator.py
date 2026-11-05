@@ -216,7 +216,10 @@ def _attach_pdf_images_to_offerings(
     """
     if not offerings:
         return
-    from routes.chat import _upload_to_imghippo
+    try:
+        from services.image_upload import _upload_to_imghippo
+    except ImportError:
+        from backend.services.image_upload import _upload_to_imghippo
 
     for source in extracted_docs:
         content = source.get("_content")

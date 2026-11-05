@@ -1838,7 +1838,7 @@ def _init_lead_tables(conn):
 
 # ── Phase 0.4: embedding isolation ───────────────────────────────────────
 
-def _default_tenant_id(conn) -> str:
+def _default_tenant_id_for_conn(conn) -> str:
     """The tenant that untagged content belongs to.
 
     Resolved from the tenants table in this same connection rather than from a
@@ -1918,7 +1918,7 @@ def _init_embedding_tenancy(conn):
     # fills blanks and repairs rows left pointing at a tenant id that is no
     # longer registered, so setting DEFAULT_TENANT_ID and re-running init_db
     # re-points previously mis-tagged data.
-    resolved = _default_tenant_id(conn)
+    resolved = _default_tenant_id_for_conn(conn)
     if not resolved:
         logger.info(
             "content tenant backfill skipped: DEFAULT_TENANT_ID unset with "

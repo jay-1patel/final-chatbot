@@ -621,7 +621,7 @@ def start_flow(wa_id: str, flow_name: str, tenant_id=None, seed: dict = None) ->
         return {"handled": False, "ok": False, "error": "feature_disabled",
                 "flow": flow_name, "messages": []}
 
-    sm.ensure_conversation_row(wa_id)
+    sm.ensure_conversation_row(wa_id, profile.tenant_id)
     sm.set_tenant(wa_id, profile.tenant_id)
     sm.start_flow(wa_id, flow.name)
 

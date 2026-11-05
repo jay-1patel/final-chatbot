@@ -85,16 +85,13 @@ def _upload_to_catbox(content: bytes, filename: str) -> str | None:
     return None
 
 
-def _upload_to_imghippo(content: bytes, filename: str) -> str | None:
-    """Upload file for WhatsApp: free img402/BasePic (+ ImgHippo if credited).
-
-    Kept under this name because auto_bifurcator / tenant_files import it.
-    """
-    try:
-        from services.media_host import upload_public_media
-    except ImportError:
-        from backend.services.media_host import upload_public_media
-    return upload_public_media(content, filename)
+# The implementation lives in the services layer (services/image_upload.py)
+# so services no longer import from this route module. Re-exported here so
+# existing `from routes.chat import _upload_to_imghippo` callers keep working.
+try:
+    from services.image_upload import _upload_to_imghippo
+except ImportError:
+    from backend.services.image_upload import _upload_to_imghippo
 
 
 def _guess_media_type(filename: str, content_type: str = "") -> str:
